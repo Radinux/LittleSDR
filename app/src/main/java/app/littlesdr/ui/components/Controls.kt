@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.SettingsInputAntenna
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.Waves
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -166,7 +167,7 @@ private fun LabeledSlider(
 }
 
 /** Tabs of the control panel (top cap of the right "pill"). */
-enum class ControlTab(val label: String) { Source("Récepteur"), Radio("Radio"), Gain("Gain"), Squelch("Squelch"), Audio("Audio"), Memories("Mémoires") }
+enum class ControlTab(val label: String) { Source("Récepteur"), Radio("Radio"), Gain("Gain"), Squelch("Squelch"), Audio("Audio"), Bands("Bandes"), Memories("Mémoires") }
 
 /**
  * Scrollable tab carousel: swipe sideways, edges fade out and tabs shrink as they approach them,
@@ -216,6 +217,7 @@ fun ControlTabBar(selected: ControlTab, onSelect: (ControlTab) -> Unit, modifier
                 ControlTab.Gain -> Icons.Default.SettingsInputAntenna
                 ControlTab.Squelch -> Icons.Default.VolumeMute
                 ControlTab.Audio -> Icons.AutoMirrored.Filled.VolumeUp
+                ControlTab.Bands -> Icons.Default.Waves
                 ControlTab.Memories -> Icons.Default.Bookmarks
             }
             Column(

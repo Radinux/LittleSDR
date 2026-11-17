@@ -258,7 +258,18 @@ fun AudioSection(a: AudioOptions, outputs: List<Pair<Int, String>>, setNum: SetN
 // ---------------------------------------------------------------- Operator
 
 @Composable
-fun OperatorSection(o: app.littlesdr.engine.OperatorOptions, setText: (String, String) -> Unit) {
+fun OperatorSection(
+    o: app.littlesdr.engine.OperatorOptions,
+    autoLocator: Boolean,
+    locating: Boolean,
+    setText: (String, String) -> Unit,
+    onAutoLocator: (Boolean) -> Unit,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val permission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) onAutoLocator(true) }
+
     OptionCard("Opérateur") {
         var call by remember(o.callsign) { mutableStateOf(o.callsign) }
         var loc by remember(o.location) { mutableStateOf(o.location) }
@@ -271,12 +282,24 @@ fun OperatorSection(o: app.littlesdr.engine.OperatorOptions, setText: (String, S
             keyboardActions = KeyboardActions(onDone = { setText("operator.callsign", call) }),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
         )
+        SwitchRow(
+            "Locator automatique",
+            if (locating) "Recherche de la position…" else "D'après la position approximative du téléphone",
+            autoLocator,
+        ) { on ->
+            if (on && !app.littlesdr.data.PhoneLocation.hasPermission(context)) {
+                permission.launch(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+            } else {
+                onAutoLocator(on)
+            }
+        }
         OutlinedTextField(
             value = loc,
             onValueChange = { loc = it.uppercase().filter { c -> c.isLetterOrDigit() }.take(8) },
             label = { Text("Locator (ex. JN18)") },
             supportingText = { Text("Sert à calculer la distance des stations FT8") },
             singleLine = true,
+            readOnly = autoLocator,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { setText("operator.location", loc) }),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),

@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.littlesdr.LittleSdrApp
 import app.littlesdr.data.AppData
+import app.littlesdr.data.PhoneLocation
 import app.littlesdr.data.Appearance
 import app.littlesdr.data.DisplaySettings
 import app.littlesdr.data.Memory
@@ -17,6 +18,7 @@ import app.littlesdr.engine.Ft8Station
 import app.littlesdr.engine.Ft8Traffic
 import app.littlesdr.engine.GeoPoint
 import app.littlesdr.engine.Maidenhead
+import app.littlesdr.engine.PresetEntry
 import app.littlesdr.engine.RdsInfo
 import app.littlesdr.engine.NativeBridge
 import app.littlesdr.engine.Mode
@@ -31,6 +33,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
@@ -160,6 +163,11 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                 delay(1000)
             }
         }
+        // Automatic locator: refresh from the phone's position once the engine is up
+        viewModelScope.launch {
+            Engine.ready.first { it }
+            if (store.data.first().operator.autoLocator) updateLocatorFromPosition()
+        }
         // Demodulator options depend on the mode: refresh them when it changes
         viewModelScope.launch {
             Engine.state.map { it.mode }.distinctUntilChanged().collect { refreshAdvanced() }
@@ -234,6 +242,28 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------------ display
     fun setDisplay(s: DisplaySettings) = viewModelScope.launch { store.setDisplay(s) }
     fun setAppearance(a: Appearance) = viewModelScope.launch { store.setAppearance(a) }
+
+    private val _locating = MutableStateFlow(false)
+    val locating: StateFlow<Boolean> = _locating.asStateFlow()
+
+    fun setAutoLocator(on: Boolean) = viewModelScope.launch {
+        store.setOperator(data.value.operator.copy(autoLocator = on))
+        if (on) updateLocatorFromPosition()
+    }
+
+    /** Sets the operator locator from the phone's position (if allowed and available). */
+    fun updateLocatorFromPosition() = viewModelScope.launch {
+        val ctx = getApplication<Application>()
+        if (!PhoneLocation.hasPermission(ctx)) return@launch
+        _locating.value = true
+        val loc = PhoneLocation.current(ctx)
+        _locating.value = false
+        if (loc == null) {
+            _error.value = "Position indisponible : active la localisation du téléphone."
+            return@launch
+        }
+        setOptionString("operator.location", Maidenhead.fromLatLon(loc.latitude, loc.longitude))
+    }
 
     fun setOptionString(key: String, value: String) = viewModelScope.launch { _advanced.value = Engine.setOptionString(key, value) }
 
@@ -370,6 +400,14 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                 )
             )
         }
+    }
+
+    /** Band preset: mode, then bandwidth and step for that mode, then the frequency. */
+    fun applyPreset(e: PresetEntry) {
+        Engine.setMode(e.mode)
+        Engine.setBandwidth(e.bandwidth)
+        setStep(e.mode, e.step)
+        tune(e.frequency)
     }
 
     fun recall(m: Memory) {

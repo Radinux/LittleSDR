@@ -49,6 +49,16 @@ data class Ft8Message(val sender: String, val recipient: String?, val grid: Stri
 }
 
 object Maidenhead {
+    /** 6-character locator (e.g. JN18eu) for a position. */
+    fun fromLatLon(lat: Double, lon: Double): String {
+        val x = (lon + 180.0).coerceIn(0.0, 359.9999)
+        val y = (lat + 90.0).coerceIn(0.0, 179.9999)
+        val field = "${'A' + (x / 20).toInt()}${'A' + (y / 10).toInt()}"
+        val square = "${((x % 20) / 2).toInt()}${(y % 10).toInt()}"
+        val sub = "${'a' + ((x % 2) * 12).toInt()}${'a' + ((y % 1) * 24).toInt()}"
+        return field + square + sub
+    }
+
     /** Center of a 4 or 6 character Maidenhead locator. */
     fun toLatLon(grid: String): GeoPoint? {
         val g = grid.uppercase()

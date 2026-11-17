@@ -198,10 +198,15 @@ fun Ft8Screen(vm: RadioViewModel, onBack: () -> Unit) {
                         )
                         if (home == null) {
                             Text(
-                                "Ajoute ton locator dans Réglages › Opérateur pour te voir sur la carte",
+                                "Locator : Réglages › Opérateur",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.align(Alignment.TopCenter).padding(10.dp),
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(12.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
                             )
                         }
                     }

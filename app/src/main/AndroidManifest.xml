@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Automatic Maidenhead locator (6 characters ≈ 5 km: approximate location is enough) -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
 
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <!-- Vulkan 1.0.3 for the spectrum/waterfall renderer -->

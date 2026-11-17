@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.littlesdr.engine.Ft8Station
 import app.littlesdr.engine.Ft8Traffic
 import app.littlesdr.engine.GeoPoint
 import java.nio.ByteBuffer
@@ -43,6 +44,7 @@ import java.nio.ByteOrder
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -87,6 +89,7 @@ fun Ft8Map(traffic: Ft8Traffic, home: GeoPoint?, modifier: Modifier = Modifier) 
     var scale by remember { mutableFloatStateOf(0f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var userMoved by remember { mutableStateOf(false) }
+    val clusters = remember { ArrayList<MapCluster>() } // last drawn groups, for taps
 
     val pulse by rememberInfiniteTransition(label = "cq").animateFloat(
         initialValue = 0f, targetValue = 1f,
@@ -99,6 +102,7 @@ fun Ft8Map(traffic: Ft8Traffic, home: GeoPoint?, modifier: Modifier = Modifier) 
     val landEdge = lerp(cs.outline, cs.onSurface, 0.15f)
     val shadow = Color.Black.copy(alpha = 0.25f)
     val labelStyle = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
+    val countStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold)
 
     Canvas(
         modifier
@@ -113,7 +117,19 @@ fun Ft8Map(traffic: Ft8Traffic, home: GeoPoint?, modifier: Modifier = Modifier) 
                 }
             }
             .pointerInput(Unit) {
-                detectTapGestures(onDoubleTap = { userMoved = false; scale = 0f })
+                detectTapGestures(
+                    // Tap a bubble: zoom ×3 on it so its stations spread out
+                    onTap = { t ->
+                        val hit = clusters.firstOrNull { it.members.size > 1 && hypot(it.center.x - t.x, it.center.y - t.y) < 30.dp.toPx() }
+                        if (hit != null && scale > 0f) {
+                            val ns = (scale * 3f).coerceAtMost(400f)
+                            offset = hit.center - (hit.center - offset) * (ns / scale) + (Offset(size.width / 2f, size.height / 2f) - hit.center)
+                            scale = ns
+                            userMoved = true
+                        }
+                    },
+                    onDoubleTap = { userMoved = false; scale = 0f },
+                )
             },
     ) {
         // Fit on first draw (and after double tap) unless the user moved the map
@@ -151,18 +167,46 @@ fun Ft8Map(traffic: Ft8Traffic, home: GeoPoint?, modifier: Modifier = Modifier) 
             drawPath(land, landEdge, style = Stroke(width = edge, join = StrokeJoin.Round, cap = StrokeCap.Round))
         }
 
-        val byCall = traffic.stations.associateBy { it.call }
-        val newest = traffic.links.maxOfOrNull { it.time } ?: 0L
+        // ---- Clustering in screen space: stations closer than ~36 dp merge into a counted bubble.
+        // Zooming in spreads them apart, so clusters split on their own.
+        val radius = 36.dp.toPx()
+        val ordered = traffic.stations.sortedWith(compareByDescending<Ft8Station> { it.heard }.thenByDescending { it.lastHeard })
+        val groups = ArrayList<MapCluster>()
+        val clusterOf = HashMap<String, Int>()
+        for (st in ordered) {
+            val p = screen(st.pos)
+            val idx = groups.indexOfFirst { hypot(it.center.x - p.x, it.center.y - p.y) < radius }
+            if (idx >= 0) {
+                groups[idx].members += st
+                clusterOf[st.call] = idx
+            } else {
+                groups += MapCluster(p, mutableListOf(st))
+                clusterOf[st.call] = groups.size - 1
+            }
+        }
+        clusters.clear()
+        clusters.addAll(groups)
 
-        // Transmissions: curved arrows sender -> recipient, fading with age
+        // ---- Links between groups: one arrow per pair, thicker with more exchanges, fading with age
+        val newest = traffic.links.maxOfOrNull { it.time } ?: 0L
+        data class Agg(var count: Int, var time: Long)
+        val agg = LinkedHashMap<Pair<Int, Int>, Agg>()
         for (l in traffic.links) {
-            val a = byCall[l.from]?.let { screen(it.pos) } ?: continue
-            val b = byCall[l.to]?.let { screen(it.pos) } ?: continue
-            val d = hypot(b.x - a.x, b.y - a.y)
-            if (d < 4f) continue
-            val age = ((newest - l.time) / 120_000f).coerceIn(0f, 1f)
-            val color = cs.primary.copy(alpha = 0.9f - 0.7f * age)
-            arrow(a, b, color, weight(1.4f, 2.5f))
+            val a = clusterOf[l.from] ?: continue
+            val b = clusterOf[l.to] ?: continue
+            if (a == b) continue
+            val e = agg.getOrPut(a to b) { Agg(0, l.time) }
+            e.count++
+            e.time = maxOf(e.time, l.time)
+        }
+        for ((k, v) in agg) {
+            val pa = groups[k.first].center
+            val pb = groups[k.second].center
+            if (hypot(pb.x - pa.x, pb.y - pa.y) < 4f) continue
+            val age = ((newest - v.time) / 120_000f).coerceIn(0f, 1f)
+            val color = cs.primary.copy(alpha = 0.85f - 0.65f * age)
+            val w = weight(1.2f, 2.2f) * (1f + 0.35f * ln(v.count.toFloat()))
+            arrow(pa, pb, color, w)
         }
 
         // Home
@@ -178,14 +222,31 @@ fun Ft8Map(traffic: Ft8Traffic, home: GeoPoint?, modifier: Modifier = Modifier) 
             drawPath(house, cs.onTertiary, style = Stroke(1.5.dp.toPx(), join = StrokeJoin.Round))
         }
 
-        // Stations
-        val showLabels = traffic.stations.size <= 30 || s > 12f
-        for (st in traffic.stations) {
-            val p = screen(st.pos)
-            if (p.x < -50 || p.y < -50 || p.x > size.width + 50 || p.y > size.height + 50) continue
+        // ---- Stations: bubbles for groups, dots + labels (without overlaps) for singles
+        val placed = ArrayList<androidx.compose.ui.geometry.Rect>()
+        for (g in groups) {
+            if (g.members.size > 1) {
+                val r = (11f + 3f * ln(g.members.size.toFloat())).dp.toPx()
+                placed += androidx.compose.ui.geometry.Rect(g.center, r)
+            }
+        }
+        for (g in groups) {
+            val p = g.center
+            if (p.x < -60 || p.y < -60 || p.x > size.width + 60 || p.y > size.height + 60) continue
+            val anyCq = g.members.any { it.callingCq }
+            if (g.members.size > 1) {
+                val r = (11f + 3f * ln(g.members.size.toFloat())).dp.toPx()
+                if (anyCq) drawCircle(cs.primary.copy(alpha = 0.45f * (1f - pulse)), r + 12.dp.toPx() * pulse, p, style = Stroke(2.dp.toPx()))
+                drawCircle(Color.Black.copy(alpha = 0.3f), r, p + Offset(1.dp.toPx(), 2.dp.toPx()))
+                drawCircle(if (anyCq) cs.primary else cs.secondaryContainer, r, p)
+                drawCircle(cs.surface, r, p, style = Stroke(2.dp.toPx()))
+                val t = measurer.measure("${g.members.size}", countStyle.copy(color = if (anyCq) cs.onPrimary else cs.onSecondaryContainer))
+                drawText(t, topLeft = Offset(p.x - t.size.width / 2f, p.y - t.size.height / 2f))
+                continue
+            }
+            val st = g.members.first()
             val r = 5.dp.toPx()
             if (st.callingCq) {
-                // Expanding ring for stations calling CQ
                 drawCircle(cs.primary.copy(alpha = 0.5f * (1f - pulse)), r + 14.dp.toPx() * pulse, p, style = Stroke(2.dp.toPx()))
             }
             if (st.heard) {
@@ -195,15 +256,16 @@ fun Ft8Map(traffic: Ft8Traffic, home: GeoPoint?, modifier: Modifier = Modifier) 
             } else {
                 drawCircle(cs.onSurfaceVariant, r * 0.8f, p, style = Stroke(1.8.dp.toPx())) // only seen as a recipient
             }
-            if (showLabels) {
-                val layout = measurer.measure(st.call, labelStyle)
-                val tl = Offset(p.x + r + 3.dp.toPx(), p.y - layout.size.height / 2f)
-                drawRoundRect(
-                    cs.surface.copy(alpha = 0.75f),
-                    tl - Offset(3.dp.toPx(), 1.dp.toPx()),
-                    Size(layout.size.width + 6.dp.toPx(), layout.size.height + 2.dp.toPx()),
-                    androidx.compose.ui.geometry.CornerRadius(6.dp.toPx()),
-                )
+            // Label only if it doesn't collide with another label or bubble
+            val layout = measurer.measure(st.call, labelStyle)
+            val tl = Offset(p.x + r + 3.dp.toPx(), p.y - layout.size.height / 2f)
+            val box = androidx.compose.ui.geometry.Rect(
+                tl - Offset(3.dp.toPx(), 1.dp.toPx()),
+                Size(layout.size.width + 6.dp.toPx(), layout.size.height + 2.dp.toPx()),
+            )
+            if (placed.none { it.overlaps(box) }) {
+                placed += box
+                drawRoundRect(cs.surface.copy(alpha = 0.75f), box.topLeft, box.size, androidx.compose.ui.geometry.CornerRadius(6.dp.toPx()))
                 drawText(layout, topLeft = tl)
             }
         }
@@ -247,3 +309,7 @@ private fun DrawScope.arrow(a: Offset, b: Offset, color: Color, width: Float) {
     }
     drawPath(head, color)
 }
+
+
+/** Stations drawn as one bubble at [center] (screen pixels). */
+private class MapCluster(val center: Offset, val members: MutableList<Ft8Station>)

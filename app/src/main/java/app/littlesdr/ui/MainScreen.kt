@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.littlesdr.engine.RadioState
 import app.littlesdr.ui.components.AudioTab
+import app.littlesdr.ui.components.BandsTab
 import app.littlesdr.ui.components.ControlTab
 import app.littlesdr.ui.components.ControlTabBar
 import app.littlesdr.ui.components.GainTab
@@ -209,6 +210,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                 ControlTab.Gain -> GainTab(gainControls, vm.signalDb) { vm.sourceAction(it) }
                                 ControlTab.Squelch -> SquelchTab(controls.squelchEnabled, controls.squelchLevel, vm.signalDb, vm::setSquelch)
                                 ControlTab.Audio -> AudioTab(controls.volume, vm::setVolume)
+                                ControlTab.Bands -> BandsTab(stateHolder.value.vfoFrequency, vm::applyPreset)
                                 ControlTab.Memories -> MemoriesPanel(
                                     memories = data.memories, currentFrequency = stateHolder.value.vfoFrequency,
                                     onSave = vm::saveMemory, onRecall = vm::recall, onRename = { m, n -> vm.renameMemory(m, n) },

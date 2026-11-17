@@ -50,11 +50,18 @@ data class RadioPrefs(
 )
 
 @Serializable
+data class OperatorPrefs(
+    /** Keep the operator locator in sync with the phone's (approximate) location */
+    val autoLocator: Boolean = false,
+)
+
+@Serializable
 data class AppData(
     val memories: List<Memory> = emptyList(),
     val display: DisplaySettings = DisplaySettings(),
     val appearance: Appearance = Appearance(),
     val radio: RadioPrefs = RadioPrefs(),
+    val operator: OperatorPrefs = OperatorPrefs(),
 )
 
 private object AppDataSerializer : Serializer<AppData> {
@@ -88,4 +95,5 @@ class AppStore(context: Context) {
     suspend fun setDisplay(s: DisplaySettings) = store.updateData { it.copy(display = s) }
     suspend fun setAppearance(a: Appearance) = store.updateData { it.copy(appearance = a) }
     suspend fun setRadio(r: RadioPrefs) = store.updateData { it.copy(radio = r) }
+    suspend fun setOperator(o: OperatorPrefs) = store.updateData { it.copy(operator = o) }
 }
