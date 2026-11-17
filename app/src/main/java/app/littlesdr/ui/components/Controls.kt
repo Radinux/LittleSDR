@@ -2,6 +2,27 @@ package app.littlesdr.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import kotlin.math.abs
+import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.filled.VolumeMute
+import androidx.compose.material.icons.filled.SettingsInputAntenna
+import androidx.compose.material.icons.filled.Bookmarks
+import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.Router
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -144,34 +165,117 @@ private fun LabeledSlider(
     }
 }
 
+/** Tabs of the control panel (top cap of the right "pill"). */
+enum class ControlTab(val label: String) { Source("Récepteur"), Radio("Radio"), Gain("Gain"), Squelch("Squelch"), Audio("Audio"), Memories("Mémoires") }
+
+/**
+ * Scrollable tab carousel: swipe sideways, edges fade out and tabs shrink as they approach them,
+ * tapping a tab selects it and brings it to the middle. Scales to any number of tabs.
+ */
 @Composable
-fun DemodControls(
+fun ControlTabBar(selected: ControlTab, onSelect: (ControlTab) -> Unit, modifier: Modifier = Modifier) {
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val tabs = ControlTab.entries
+    val itemWidth = 84.dp
+    val fade = 28.dp
+
+    // Center the selected tab (on first show and after a tap)
+    LaunchedEffect(selected) {
+        val info = listState.layoutInfo
+        val vw = info.viewportEndOffset - info.viewportStartOffset
+        val iw = info.visibleItemsInfo.firstOrNull()?.size ?: 0
+        if (vw > 0 && iw > 0) listState.animateScrollToItem(selected.ordinal, -(vw - iw) / 2)
+    }
+
+    LazyRow(
+        state = listState,
+        modifier = modifier
+            .height(64.dp)
+            // Edge fade: draw offscreen, then multiply by a horizontal alpha gradient
+            .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+            .drawWithContent {
+                drawContent()
+                val f = fade.toPx() / size.width
+                drawRect(
+                    Brush.horizontalGradient(
+                        0f to Color.Transparent, f to Color.Black, 1f - f to Color.Black, 1f to Color.Transparent,
+                    ),
+                    blendMode = BlendMode.DstIn,
+                )
+            },
+        contentPadding = PaddingValues(horizontal = fade),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        itemsIndexed(tabs, key = { _, t -> t.name }) { index, tab ->
+            val isSel = tab == selected
+            val icon = when (tab) {
+                ControlTab.Source -> Icons.Default.Router
+                ControlTab.Radio -> Icons.Default.Radio
+                ControlTab.Gain -> Icons.Default.SettingsInputAntenna
+                ControlTab.Squelch -> Icons.Default.VolumeMute
+                ControlTab.Audio -> Icons.AutoMirrored.Filled.VolumeUp
+                ControlTab.Memories -> Icons.Default.Bookmarks
+            }
+            Column(
+                Modifier
+                    .width(itemWidth)
+                    .height(56.dp)
+                    // Shrink with the distance to the viewport center (read in the draw phase only)
+                    .graphicsLayer {
+                        val info = listState.layoutInfo
+                        val item = info.visibleItemsInfo.firstOrNull { it.index == index }
+                        if (item != null) {
+                            val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+                            val half = (info.viewportEndOffset - info.viewportStartOffset) / 2f
+                            val d = (abs(item.offset + item.size / 2f - center) / half).coerceIn(0f, 1f)
+                            val k = 1f - 0.35f * d * d
+                            scaleX = k
+                            scaleY = k
+                        }
+                    }
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(if (isSel) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                    .clickable {
+                        onSelect(tab)
+                        scope.launch {
+                            val info = listState.layoutInfo
+                            val vw = info.viewportEndOffset - info.viewportStartOffset
+                            val iw = info.visibleItemsInfo.firstOrNull()?.size ?: 0
+                            listState.animateScrollToItem(index, -(vw - iw) / 2)
+                        }
+                    },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                val tint = if (isSel) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                Icon(icon, null, Modifier.size(22.dp), tint = tint)
+                Text(tab.label, style = MaterialTheme.typography.labelMedium, color = tint, maxLines = 1)
+            }
+        }
+    }
+}
+
+@Composable
+fun RadioTab(
     mode: Mode?,
     bandwidth: Double,
-    squelchEnabled: Boolean,
-    squelchLevel: Float,
-    volume: Float,
     autoBandwidth: Boolean,
-    gain: List<SmWidget>,
-    onGainAction: (SmAction) -> Unit,
-    signalDb: StateFlow<Float>,
     step: Double,
+    signalDb: StateFlow<Float>,
     onMode: (Mode) -> Unit,
     onStep: (Double) -> Unit,
     onBandwidth: (Float) -> Unit,
     onAutoBandwidth: (Boolean) -> Unit,
-    onSquelch: (Boolean, Float) -> Unit,
-    onVolume: (Float) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         ModeSelector(mode, onMode, Modifier.fillMaxWidth())
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StepChip(step, onStep)
             Spacer(Modifier.weight(1f))
             SignalMeter(signalDb, Modifier.width(140.dp))
         }
-        if (gain.isNotEmpty()) GainControls(gain, onGainAction)
         val m = mode ?: Mode.NFM
         LabeledSlider(
             title = "Bande passante",
@@ -193,33 +297,73 @@ fun DemodControls(
                 }
             } else null,
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            LabeledSlider(
-                title = "Squelch",
-                value = squelchLevel,
-                range = -120f..0f,
-                valueText = { "${it.roundToInt()} dB" },
-                onChange = { onSquelch(squelchEnabled, it) },
-                enabled = squelchEnabled,
-                snap = 1f,
-                live = true,
-                modifier = Modifier.weight(1f),
+    }
+}
+
+@Composable
+fun GainTab(gain: List<SmWidget>, signalDb: StateFlow<Float>, onAction: (SmAction) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SignalMeter(signalDb, Modifier.fillMaxWidth())
+        if (gain.isEmpty()) {
+            Text(
+                "Pas de réglage de gain pour cette source.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.width(12.dp))
-            Switch(checked = squelchEnabled, onCheckedChange = { onSquelch(it, squelchLevel) })
+        } else {
+            GainControls(gain, onAction)
         }
+    }
+}
+
+@Composable
+fun SquelchTab(enabled: Boolean, level: Float, signalDb: StateFlow<Float>, onSquelch: (Boolean, Float) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Squelch", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Coupe le son sous le seuil (ligne pointillée sur le spectre)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = enabled, onCheckedChange = { onSquelch(it, level) })
+        }
+        LabeledSlider(
+            title = "Seuil",
+            value = level,
+            range = -120f..0f,
+            valueText = { "${it.roundToInt()} dB" },
+            onChange = { onSquelch(enabled, it) },
+            enabled = enabled,
+            snap = 1f,
+            live = true,
+        )
+        SignalMeter(signalDb, Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+fun AudioTab(volume: Float, onVolume: (Float) -> Unit) {
+    // Mute keeps the previous level so un-muting restores it
+    var lastVolume by remember { mutableFloatStateOf(if (volume > 0.001f) volume else 0.8f) }
+    val muted = volume <= 0.001f
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         LabeledSlider(
             title = "Volume",
             value = volume,
             range = 0f..1f,
             valueText = { "${(it * 100).roundToInt()} %" },
-            onChange = onVolume,
+            onChange = { if (it > 0.001f) lastVolume = it; onVolume(it) },
             live = true,
             leading = {
-                Icon(
-                    if (volume <= 0.001f) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
-                    null, Modifier.padding(end = 4.dp),
-                )
+                IconButton(onClick = { onVolume(if (muted) lastVolume else 0f) }) {
+                    Icon(
+                        if (muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                        if (muted) "Remettre le son" else "Couper le son",
+                    )
+                }
             },
         )
     }

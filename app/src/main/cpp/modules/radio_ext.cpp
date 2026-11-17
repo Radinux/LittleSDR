@@ -131,3 +131,46 @@ extern "C" SDRPP_EXPORT void littlesdr_radio_set(void* instance, const char* key
         anyAgcSet(r->selectedDemod, false, (float)v);
     }
 }
+
+// RDS of the WFM demodulator as JSON: {active, ps, rt, pi, callsign, pty}. Turns RDS decoding on
+// when the WFM demodulator is selected (it is off by default upstream).
+extern "C" SDRPP_EXPORT int littlesdr_radio_rds(void* instance, char* out, int cap) {
+    auto r = static_cast<RadioModule*>(static_cast<ModuleManager::Instance*>(instance));
+    json j;
+    j["active"] = false;
+    auto w = r->selectedDemod ? dynamic_cast<demod::WFM*>(r->selectedDemod) : nullptr;
+    if (w) {
+        if (!w->_rds) {
+            w->_rds = true;
+            w->demod.setRDSOut(true);
+            w->_config->acquire();
+            w->_config->conf[w->name][w->getName()]["rds"] = true;
+            w->_config->release(true);
+        }
+        auto& d = w->rdsDecode;
+        j["active"] = true;
+        auto trim = [](std::string s) {
+            s.erase(s.find_last_not_of(' ') + 1);
+            s.erase(0, std::min(s.find_first_not_of(' '), s.size()));
+            return s;
+        };
+        if (d.PSNameValid()) { j["ps"] = trim(d.getPSName(false)); }
+        if (d.radioTextValid()) { j["rt"] = trim(d.getRadioText(false)); }
+        if (d.piCodeValid()) {
+            char pi[8];
+            snprintf(pi, sizeof pi, "%04X", d.getPICode());
+            j["pi"] = pi;
+            j["callsign"] = d.getCallsign();
+        }
+        if (d.programTypeValid()) {
+            int pty = (int)d.getProgramType();
+            bool us = w->rdsRegions.size() > 0 && w->rdsRegions.key(w->rdsRegionId) == "na";
+            if (pty > 0 && pty < 32) { j["pty"] = us ? rds::PROGRAM_TYPE_US_TO_STR[pty] : rds::PROGRAM_TYPE_EU_TO_STR[pty]; }
+        }
+    }
+    std::string s = j.dump();
+    int n = (int)std::min<size_t>(s.size(), (size_t)cap - 1);
+    memcpy(out, s.data(), n);
+    out[n] = 0;
+    return n;
+}

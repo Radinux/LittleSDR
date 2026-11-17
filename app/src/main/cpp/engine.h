@@ -74,4 +74,6 @@ namespace engine {
     void ft8Set(const std::string& key, double value);
     // Country position (CTY database) for each callsign: lat, lon pairs (NaN when unknown)
     std::vector<double> ctyLatLon(const std::vector<std::string>& calls);
+    // RDS of the current WFM station: {active, ps, rt, pi, callsign, pty}
+    std::string rdsJson();
 }

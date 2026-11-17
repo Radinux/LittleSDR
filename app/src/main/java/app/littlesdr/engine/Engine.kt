@@ -247,6 +247,8 @@ object Engine {
         AdvancedOptions.parse(NativeBridge.options())
     }
 
+    suspend fun rds(): RdsInfo = call { RdsInfo.parse(NativeBridge.rdsJson()) }
+
     suspend fun ft8(): Ft8State = call { Ft8State.parse(NativeBridge.ft8Json()) }
     suspend fun ft8Set(key: String, value: Double): Ft8State = call {
         NativeBridge.ft8Set(key, value)

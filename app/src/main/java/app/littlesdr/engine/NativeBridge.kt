@@ -45,6 +45,7 @@ object NativeBridge {
     @JvmStatic external fun ft8Json(): String
     @JvmStatic external fun ft8Set(key: String, value: Double)
     @JvmStatic external fun ctyLatLon(calls: Array<String>): DoubleArray
+    @JvmStatic external fun rdsJson(): String
 
     // display (Vulkan renderer)
     @JvmStatic external fun setView(viewBandwidth: Double, viewOffset: Double)

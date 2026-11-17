@@ -134,6 +134,9 @@ JNIEXPORT jdoubleArray JNICALL JNI_FN(ctyLatLon)(JNIEnv* env, jclass, jobjectArr
     env->SetDoubleArrayRegion(arr, 0, (jsize)r.size(), r.data());
     return arr;
 }
+JNIEXPORT jstring JNICALL JNI_FN(rdsJson)(JNIEnv* env, jclass) {
+    return env->NewStringUTF(engine::rdsJson().c_str());
+}
 JNIEXPORT void JNICALL JNI_FN(setVolume)(JNIEnv*, jclass, jfloat v) { engine::setVolume(v); }
 
 // ---------------------------------------------------------------- display

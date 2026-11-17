@@ -134,10 +134,15 @@ fun Ft8Map(traffic: Ft8Traffic, home: GeoPoint?, modifier: Modifier = Modifier) 
             drawLine(grid, Offset(offset.x, y), Offset(offset.x + 360 * s, y), 1f)
         }
 
-        // Land: soft drop shadow, flat fill, thick rounded outline (cartoon look)
-        val edge = 2.2.dp.toPx() / s
-        val shadowDx = 2.dp.toPx()
-        val shadowDy = 3.dp.toPx()
+        // Line weights follow the zoom: thin coastlines at world scale (a degree is only a few
+        // pixels there), the chunky cartoon outline when zoomed in. 0 = world view, 1 = close.
+        val detail = ((s - 3f) / 17f).coerceIn(0f, 1f)
+        fun weight(minDp: Float, maxDp: Float) = (minDp + (maxDp - minDp) * detail).dp.toPx()
+
+        // Land: soft drop shadow, flat fill, rounded outline (cartoon look)
+        val edge = weight(0.5f, 2.2f) / s
+        val shadowDx = weight(0.6f, 2f)
+        val shadowDy = weight(0.9f, 3f)
         withTransform({ translate(offset.x + shadowDx, offset.y + shadowDy); scale(s, s, Offset.Zero) }) {
             drawPath(land, shadow)
         }
@@ -157,7 +162,7 @@ fun Ft8Map(traffic: Ft8Traffic, home: GeoPoint?, modifier: Modifier = Modifier) 
             if (d < 4f) continue
             val age = ((newest - l.time) / 120_000f).coerceIn(0f, 1f)
             val color = cs.primary.copy(alpha = 0.9f - 0.7f * age)
-            arrow(a, b, color, 2.5.dp.toPx())
+            arrow(a, b, color, weight(1.4f, 2.5f))
         }
 
         // Home

@@ -1,6 +1,10 @@
 package app.littlesdr.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,76 +52,68 @@ import app.littlesdr.ui.formatFrequency
 import app.littlesdr.ui.formatHz
 import app.littlesdr.ui.theme.ReadoutStyle
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** Memories tab: save the current frequency, tap a card to recall, menu to rename/delete. */
 @Composable
-fun MemoriesSheet(
+fun MemoriesPanel(
     memories: List<Memory>,
     currentFrequency: Double,
     onSave: (String) -> Unit,
     onRecall: (Memory) -> Unit,
     onRename: (Memory, String) -> Unit,
     onDelete: (Memory) -> Unit,
-    onDismiss: () -> Unit,
 ) {
     var naming by remember { mutableStateOf<Memory?>(null) }
     var creating by remember { mutableStateOf(false) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
-        Column(Modifier.padding(horizontal = 20.dp).navigationBarsPadding()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Fréquences", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                FilledTonalButton(onClick = { creating = true }) {
-                    Icon(Icons.Default.BookmarkAdd, null)
-                    Spacer(Modifier.padding(4.dp))
-                    Text("${formatFrequency(currentFrequency)} MHz")
-                }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilledTonalButton(onClick = { creating = true }, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.BookmarkAdd, null)
+            Spacer(Modifier.padding(4.dp))
+            Text("Enregistrer ${formatFrequency(currentFrequency)} MHz")
+        }
+        if (memories.isEmpty()) {
+            Column(Modifier.fillMaxWidth().padding(vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Outlined.BookmarkBorder, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                Text("Aucune fréquence enregistrée", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Spacer(Modifier.height(8.dp))
-            if (memories.isEmpty()) {
-                Column(
-                    Modifier.fillMaxWidth().padding(vertical = 40.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+        }
+        memories.forEach { m ->
+            var menu by remember(m.id) { mutableStateOf(false) }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .clickable { onRecall(m) }
+                    .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.secondaryContainer)
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
                 ) {
-                    Icon(Icons.Outlined.BookmarkBorder, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Aucune fréquence enregistrée", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(Mode.of(m.mode)?.label ?: "?", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer)
                 }
-            } else {
-                LazyColumn(Modifier.heightIn(max = 520.dp)) {
-                    items(memories, key = { it.id }) { m ->
-                        var menu by remember { mutableStateOf(false) }
-                        ListItem(
-                            modifier = Modifier.clickable { onRecall(m); onDismiss() },
-                            headlineContent = { Text(m.name) },
-                            supportingContent = {
-                                Text(
-                                    "${formatFrequency(m.frequency)} MHz · ${Mode.of(m.mode)?.label ?: "?"} · ${formatHz(m.bandwidth.toDouble())}",
-                                    style = ReadoutStyle,
-                                )
-                            },
-                            leadingContent = { SuggestionChip(onClick = {}, label = { Text(Mode.of(m.mode)?.label ?: "?") }) },
-                            trailingContent = {
-                                Box {
-                                    IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Options") }
-                                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                        DropdownMenuItem(
-                                            text = { Text("Renommer") },
-                                            leadingIcon = { Icon(Icons.Default.Edit, null) },
-                                            onClick = { menu = false; naming = m },
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("Supprimer") },
-                                            leadingIcon = { Icon(Icons.Default.Delete, null) },
-                                            onClick = { menu = false; onDelete(m) },
-                                        )
-                                    }
-                                }
-                            },
-                        )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(m.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+                    Text("${formatFrequency(m.frequency)} MHz · ${formatHz(m.bandwidth.toDouble())}",
+                        style = ReadoutStyle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Box {
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Options") }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("Renommer") }, leadingIcon = { Icon(Icons.Default.Edit, null) },
+                            onClick = { menu = false; naming = m })
+                        DropdownMenuItem(text = { Text("Supprimer") }, leadingIcon = { Icon(Icons.Default.Delete, null) },
+                            onClick = { menu = false; onDelete(m) })
                     }
                 }
             }
-            Spacer(Modifier.height(16.dp))
         }
     }
 

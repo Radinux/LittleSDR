@@ -1,6 +1,12 @@
 package app.littlesdr.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -30,8 +36,10 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -58,9 +66,9 @@ import app.littlesdr.usb.UsbSdrInfo
 import java.util.Locale
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** Receiver tab: source choice, connected USB device and the driver's own settings (SmGui). */
 @Composable
-fun SourceSheet(
+fun SourcePanel(
     sources: List<String>,
     selected: String,
     playing: Boolean,
@@ -69,50 +77,82 @@ fun SourceSheet(
     onSelect: (String) -> Unit,
     onAction: (SmAction) -> Unit,
     onWatch: (Boolean) -> Unit,
-    onDismiss: () -> Unit,
 ) {
+    // Faster refresh of the driver menu while this tab is shown (status texts, device lists)
     DisposableEffect(Unit) {
         onWatch(true)
         onDispose { onWatch(false) }
     }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .navigationBarsPadding(),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("Source", style = MaterialTheme.typography.titleLarge)
-            if (usbDevice != null) {
-                ListItem(
-                    headlineContent = { Text(usbDevice.name) },
-                    supportingContent = { Text("Récepteur USB connecté") },
-                    leadingContent = { Icon(Icons.Default.Usb, null) },
-                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-                )
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Source choice as rounded pills (USB receivers vs network sources)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            sources.forEach { name ->
+                val isSel = name == selected
+                val network = name in NETWORK_SOURCES
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (isSel) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer)
+                        .clickable(enabled = !playing && !isSel) { onSelect(name) }
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        if (network) Icons.Default.Wifi else Icons.Default.Usb, null, Modifier.size(18.dp),
+                        tint = if (isSel) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        name,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = when {
+                            isSel -> MaterialTheme.colorScheme.onPrimaryContainer
+                            playing -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            else -> MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                }
             }
-            Dropdown(
-                label = "Récepteur",
-                items = sources,
-                selected = sources.indexOf(selected),
-                enabled = !playing,
-                onSelect = { onSelect(sources[it]) },
+        }
+        if (playing) {
+            Text(
+                "Arrête la réception pour changer de récepteur ou modifier certains réglages.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (playing) {
-                Text(
-                    "Certains réglages ne sont modifiables qu'à l'arrêt.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        }
+        if (usbDevice != null) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Usb, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text(usbDevice.name, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                    Text("Récepteur USB connecté", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                }
             }
-            HorizontalDivider()
-            SmGuiPanel(menu, onAction)
-            Spacer(Modifier.height(24.dp))
+        }
+        if (menu.isNotEmpty()) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .padding(14.dp),
+            ) {
+                SmGuiPanel(menu, onAction)
+            }
         }
     }
 }
+
+private val NETWORK_SOURCES = setOf("RTL-TCP", "SpyServer", "KiwiSDR", "SDR++ Server")
 
 /** Material 3 rendering of an SDR++ SmGui menu. Consecutive "same line" widgets share a row. */
 @Composable
@@ -146,7 +186,7 @@ private fun SmWidgetView(w: SmWidget, onAction: (SmAction) -> Unit, modifier: Mo
             color = w.color?.let { Color(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = modifier,
         )
-        is SmWidget.Button -> OutlinedButton(onClick = { onAction(SmGui.click(w.id)) }, enabled = enabled, modifier = modifier) {
+        is SmWidget.Button -> FilledTonalButton(onClick = { onAction(SmGui.click(w.id)) }, enabled = enabled, modifier = modifier) {
             Text(w.label.ifBlank { w.title ?: "OK" })
         }
         is SmWidget.Checkbox -> Row(modifier, verticalAlignment = Alignment.CenterVertically) {
@@ -184,13 +224,13 @@ private fun SmWidgetView(w: SmWidget, onAction: (SmAction) -> Unit, modifier: Mo
         )
         is SmWidget.InputInt -> Row(modifier, verticalAlignment = Alignment.CenterVertically) {
             Text(w.title ?: w.label, Modifier.weight(1f))
-            IconButton(onClick = { onAction(SmGui.int(w.id, w.value - w.step.coerceAtLeast(1))) }, enabled = enabled) { Icon(Icons.Default.Remove, "−") }
+            FilledTonalIconButton(onClick = { onAction(SmGui.int(w.id, w.value - w.step.coerceAtLeast(1))) }, enabled = enabled) { Icon(Icons.Default.Remove, "−") }
             Text("${w.value}", style = ReadoutStyle, modifier = Modifier.width(64.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            IconButton(onClick = { onAction(SmGui.int(w.id, w.value + w.step.coerceAtLeast(1))) }, enabled = enabled) { Icon(Icons.Default.Add, "+") }
+            FilledTonalIconButton(onClick = { onAction(SmGui.int(w.id, w.value + w.step.coerceAtLeast(1))) }, enabled = enabled) { Icon(Icons.Default.Add, "+") }
         }
         is SmWidget.InputText -> {
             var text by remember(w.id, w.value) { mutableStateOf(w.value) }
-            OutlinedTextField(
+            TextField(
                 value = text,
                 onValueChange = { if (it.length <= w.maxLen.coerceAtLeast(1)) text = it },
                 label = { Text(w.title ?: w.label.ifBlank { "Valeur" }) },
@@ -198,6 +238,8 @@ private fun SmWidgetView(w: SmWidget, onAction: (SmAction) -> Unit, modifier: Mo
                 enabled = enabled,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, keyboardType = KeyboardType.Uri),
                 keyboardActions = KeyboardActions(onDone = { onAction(SmGui.text(w.id, text)) }),
+                shape = RoundedCornerShape(16.dp),
+                colors = roundedFieldColors(),
                 modifier = modifier,
             )
         }
@@ -240,7 +282,7 @@ private fun Dropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(expanded = expanded && enabled, onExpandedChange = { if (enabled) expanded = it }, modifier = modifier) {
-        OutlinedTextField(
+        TextField(
             value = items.getOrNull(selected) ?: "",
             onValueChange = {},
             readOnly = true,
@@ -248,6 +290,8 @@ private fun Dropdown(
             singleLine = true,
             label = if (label.isNotBlank()) { { Text(label) } } else null,
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            shape = RoundedCornerShape(16.dp),
+            colors = roundedFieldColors(),
             modifier = Modifier
                 .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled)
                 .fillMaxWidth(),
@@ -259,3 +303,15 @@ private fun Dropdown(
         }
     }
 }
+
+
+/** Filled field without the underline: reads as a rounded tonal box. */
+@Composable
+private fun roundedFieldColors() = TextFieldDefaults.colors(
+    focusedIndicatorColor = Color.Transparent,
+    unfocusedIndicatorColor = Color.Transparent,
+    disabledIndicatorColor = Color.Transparent,
+    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+    disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+)

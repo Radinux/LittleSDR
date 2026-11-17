@@ -17,6 +17,7 @@ import app.littlesdr.engine.Ft8Station
 import app.littlesdr.engine.Ft8Traffic
 import app.littlesdr.engine.GeoPoint
 import app.littlesdr.engine.Maidenhead
+import app.littlesdr.engine.RdsInfo
 import app.littlesdr.engine.NativeBridge
 import app.littlesdr.engine.Mode
 import app.littlesdr.engine.RadioState
@@ -84,6 +85,10 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     private val _advanced = MutableStateFlow(AdvancedOptions())
     val advanced: StateFlow<AdvancedOptions> = _advanced.asStateFlow()
 
+    /** RDS of the station being received (WFM only), empty otherwise. */
+    private val _rds = MutableStateFlow(RdsInfo())
+    val rds: StateFlow<RdsInfo> = _rds.asStateFlow()
+
     private val _ft8 = MutableStateFlow(Ft8State())
     val ft8: StateFlow<Ft8State> = _ft8.asStateFlow()
     private var ft8Poller: Job? = null
@@ -139,6 +144,20 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             Engine.state.map { it.playing }.distinctUntilChanged().collect {
                 if (Engine.ready.value) _sourceMenu.value = Engine.sourceMenu()
+            }
+        }
+        // RDS: poll once a second while receiving WFM; forget it when tuning elsewhere
+        viewModelScope.launch {
+            var lastFreq = 0.0
+            while (isActive) {
+                val s = state.value
+                if (kotlin.math.abs(s.vfoFrequency - lastFreq) > 50_000) {
+                    _rds.value = RdsInfo()
+                    lastFreq = s.vfoFrequency
+                }
+                if (Engine.ready.value && s.playing && s.mode == Mode.WFM) _rds.value = Engine.rds()
+                else if (_rds.value.hasData) _rds.value = RdsInfo()
+                delay(1000)
             }
         }
         // Demodulator options depend on the mode: refresh them when it changes

@@ -23,15 +23,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmarks
-import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
@@ -60,21 +58,27 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.littlesdr.engine.RadioState
-import app.littlesdr.ui.components.DemodControls
+import app.littlesdr.ui.components.AudioTab
+import app.littlesdr.ui.components.ControlTab
+import app.littlesdr.ui.components.ControlTabBar
+import app.littlesdr.ui.components.GainTab
+import app.littlesdr.ui.components.RadioTab
+import app.littlesdr.ui.components.SquelchTab
 import app.littlesdr.ui.components.FrequencyDisplay
-import app.littlesdr.ui.components.MemoriesSheet
-import app.littlesdr.ui.components.SourceSheet
+import app.littlesdr.ui.components.MemoriesPanel
+import app.littlesdr.ui.components.SourcePanel
 import app.littlesdr.ui.components.SpectrumPanel
 import app.littlesdr.ui.components.TuningJoystick
 import app.littlesdr.ui.theme.ReadoutStyle
 import kotlinx.coroutines.launch
 
-private enum class Sheet { None, Source, Memories }
 
 @Composable
 fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> Unit) {
@@ -95,13 +99,14 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val usb by vm.usbDevice.collectAsStateWithLifecycle()
     val menu by vm.sourceMenu.collectAsStateWithLifecycle()
     val gainControls by vm.gainControls.collectAsStateWithLifecycle()
+    val rds by vm.rds.collectAsStateWithLifecycle()
     val ft8State by vm.ft8.collectAsStateWithLifecycle()
     val ft8Active = ft8State.enabled
     val error by vm.error.collectAsStateWithLifecycle()
     vm.steps.collectAsStateWithLifecycle()
     val step = vm.stepFor(mode)
 
-    var sheet by rememberSaveable { mutableStateOf(Sheet.None) }
+    var tab by rememberSaveable { mutableStateOf(ControlTab.Radio) }
 
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -139,6 +144,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         onTune = vm::tune, onView = vm::setView, onResetZoom = vm::resetZoom,
                         cornerRadius = corners.innerRadius,
                         maskColor = MaterialTheme.colorScheme.surface,
+                        rds = rds,
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     )
                     // Rate joystick: deflection = tuning speed, springs back to stop
@@ -150,49 +156,72 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         modifier = Modifier.fillMaxWidth().height(52.dp),
                     )
                 }
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = RoundedCornerShape(corners.innerRadius),
-                    modifier = Modifier.width(360.dp).fillMaxHeight(),
-                ) {
-                    Column(
-                        Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                // Right "pill" cut in two: tabs in the top cap, the selected tab's controls below
+                Column(Modifier.width(360.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val r = corners.innerRadius
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(topStart = r, topEnd = r, bottomStart = 6.dp, bottomEnd = 6.dp),
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
-                        TopRow(
-                            source = selectedSource,
-                            usb = usb != null,
-                            playing = playing,
-                            playEnabled = ready,
-                            onPlay = vm::togglePlay,
-                            onSource = { sheet = Sheet.Source },
-                            onMemories = { sheet = Sheet.Memories },
-                            onSettings = onOpenSettings,
-                            onFt8 = onOpenFt8,
-                            ft8Active = ft8Active,
-                        )
-                        Header(stateHolder, onTune = vm::tune)
-                        Spacer(Modifier.height(6.dp))
-                        DemodControls(
-                            mode = controls.mode,
-                            bandwidth = controls.bandwidth,
-                            squelchEnabled = controls.squelchEnabled,
-                            squelchLevel = controls.squelchLevel,
-                            volume = controls.volume,
-                            autoBandwidth = data.radio.autoBandwidth,
-                            gain = gainControls,
-                            onGainAction = { vm.sourceAction(it) },
-                            signalDb = vm.signalDb, step = step,
-                            onMode = vm::setMode,
-                            onStep = { s -> mode?.let { vm.setStep(it, s) } },
-                            onBandwidth = vm::setBandwidth,
-                            onAutoBandwidth = { vm.setAutoBandwidth(it) },
-                            onSquelch = vm::setSquelch,
-                            onVolume = vm::setVolume,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        ControlTabBar(tab, onSelect = { tab = it }, modifier = Modifier.fillMaxWidth())
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp, bottomStart = r, bottomEnd = r),
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                    ) {
+                        Column(
+                            Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                        ) {
+                            TopRow(
+                                source = selectedSource,
+                                usb = usb != null,
+                                playing = playing,
+                                playEnabled = ready,
+                                onPlay = vm::togglePlay,
+                                onSource = { tab = ControlTab.Source },
+                                onSettings = onOpenSettings,
+                                onFt8 = onOpenFt8,
+                                ft8Active = ft8Active,
+                            )
+                            Header(stateHolder, onTune = vm::tune)
+                            Spacer(Modifier.height(8.dp))
+                            when (tab) {
+                                ControlTab.Source -> SourcePanel(
+                                    sources = sources, selected = selectedSource, playing = playing, usbDevice = usb, menu = menu,
+                                    onSelect = { vm.selectSource(it) }, onAction = { vm.sourceAction(it) }, onWatch = vm::watchSourceMenu,
+                                )
+                                ControlTab.Radio -> RadioTab(
+                                    mode = controls.mode,
+                                    bandwidth = controls.bandwidth,
+                                    autoBandwidth = data.radio.autoBandwidth,
+                                    step = step,
+                                    signalDb = vm.signalDb,
+                                    onMode = vm::setMode,
+                                    onStep = { s -> mode?.let { vm.setStep(it, s) } },
+                                    onBandwidth = vm::setBandwidth,
+                                    onAutoBandwidth = { vm.setAutoBandwidth(it) },
+                                )
+                                ControlTab.Gain -> GainTab(gainControls, vm.signalDb) { vm.sourceAction(it) }
+                                ControlTab.Squelch -> SquelchTab(controls.squelchEnabled, controls.squelchLevel, vm.signalDb, vm::setSquelch)
+                                ControlTab.Audio -> AudioTab(controls.volume, vm::setVolume)
+                                ControlTab.Memories -> MemoriesPanel(
+                                    memories = data.memories, currentFrequency = stateHolder.value.vfoFrequency,
+                                    onSave = vm::saveMemory, onRecall = vm::recall, onRename = { m, n -> vm.renameMemory(m, n) },
+                                    onDelete = { m ->
+                                        vm.deleteMemory(m)
+                                        scope.launch {
+                                            val r = snackbar.showSnackbar("« ${m.name} » supprimée", actionLabel = "Annuler", withDismissAction = true)
+                                            if (r == SnackbarResult.ActionPerformed) vm.restoreMemory(m)
+                                        }
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -212,26 +241,6 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
         }
     }
 
-    when (sheet) {
-        Sheet.Source -> SourceSheet(
-            sources = sources, selected = selectedSource, playing = playing, usbDevice = usb, menu = menu,
-            onSelect = { vm.selectSource(it) }, onAction = { vm.sourceAction(it) }, onWatch = vm::watchSourceMenu,
-            onDismiss = { sheet = Sheet.None },
-        )
-        Sheet.Memories -> MemoriesSheet(
-            memories = data.memories, currentFrequency = stateHolder.value.vfoFrequency,
-            onSave = vm::saveMemory, onRecall = vm::recall, onRename = { m, n -> vm.renameMemory(m, n) },
-            onDelete = { m ->
-                vm.deleteMemory(m)
-                scope.launch {
-                    val r = snackbar.showSnackbar("« ${m.name} » supprimée", actionLabel = "Annuler", withDismissAction = true)
-                    if (r == SnackbarResult.ActionPerformed) vm.restoreMemory(m)
-                }
-            },
-            onDismiss = { sheet = Sheet.None },
-        )
-        Sheet.None -> Unit
-    }
 }
 
 @Composable
@@ -242,7 +251,6 @@ private fun TopRow(
     playEnabled: Boolean,
     onPlay: () -> Unit,
     onSource: () -> Unit,
-    onMemories: () -> Unit,
     onSettings: () -> Unit,
     onFt8: () -> Unit,
     ft8Active: Boolean,
@@ -255,13 +263,16 @@ private fun TopRow(
                 leadingIcon = { Icon(if (usb) Icons.Default.Usb else Icons.Default.Router, null, Modifier.size(AssistChipDefaults.IconSize)) },
             )
         }
-        IconButton(onClick = onFt8) {
-            // Badge while the decoder runs, so it isn't forgotten (it costs CPU during reception)
-            BadgedBox(badge = { if (ft8Active) Badge(containerColor = MaterialTheme.colorScheme.primary) }) {
-                Icon(Icons.Default.Forum, if (ft8Active) "FT8 / FT4 (décodeur actif)" else "FT8 / FT4")
-            }
-        }
-        IconButton(onClick = onMemories) { Icon(Icons.Default.Bookmarks, "Fréquences") }
+        // Plain "FT8" label (an icon wasn't obvious); highlighted while the decoder runs so it
+        // isn't forgotten, as it costs CPU during reception
+        FilterChip(
+            selected = ft8Active,
+            onClick = onFt8,
+            label = { Text("FT8") },
+            modifier = Modifier.padding(horizontal = 4.dp).semantics {
+                contentDescription = if (ft8Active) "FT8 / FT4, décodeur actif" else "FT8 / FT4"
+            },
+        )
         IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Réglages") }
         FilledIconButton(
             onClick = onPlay,

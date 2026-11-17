@@ -740,4 +740,15 @@ namespace engine {
         return out;
     }
 
+    std::string rdsJson() {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        using Fn = int (*)(void*, char*, int);
+        auto fn = (Fn)moduleSymbol("radio", "littlesdr_radio_rds");
+        auto it = core::moduleManager.instances.find(VFO_NAME);
+        if (!fn || it == core::moduleManager.instances.end()) { return "{}"; }
+        char buf[2048];
+        fn(it->second.instance, buf, sizeof buf);
+        return buf;
+    }
+
 }

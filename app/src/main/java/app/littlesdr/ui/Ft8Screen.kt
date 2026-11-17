@@ -157,10 +157,14 @@ fun Ft8Screen(vm: RadioViewModel, onBack: () -> Unit) {
                 }
 
                 Text("Bande", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                // Highlight from the VFO (updated instantly on tap); the decoder's own report lags
+                // behind fast band changes and is only a fallback when the VFO is off-channel.
+                val vfo = state.vfoFrequency
+                val vfoBand = Ft8Bands.FT8.firstOrNull { (_, hz) -> vfo >= hz && vfo <= hz + 3_000 }?.second
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Ft8Bands.FT8.forEach { (band, hz) ->
                         FilterChip(
-                            selected = ft8.ft8.dial == hz,
+                            selected = if (vfoBand != null) vfoBand == hz else ft8.ft8.dial == hz,
                             onClick = { vm.tuneDigital(hz) },
                             label = { Text(band) },
                         )

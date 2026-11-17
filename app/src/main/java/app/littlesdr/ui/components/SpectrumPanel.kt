@@ -9,6 +9,29 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import app.littlesdr.engine.RdsInfo
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.ui.Alignment
+import androidx.compose.material3.Surface
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.filled.ZoomOutMap
+import androidx.compose.material.icons.filled.ZoomOut
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -65,6 +88,7 @@ fun SpectrumPanel(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 0.dp,
     maskColor: Color = Color.Transparent,
+    rds: RdsInfo = RdsInfo(),
 ) {
     val st by state
     val vw by view
@@ -94,12 +118,15 @@ fun SpectrumPanel(
                 .fillMaxSize()
                 .graphicsLayer() // overlay redraws on every tune; keep it isolated
                 .pointerInput(Unit) {
+                    // No tap-to-tune (tuning is the joystick's job): double tap zooms ×2 on the spot
                     detectTapGestures(
-                        onTap = { p ->
-                            val f = freqAt(p.x, size.width.toFloat(), st, vw)
-                            tune(snap(f, stepHz))
+                        onDoubleTap = { p ->
+                            val bw = vw.bandwidth.takeIf { it > 0 } ?: st.sampleRate
+                            val u = p.x / size.width - 0.5
+                            val focus = vw.offset + u * bw
+                            val newBw = bw / 2
+                            setView(newBw, focus - u * newBw)
                         },
-                        onDoubleTap = { onResetZoom() },
                     )
                 }
                 .pointerInput(Unit) {
@@ -209,6 +236,23 @@ fun SpectrumPanel(
 
         }
 
+        // RDS notch hanging from the top edge: station name, programme type, scrolling RadioText
+        AnimatedVisibility(
+            visible = rds.hasData,
+            enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
+            exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top),
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
+            RdsNotch(rds, Modifier.fillMaxWidth(0.5f))
+        }
+
+        ZoomButtons(
+            onZoomIn = { zoomAroundVfo(st, vw, 0.5, setView) },
+            onZoomOut = { zoomAroundVfo(st, vw, 2.0, setView) },
+            onReset = onResetZoom,
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = 10.dp, end = 10.dp),
+        )
+
         // Rounded corners: the Vulkan SurfaceView can't be clipped by Compose,
         // so paint the outside of a rounded rect in the background color on top of it.
         if (cornerRadius > 0.dp) {
@@ -228,4 +272,73 @@ fun SpectrumPanel(
 private fun freqAt(x: Float, width: Float, s: RadioState, v: ViewState): Double {
     val bw = v.bandwidth.takeIf { it > 0 } ?: s.sampleRate
     return s.centerFrequency + v.offset - bw / 2 + x / width * bw
+}
+
+
+/** Zoom by [factor] (0.5 = in) keeping the VFO where it is on screen when it's visible. */
+private fun zoomAroundVfo(s: RadioState, v: ViewState, factor: Double, setView: (Double, Double) -> Unit) {
+    val bw = v.bandwidth.takeIf { it > 0 } ?: s.sampleRate
+    val newBw = bw * factor
+    val vfo = s.vfoOffset
+    val visible = vfo >= v.offset - bw / 2 && vfo <= v.offset + bw / 2
+    val anchor = if (visible) vfo else v.offset
+    val u = (anchor - v.offset) / bw // anchor position in the view, -0.5..0.5
+    setView(newBw, anchor - u * newBw)
+}
+
+@Composable
+private fun ZoomButtons(onZoomIn: () -> Unit, onZoomOut: () -> Unit, onReset: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f),
+        tonalElevation = 2.dp,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            IconButton(onClick = onZoomIn, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ZoomIn, "Zoomer") }
+            IconButton(onClick = onZoomOut, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ZoomOut, "Dézoomer") }
+            IconButton(onClick = onReset, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ZoomOutMap, "Toute la bande") }
+        }
+    }
+}
+
+
+@Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private fun RdsNotch(rds: RdsInfo, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+        tonalElevation = 3.dp,
+    ) {
+        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    rds.ps.ifBlank { rds.callsign.ifBlank { "RDS" } },
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                )
+                if (rds.pty.isNotBlank()) {
+                    Text(
+                        "  ·  ${rds.pty}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
+            if (rds.rt.isNotBlank()) {
+                Text(
+                    rds.rt,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE),
+                )
+            }
+        }
+    }
 }
