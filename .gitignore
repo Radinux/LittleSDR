@@ -1,0 +1,14 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.cxx/
+.externalNativeBuild/
+captures/
+kit/src/
+kit/build/
+kit/out/
+kit/jniLibs/
+kit/build.log
+build.log

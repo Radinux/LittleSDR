@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Spectrum peak over a waterfall, on the 108dp adaptive icon grid -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#3D5AFE" android:fillAlpha="0.35"
+        android:pathData="M30,62 L38,60 L44,61 L48,54 L51,36 L54,30 L57,36 L60,54 L64,59 L70,58 L78,62 L78,66 L30,66 Z" />
+    <path android:strokeColor="#E8EAFF" android:strokeWidth="3" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M30,62 L38,60 L44,61 L48,54 L51,36 L54,30 L57,36 L60,54 L64,59 L70,58 L78,62" />
+    <path android:fillColor="#30123B" android:pathData="M30,68h48v4h-48z" />
+    <path android:fillColor="#4686FB" android:pathData="M30,72h48v4h-48z" />
+    <path android:fillColor="#1AE4B6" android:pathData="M30,76h48v4h-48z" />
+    <path android:fillColor="#FABA39" android:pathData="M48,68h12v12h-12z" android:fillAlpha="0.85" />
+</vector>
