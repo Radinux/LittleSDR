@@ -9,6 +9,9 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
+import app.littlesdr.data.EiBiEntry
 import app.littlesdr.engine.RdsInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.Text
@@ -89,6 +92,7 @@ fun SpectrumPanel(
     cornerRadius: Dp = 0.dp,
     maskColor: Color = Color.Transparent,
     rds: RdsInfo = RdsInfo(),
+    eibi: List<EiBiEntry> = emptyList(),
 ) {
     val st by state
     val vw by view
@@ -238,19 +242,21 @@ fun SpectrumPanel(
 
         // RDS notch hanging from the top edge: station name, programme type, scrolling RadioText
         AnimatedVisibility(
-            visible = rds.hasData,
+            visible = rds.hasData || eibi.isNotEmpty(),
             enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
             exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
-            RdsNotch(rds, Modifier.fillMaxWidth(0.5f))
+            // Long and thin: a wide, low tab hanging from the top edge
+            if (rds.hasData) RdsNotch(rds, Modifier.fillMaxWidth(0.62f))
+            else if (eibi.isNotEmpty()) EiBiNotch(eibi, Modifier.fillMaxWidth(0.62f))
         }
 
         ZoomButtons(
             onZoomIn = { zoomAroundVfo(st, vw, 0.5, setView) },
             onZoomOut = { zoomAroundVfo(st, vw, 2.0, setView) },
             onReset = onResetZoom,
-            modifier = Modifier.align(Alignment.TopEnd).padding(top = 10.dp, end = 10.dp),
+            modifier = Modifier.align(Alignment.BottomStart).padding(start = 14.dp, bottom = 12.dp),
         )
 
         // Rounded corners: the Vulkan SurfaceView can't be clipped by Compose,
@@ -294,7 +300,7 @@ private fun ZoomButtons(onZoomIn: () -> Unit, onZoomOut: () -> Unit, onReset: ()
         color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f),
         tonalElevation = 2.dp,
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onZoomIn, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ZoomIn, "Zoomer") }
             IconButton(onClick = onZoomOut, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ZoomOut, "Dézoomer") }
             IconButton(onClick = onReset, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ZoomOutMap, "Toute la bande") }
@@ -306,39 +312,69 @@ private fun ZoomButtons(onZoomIn: () -> Unit, onZoomOut: () -> Unit, onReset: ()
 @Composable
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 private fun RdsNotch(rds: RdsInfo, modifier: Modifier = Modifier) {
+    NotchSurface(modifier) {
+        NotchTitle(rds.ps.ifBlank { rds.callsign.ifBlank { "RDS" } }, rds.pty)
+        if (rds.rt.isNotBlank()) NotchTicker(rds.rt)
+    }
+}
+
+/** EiBi schedule for the tuned frequency: first station on top, the others scroll below. */
+@Composable
+private fun EiBiNotch(entries: List<EiBiEntry>, modifier: Modifier = Modifier) {
+    val first = entries.first()
+    NotchSurface(modifier) {
+        NotchTitle(first.station, listOf(first.languageText, first.target).filter { it.isNotBlank() }.joinToString(" → "))
+        NotchTicker(
+            if (entries.size > 1) {
+                entries.drop(1).joinToString("   ·   ") { e ->
+                    listOf(e.station, e.languageText).filter { it.isNotBlank() }.joinToString(" ") + " (${e.timeText})"
+                }
+            } else {
+                "${first.timeText} UTC · ${first.country} · EiBi"
+            }
+        )
+    }
+}
+
+/** Shared look: long, thin tab hanging from the top edge, rounded at the bottom. */
+@Composable
+private fun NotchSurface(modifier: Modifier, content: @Composable () -> Unit) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+        shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.93f),
         tonalElevation = 3.dp,
     ) {
-        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    rds.ps.ifBlank { rds.callsign.ifBlank { "RDS" } },
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
-                )
-                if (rds.pty.isNotBlank()) {
-                    Text(
-                        "  ·  ${rds.pty}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
-                }
-            }
-            if (rds.rt.isNotBlank()) {
-                Text(
-                    rds.rt,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE),
-                )
-            }
+        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 3.dp, bottom = 5.dp)) { content() }
+    }
+}
+
+@Composable
+private fun NotchTitle(title: String, info: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            title,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        if (info.isNotBlank()) {
+            Text("  ·  $info", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
         }
     }
+}
+
+@Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private fun NotchTicker(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurface,
+        maxLines = 1,
+        modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE),
+    )
 }

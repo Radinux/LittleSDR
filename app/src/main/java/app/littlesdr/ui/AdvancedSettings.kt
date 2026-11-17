@@ -31,7 +31,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import app.littlesdr.engine.AudioOptions
 import app.littlesdr.engine.Converter
 import app.littlesdr.engine.DemodOptions
 import app.littlesdr.engine.FftOptions
@@ -234,27 +233,6 @@ fun FftSection(f: FftOptions, setNum: SetNum, setBool: SetBool) {
     }
 }
 
-// ---------------------------------------------------------------- Audio
-
-@Composable
-fun AudioSection(a: AudioOptions, outputs: List<Pair<Int, String>>, setNum: SetNum) {
-    OptionCard("Audio") {
-        ChoiceRow("Sortie", outputs, if (outputs.any { it.first == a.device }) a.device else 0) { setNum("audio.device", it.toDouble()) }
-        ChoiceRow(
-            "Latence",
-            listOf(2 to "Faible", 4 to "Normale", 8 to "Élevée"),
-            when { a.latency <= 2 -> 2; a.latency >= 8 -> 8; else -> 4 },
-        ) { setNum("audio.latency", it.toDouble()) }
-        Text(
-            "Faible : plus réactif, risque de coupures. Élevée : plus stable.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-        )
-    }
-}
-
-
 // ---------------------------------------------------------------- Operator
 
 @Composable
@@ -303,6 +281,31 @@ fun OperatorSection(
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { setText("operator.location", loc) }),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+        )
+    }
+}
+
+
+// ---------------------------------------------------------------- EiBi
+
+@Composable
+fun EiBiSection(season: String, count: Int, updated: Long, updating: Boolean, onUpdate: () -> Unit) {
+    OptionCard("Horaires ondes courtes (EiBi)") {
+        val date = if (updated > 0) java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(updated)) else null
+        ListItem(
+            headlineContent = { Text(if (count > 0) "Saison $season · $count émissions" else "Pas encore téléchargé") },
+            supportingContent = {
+                Text(
+                    (date?.let { "Mis à jour le $it. " } ?: "") +
+                        "Affiche dans l'encoche les stations qui émettent sur la fréquence en ce moment (hors FM). Données eibispace.de.",
+                )
+            },
+            trailingContent = {
+                if (updating) androidx.compose.material3.CircularProgressIndicator(Modifier.padding(8.dp))
+                else androidx.compose.material3.FilledTonalButton(onClick = onUpdate) { Text("Mettre à jour") }
+            },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier.padding(horizontal = 4.dp),
         )
     }
 }

@@ -115,7 +115,8 @@ fun SettingsScreen(vm: RadioViewModel, onBack: () -> Unit) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     DemodSection(adv.demod, vm::setOption, vm::setOption)
                     InputSection(adv.input, playing, vm::setOption, vm::setOption)
-                    AudioSection(adv.audio, remember { vm.audioOutputs() }, vm::setOption)
+                    val eibiStatus by vm.eibiStatus.collectAsStateWithLifecycle()
+                    EiBiSection(eibiStatus.season, eibiStatus.count, eibiStatus.updated, eibiStatus.updating) { vm.updateEibi() }
                     val locating by vm.locating.collectAsStateWithLifecycle()
                     OperatorSection(adv.operator, data.operator.autoLocator, locating, vm::setOptionString, vm::setAutoLocator)
                     AboutSection()

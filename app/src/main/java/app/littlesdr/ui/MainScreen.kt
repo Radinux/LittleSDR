@@ -69,9 +69,7 @@ import app.littlesdr.ui.components.AudioTab
 import app.littlesdr.ui.components.BandsTab
 import app.littlesdr.ui.components.ControlTab
 import app.littlesdr.ui.components.ControlTabBar
-import app.littlesdr.ui.components.GainTab
 import app.littlesdr.ui.components.RadioTab
-import app.littlesdr.ui.components.SquelchTab
 import app.littlesdr.ui.components.FrequencyDisplay
 import app.littlesdr.ui.components.MemoriesPanel
 import app.littlesdr.ui.components.SourcePanel
@@ -101,6 +99,8 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val menu by vm.sourceMenu.collectAsStateWithLifecycle()
     val gainControls by vm.gainControls.collectAsStateWithLifecycle()
     val rds by vm.rds.collectAsStateWithLifecycle()
+    val eibi by vm.eibi.collectAsStateWithLifecycle()
+    val advanced by vm.advanced.collectAsStateWithLifecycle()
     val ft8State by vm.ft8.collectAsStateWithLifecycle()
     val ft8Active = ft8State.enabled
     val error by vm.error.collectAsStateWithLifecycle()
@@ -146,6 +146,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         cornerRadius = corners.innerRadius,
                         maskColor = MaterialTheme.colorScheme.surface,
                         rds = rds,
+                        eibi = eibi,
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     )
                     // Rate joystick: deflection = tuning speed, springs back to stop
@@ -158,7 +159,8 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                     )
                 }
                 // Right "pill" cut in two: tabs in the top cap, the selected tab's controls below
-                Column(Modifier.width(360.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                // 330 dp: just what the widest rows need, the rest goes to the waterfall
+                Column(Modifier.width(330.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     val r = corners.innerRadius
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -206,10 +208,21 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                     onStep = { s -> mode?.let { vm.setStep(it, s) } },
                                     onBandwidth = vm::setBandwidth,
                                     onAutoBandwidth = { vm.setAutoBandwidth(it) },
+                                    gain = gainControls,
+                                    onGainAction = { vm.sourceAction(it) },
+                                    squelchEnabled = controls.squelchEnabled,
+                                    squelchLevel = controls.squelchLevel,
+                                    onSquelch = vm::setSquelch,
                                 )
-                                ControlTab.Gain -> GainTab(gainControls, vm.signalDb) { vm.sourceAction(it) }
-                                ControlTab.Squelch -> SquelchTab(controls.squelchEnabled, controls.squelchLevel, vm.signalDb, vm::setSquelch)
-                                ControlTab.Audio -> AudioTab(controls.volume, vm::setVolume)
+                                ControlTab.Audio -> AudioTab(
+                                    volume = controls.volume,
+                                    onVolume = vm::setVolume,
+                                    outputs = remember { vm.audioOutputs() },
+                                    device = advanced.audio.device,
+                                    latency = advanced.audio.latency,
+                                    onDevice = { vm.setOption("audio.device", it.toDouble()) },
+                                    onLatency = { vm.setOption("audio.latency", it.toDouble()) },
+                                )
                                 ControlTab.Bands -> BandsTab(stateHolder.value.vfoFrequency, vm::applyPreset)
                                 ControlTab.Memories -> MemoriesPanel(
                                     memories = data.memories, currentFrequency = stateHolder.value.vfoFrequency,

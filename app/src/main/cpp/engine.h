@@ -36,6 +36,9 @@ namespace engine {
     void stop();
     bool isPlaying();
 
+    // Push pending waterfall-side VFO changes to the DSP (SDR++'s GUI does this every frame)
+    void syncVfo();
+
     // ------------------------------------------------------------------ tuning
     void tune(double freqHz);        // move the VFO (and the center if needed)
     void tuneCenter(double freqHz);  // move the hardware center frequency, VFO offset kept at 0

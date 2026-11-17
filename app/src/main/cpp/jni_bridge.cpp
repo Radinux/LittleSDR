@@ -81,6 +81,7 @@ JNIEXPORT void JNICALL JNI_FN(tuneCenter)(JNIEnv*, jclass, jdouble hz) { engine:
 
 // One call for everything the UI polls (avoids a dozen JNI round trips per frame)
 JNIEXPORT jdoubleArray JNICALL JNI_FN(state)(JNIEnv* env, jclass) {
+    engine::syncVfo(); // keep audio on the displayed frequency (see engine::syncVfo)
     double v[11] = {
         engine::vfoFrequency(),
         engine::centerFrequency(),

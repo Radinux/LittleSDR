@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.littlesdr.LittleSdrApp
 import app.littlesdr.data.AppData
+import app.littlesdr.data.EiBiEntry
 import app.littlesdr.data.PhoneLocation
 import app.littlesdr.data.Appearance
 import app.littlesdr.data.DisplaySettings
@@ -89,6 +90,22 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     val advanced: StateFlow<AdvancedOptions> = _advanced.asStateFlow()
 
     /** RDS of the station being received (WFM only), empty otherwise. */
+    // ---- EiBi: shortwave broadcasts on the tuned frequency right now
+    private val eibiRepo = littleApp.eibi
+    private val _eibi = MutableStateFlow<List<EiBiEntry>>(emptyList())
+    val eibi: StateFlow<List<EiBiEntry>> = _eibi.asStateFlow()
+
+    data class EiBiStatus(val season: String = "", val count: Int = 0, val updated: Long = 0, val updating: Boolean = false)
+    private val _eibiStatus = MutableStateFlow(EiBiStatus())
+    val eibiStatus: StateFlow<EiBiStatus> = _eibiStatus.asStateFlow()
+
+    fun updateEibi(force: Boolean = true) = viewModelScope.launch {
+        _eibiStatus.value = _eibiStatus.value.copy(updating = true)
+        val ok = eibiRepo.ensure(force)
+        _eibiStatus.value = EiBiStatus(eibiRepo.loadedSeason.uppercase(), eibiRepo.count, eibiRepo.lastUpdate(), false)
+        if (force && !ok) _error.value = "Impossible de télécharger les horaires EiBi (réseau ?)"
+    }
+
     private val _rds = MutableStateFlow(RdsInfo())
     val rds: StateFlow<RdsInfo> = _rds.asStateFlow()
 
@@ -147,6 +164,17 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             Engine.state.map { it.playing }.distinctUntilChanged().collect {
                 if (Engine.ready.value) _sourceMenu.value = Engine.sourceMenu()
+            }
+        }
+        // EiBi: load (download if needed), then match the VFO against the schedule every second
+        viewModelScope.launch {
+            updateEibi(force = false).join()
+            while (isActive) {
+                val s = state.value
+                _eibi.value = if (s.vfoFrequency < 30e6 && s.mode != Mode.WFM) {
+                    eibiRepo.lookup(s.vfoFrequency, 2_500.0, java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC))
+                } else emptyList()
+                delay(1000)
             }
         }
         // RDS: poll once a second while receiving WFM; forget it when tuning elsewhere

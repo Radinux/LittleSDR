@@ -2,6 +2,7 @@ package app.littlesdr.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.FlowRow
 import kotlin.math.abs
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.graphicsLayer
@@ -167,7 +168,7 @@ private fun LabeledSlider(
 }
 
 /** Tabs of the control panel (top cap of the right "pill"). */
-enum class ControlTab(val label: String) { Source("Récepteur"), Radio("Radio"), Gain("Gain"), Squelch("Squelch"), Audio("Audio"), Bands("Bandes"), Memories("Mémoires") }
+enum class ControlTab(val label: String) { Source("Récepteur"), Radio("Radio"), Audio("Audio"), Bands("Bandes"), Memories("Mémoires") }
 
 /**
  * Scrollable tab carousel: swipe sideways, edges fade out and tabs shrink as they approach them,
@@ -214,8 +215,6 @@ fun ControlTabBar(selected: ControlTab, onSelect: (ControlTab) -> Unit, modifier
             val icon = when (tab) {
                 ControlTab.Source -> Icons.Default.Router
                 ControlTab.Radio -> Icons.Default.Radio
-                ControlTab.Gain -> Icons.Default.SettingsInputAntenna
-                ControlTab.Squelch -> Icons.Default.VolumeMute
                 ControlTab.Audio -> Icons.AutoMirrored.Filled.VolumeUp
                 ControlTab.Bands -> Icons.Default.Waves
                 ControlTab.Memories -> Icons.Default.Bookmarks
@@ -270,6 +269,11 @@ fun RadioTab(
     onStep: (Double) -> Unit,
     onBandwidth: (Float) -> Unit,
     onAutoBandwidth: (Boolean) -> Unit,
+    gain: List<SmWidget>,
+    onGainAction: (SmAction) -> Unit,
+    squelchEnabled: Boolean,
+    squelchLevel: Float,
+    onSquelch: (Boolean, Float) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         ModeSelector(mode, onMode, Modifier.fillMaxWidth())
@@ -299,55 +303,56 @@ fun RadioTab(
                 }
             } else null,
         )
-    }
-}
 
-@Composable
-fun GainTab(gain: List<SmWidget>, signalDb: StateFlow<Float>, onAction: (SmAction) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SignalMeter(signalDb, Modifier.fillMaxWidth())
+        // Gain of the receiver (from the driver's own settings)
+        SectionLabel("Gain")
         if (gain.isEmpty()) {
-            Text(
-                "Pas de réglage de gain pour cette source.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text("Pas de réglage de gain pour cette source.", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
-            GainControls(gain, onAction)
+            GainControls(gain, onGainAction)
         }
-    }
-}
 
-@Composable
-fun SquelchTab(enabled: Boolean, level: Float, signalDb: StateFlow<Float>, onSquelch: (Boolean, Float) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Squelch
+        SectionLabel("Squelch")
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Squelch", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "Coupe le son sous le seuil (ligne pointillée sur le spectre)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(checked = enabled, onCheckedChange = { onSquelch(it, level) })
+            LabeledSlider(
+                title = "Seuil",
+                value = squelchLevel,
+                range = -120f..0f,
+                valueText = { "${it.roundToInt()} dB" },
+                onChange = { onSquelch(squelchEnabled, it) },
+                enabled = squelchEnabled,
+                snap = 1f,
+                live = true,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(12.dp))
+            Switch(checked = squelchEnabled, onCheckedChange = { onSquelch(it, squelchLevel) })
         }
-        LabeledSlider(
-            title = "Seuil",
-            value = level,
-            range = -120f..0f,
-            valueText = { "${it.roundToInt()} dB" },
-            onChange = { onSquelch(enabled, it) },
-            enabled = enabled,
-            snap = 1f,
-            live = true,
-        )
-        SignalMeter(signalDb, Modifier.fillMaxWidth())
     }
 }
 
 @Composable
-fun AudioTab(volume: Float, onVolume: (Float) -> Unit) {
+private fun SectionLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 10.dp),
+    )
+}
+
+@Composable
+fun AudioTab(
+    volume: Float,
+    onVolume: (Float) -> Unit,
+    outputs: List<Pair<Int, String>>,
+    device: Int,
+    latency: Int,
+    onDevice: (Int) -> Unit,
+    onLatency: (Int) -> Unit,
+) {
     // Mute keeps the previous level so un-muting restores it
     var lastVolume by remember { mutableFloatStateOf(if (volume > 0.001f) volume else 0.8f) }
     val muted = volume <= 0.001f
@@ -367,6 +372,27 @@ fun AudioTab(volume: Float, onVolume: (Float) -> Unit) {
                     )
                 }
             },
+        )
+
+        SectionLabel("Sortie")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            val current = if (outputs.any { it.first == device }) device else 0
+            outputs.forEach { (id, name) ->
+                FilterChip(selected = id == current, onClick = { onDevice(id) }, label = { Text(name) })
+            }
+        }
+
+        SectionLabel("Latence")
+        val lat = when { latency <= 2 -> 2; latency >= 8 -> 8; else -> 4 }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(2 to "Faible", 4 to "Normale", 8 to "Élevée").forEach { (v, label) ->
+                FilterChip(selected = v == lat, onClick = { onLatency(v) }, label = { Text(label) })
+            }
+        }
+        Text(
+            "Faible : plus réactif, risque de coupures. Élevée : plus stable.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

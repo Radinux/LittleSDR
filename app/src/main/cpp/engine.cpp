@@ -33,6 +33,12 @@ namespace engine {
 
         std::recursive_mutex g_mtx; // serializes every control call ("UI thread")
 
+        // Frequency the user tuned to (absolute, Hz). SDR++ clamps the VFO into the band whenever the
+        // source sample rate changes (e.g. RTL-SDR selected before its USB device is available, so
+        // with a near-zero band): we re-tune to this after such changes. Only user tuning updates it.
+        double g_wantedVfo = 0.0;
+        double g_lastBandwidth = 0.0;
+
         // FFT presentation options (DSP thread reads them in releaseFFTBuffer)
         std::atomic<float> g_smoothing{ 0.4f };   // weight of the previous trace (0 = none)
         std::atomic<float> g_peakDecayDb{ 10.0f }; // peak-hold fall, dB per second
@@ -112,6 +118,10 @@ namespace engine {
         void saveTuning() {
             core::configManager.acquire();
             core::configManager.conf["frequency"] = gui::waterfall.getCenterFrequency();
+            if (g_wantedVfo > 0) {
+                if (!core::configManager.conf["littlesdr"].is_object()) { core::configManager.conf["littlesdr"] = json::object(); }
+                core::configManager.conf["littlesdr"]["vfoFrequency"] = g_wantedVfo;
+            }
             if (auto vfo = radioVfo()) {
                 core::configManager.conf["vfoOffsets"][VFO_NAME] = vfo->centerOffset;
             }
@@ -264,6 +274,15 @@ namespace engine {
         gui::waterfall.selectFirstVFO();
 
         restoreOptions();
+        core::configManager.acquire();
+        {
+            auto& o = core::configManager.conf["littlesdr"];
+            g_wantedVfo = (o.is_object() && o.contains("vfoFrequency")) ? (double)o["vfoFrequency"] : 0.0;
+        }
+        core::configManager.release();
+        if (g_wantedVfo <= 0) { g_wantedVfo = vfoFrequency(); }
+        g_lastBandwidth = 0.0; // force the first syncVfo() to check the restored VFO
+        syncVfo(); // the radio module set its reference/bandwidth after the VFO offset was restored
 
         g_initialized = true;
         flog::info("LittleSDR engine ready, {} sources", (int)names.size());
@@ -298,6 +317,26 @@ namespace engine {
         return smguijson::renderSourceMenu(diffId, diff);
     }
 
+    // SDR++ changes some VFO offsets on the waterfall side only (reference / bandwidth changes,
+    // e.g. switching to USB) and lets the GUI loop copy them to the DSP every frame through
+    // updateFromWaterfall(). There is no such loop here, so without this the display (waterfall
+    // data) and the audio (DSP VFO) drift apart, and the drift survives restarts.
+    void syncVfo() {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        sigpath::vfoManager.updateFromWaterfall(&gui::waterfall);
+
+        // Band changed (sample rate, source, USB device appearing): put the VFO back where the user left it
+        double bw = gui::waterfall.getBandwidth();
+        if (bw != g_lastBandwidth) {
+            g_lastBandwidth = bw;
+            if (g_wantedVfo > 0 && radioVfo() && std::abs(vfoFrequency() - g_wantedVfo) > 1.0) {
+                tuner::tune(tuner::TUNER_MODE_NORMAL, VFO_NAME, g_wantedVfo);
+                sigpath::vfoManager.updateFromWaterfall(&gui::waterfall);
+                saveTuning();
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ playback
     bool start() {
         std::lock_guard<std::recursive_mutex> lck(g_mtx);
@@ -319,7 +358,9 @@ namespace engine {
     // from the other side (kept on purpose: the joystick makes this jump harmless).
     void tune(double freqHz) {
         std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        g_wantedVfo = freqHz;
         tuner::tune(tuner::TUNER_MODE_NORMAL, VFO_NAME, freqHz);
+        syncVfo();
         saveTuning();
     }
 
@@ -329,6 +370,8 @@ namespace engine {
         gui::waterfall.setCenterFrequency(freqHz);
         sigpath::sourceManager.tune(freqHz);
         if (radioVfo()) { sigpath::vfoManager.setOffset(VFO_NAME, off); }
+        syncVfo();
+        g_wantedVfo = vfoFrequency();
         saveTuning();
     }
 
@@ -363,6 +406,7 @@ namespace engine {
     void setMode(int m) {
         std::lock_guard<std::recursive_mutex> lck(g_mtx);
         core::modComManager.callInterface(VFO_NAME, RADIO_IFACE_CMD_SET_MODE, &m, nullptr);
+        syncVfo();
     }
 
     int mode() {
@@ -375,6 +419,7 @@ namespace engine {
     void setBandwidth(float hz) {
         std::lock_guard<std::recursive_mutex> lck(g_mtx);
         core::modComManager.callInterface(VFO_NAME, RADIO_IFACE_CMD_SET_BANDWIDTH, &hz, nullptr);
+        syncVfo();
     }
 
     void setSquelch(bool enabled, float levelDb) {
