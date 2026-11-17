@@ -190,11 +190,17 @@ fun Ft8Screen(vm: RadioViewModel, onBack: () -> Unit) {
                 if (showMap) {
                     Box(Modifier.fillMaxSize()) {
                         Ft8Map(traffic, home, Modifier.fillMaxSize())
+                        // Counts in an opaque pill, so they never mix with station labels
                         Text(
                             "${traffic.stations.count { it.heard }} stations · ${traffic.links.size} liaisons (2 min)",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.align(Alignment.BottomStart).padding(14.dp),
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(start = 18.dp, top = 14.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f))
+                                .padding(horizontal = 10.dp, vertical = 4.dp),
                         )
                         if (home == null) {
                             Text(
