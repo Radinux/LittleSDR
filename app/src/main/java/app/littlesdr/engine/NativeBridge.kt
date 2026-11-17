@@ -41,6 +41,10 @@ object NativeBridge {
     @JvmStatic external fun estimateBandwidth(minBw: Double, maxBw: Double): Float
     @JvmStatic external fun options(): String
     @JvmStatic external fun setOption(key: String, value: Double)
+    @JvmStatic external fun setOptionString(key: String, value: String)
+    @JvmStatic external fun ft8Json(): String
+    @JvmStatic external fun ft8Set(key: String, value: Double)
+    @JvmStatic external fun ctyLatLon(calls: Array<String>): DoubleArray
 
     // display (Vulkan renderer)
     @JvmStatic external fun setView(viewBandwidth: Double, viewOffset: Double)

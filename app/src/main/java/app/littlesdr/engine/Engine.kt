@@ -114,6 +114,7 @@ object Engine {
         val root = File(context.filesDir, "sdr").absolutePath
         val cache = context.cacheDir.absolutePath
         scope.launch {
+            installResources(context, File(root, "res"))
             val ok = NativeBridge.nativeInit(root, cache, FFT_SIZE)
             if (!ok) {
                 Log.e(TAG, "native engine init failed")
@@ -127,6 +128,26 @@ object Engine {
                 delay(100)
             }
         }
+    }
+
+    /** Copies bundled engine resources (assets/res/...) once per app version. */
+    private fun installResources(context: Context, dest: File) {
+        val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode }.getOrDefault(0L)
+        val marker = File(dest, ".installed")
+        if (marker.exists() && marker.readText() == version.toString()) return
+        fun copy(assetPath: String, target: File) {
+            val children = context.assets.list(assetPath).orEmpty()
+            if (children.isEmpty()) {
+                target.parentFile?.mkdirs()
+                context.assets.open(assetPath).use { input -> target.outputStream().use { input.copyTo(it) } }
+            } else {
+                children.forEach { copy("$assetPath/$it", File(target, it)) }
+            }
+        }
+        runCatching {
+            copy("res", dest)
+            marker.writeText(version.toString())
+        }.onFailure { Log.e(TAG, "resource install failed", it) }
     }
 
     private fun pollState() {
@@ -219,6 +240,17 @@ object Engine {
     suspend fun setOption(key: String, value: Double): AdvancedOptions = call {
         NativeBridge.setOption(key, value)
         AdvancedOptions.parse(NativeBridge.options())
+    }
+
+    suspend fun setOptionString(key: String, value: String): AdvancedOptions = call {
+        NativeBridge.setOptionString(key, value)
+        AdvancedOptions.parse(NativeBridge.options())
+    }
+
+    suspend fun ft8(): Ft8State = call { Ft8State.parse(NativeBridge.ft8Json()) }
+    suspend fun ft8Set(key: String, value: Double): Ft8State = call {
+        NativeBridge.ft8Set(key, value)
+        Ft8State.parse(NativeBridge.ft8Json())
     }
 
     suspend fun selectSource(name: String) = call {

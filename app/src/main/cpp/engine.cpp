@@ -13,6 +13,7 @@
 #include <gui/smgui.h>
 #include <signal_path/signal_path.h>
 #include <utils/flog.h>
+#include <utils/cty.h>
 #include <radio_interface.h>
 
 #include <dlfcn.h>
@@ -53,7 +54,9 @@ namespace engine {
             { "KiwiSDR Source", "kiwisdr_source" },
             { "Audio Sink", "audio_sink" },
             { "Radio", "radio" },
+            { "FT8/FT4 Decoder", "ft8_decoder" }, // created disabled, enabled from the FT8 screen
         };
+        constexpr const char* FT8_INSTANCE = "FT8/FT4 Decoder";
 
         // ---------------------------------------------------------- FFT callbacks (DSP thread)
         // The FFT mutex is held from acquire to release (same DSP thread), so the buffers
@@ -179,16 +182,22 @@ namespace engine {
         }
         core::configManager.conf["modules"] = json::array();
         core::configManager.conf["moduleInstances"] = json::object();
+        // The FT8 decoder always starts off: it costs CPU during reception, so it is only
+        // turned on explicitly from the FT8 screen (never silently at app start).
+        const bool ft8Enabled = false;
         for (auto& m : MODULES) {
             core::configManager.conf["modules"].push_back(std::string(m.module) + ".so");
             core::configManager.conf["moduleInstances"][m.instance]["module"] = m.module;
-            core::configManager.conf["moduleInstances"][m.instance]["enabled"] = true;
+            core::configManager.conf["moduleInstances"][m.instance]["enabled"] =
+                strcmp(m.instance, FT8_INSTANCE) == 0 ? ft8Enabled : true;
         }
         core::configManager.conf["streams"]["Radio"]["sink"] = "Audio";
         std::string resDir = core::configManager.conf["resourcesDirectory"];
         std::string modDir = core::configManager.conf["modulesDirectory"];
         double frequency = core::configManager.conf["frequency"];
         std::string savedSource = core::configManager.conf["source"];
+        std::string operatorLocation = core::configManager.conf["operatorLocation"];
+        std::string operatorCallsign = core::configManager.conf["operatorCallsign"];
         core::configManager.release(true);
         sdrppResourcesDirectory = strdup(resDir.c_str());
         sdrppModulesDirectory = strdup(modDir.c_str());
@@ -218,6 +227,15 @@ namespace engine {
         g_vfoCreatedHandler.ctx = nullptr;
         sigpath::vfoManager.onVfoCreated.bindHandler(&g_vfoCreatedHandler);
 
+        // Country database (FT8 decodes) and operator position (distances)
+        if (std::filesystem::exists(resDir + "/cty/cty.dat")) {
+            core::configManager.acquire();
+            utils::loadAllCty();
+            core::configManager.release();
+        }
+        sigpath::iqFrontEnd.operatorLocation = operatorLocation;
+        sigpath::iqFrontEnd.operatorCallsign = operatorCallsign;
+
         // Modules
         for (auto& m : MODULES) {
             std::string file = std::string(m.module) + ".so";
@@ -231,6 +249,7 @@ namespace engine {
             if (rtl) { setServerFlag(true); }
             core::moduleManager.createInstance(m.instance, m.module);
             if (rtl) { setServerFlag(false); }
+            if (strcmp(m.instance, FT8_INSTANCE) == 0 && !ft8Enabled) { core::moduleManager.disableInstance(m.instance); }
         }
         core::moduleManager.doPostInitAll();
 
@@ -556,6 +575,8 @@ namespace engine {
         j["fft"]["peakDecay"] = g_peakDecayDb.load();
         j["audio"]["device"] = optGet<int>("audioDevice", 0);
         j["audio"]["latency"] = optGet<int>("audioLatency", 4);
+        j["operator"]["location"] = (std::string)core::configManager.conf["operatorLocation"];
+        j["operator"]["callsign"] = (std::string)core::configManager.conf["operatorCallsign"];
         core::configManager.release();
         {
             std::lock_guard<std::mutex> l2(g_fft.mtx);
@@ -644,6 +665,79 @@ namespace engine {
                 if (void* inst = radioInstance()) { fn(inst, key.c_str() + 6, v); }
             }
         }
+    }
+
+    // ================================================================== text options
+    void setOptionString(const std::string& key, const std::string& value) {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        if (key == "operator.location") {
+            sigpath::iqFrontEnd.operatorLocation = value;
+            core::configManager.acquire();
+            core::configManager.conf["operatorLocation"] = value;
+            core::configManager.release(true);
+        }
+        else if (key == "operator.callsign") {
+            sigpath::iqFrontEnd.operatorCallsign = value;
+            core::configManager.acquire();
+            core::configManager.conf["operatorCallsign"] = value;
+            core::configManager.release(true);
+        }
+    }
+
+    // ================================================================== FT8 / FT4
+    namespace {
+        void* moduleSymbol(const char* module, const char* sym) {
+            auto it = core::moduleManager.modules.find(module);
+            if (it == core::moduleManager.modules.end() || !it->second.handle) { return nullptr; }
+            return dlsym(it->second.handle, sym);
+        }
+
+        void* ft8Instance() {
+            auto it = core::moduleManager.instances.find(FT8_INSTANCE);
+            return it == core::moduleManager.instances.end() ? nullptr : (void*)it->second.instance;
+        }
+    }
+
+    std::string ft8Json() {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        using Fn = int (*)(void*, char*, int);
+        auto fn = (Fn)moduleSymbol("ft8_decoder", "littlesdr_ft8_json");
+        void* inst = ft8Instance();
+        if (!fn || !inst) { return "{}"; }
+        std::vector<char> buf(256 * 1024);
+        fn(inst, buf.data(), (int)buf.size());
+        return std::string(buf.data());
+    }
+
+    void ft8Set(const std::string& key, double v) {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        if (key == "enabled") {
+            bool on = v != 0.0;
+            if (on) { core::moduleManager.enableInstance(FT8_INSTANCE); }
+            else { core::moduleManager.disableInstance(FT8_INSTANCE); }
+            return;
+        }
+        using Fn = void (*)(void*, const char*, double);
+        if (auto fn = (Fn)moduleSymbol("ft8_decoder", "littlesdr_ft8_set")) {
+            if (void* inst = ft8Instance()) { fn(inst, key.c_str(), v); }
+        }
+    }
+
+    std::vector<double> ctyLatLon(const std::vector<std::string>& calls) {
+        std::vector<double> out;
+        out.reserve(calls.size() * 2);
+        for (auto& c : calls) {
+            auto cs = utils::globalCty.findCallsign(c);
+            if (cs.ll.isValid() && !(cs.ll.lat == 0 && cs.ll.lon == 0)) {
+                out.push_back(cs.ll.lat);
+                out.push_back(cs.ll.lon);
+            }
+            else {
+                out.push_back(std::nan(""));
+                out.push_back(std::nan(""));
+            }
+        }
+        return out;
     }
 
 }

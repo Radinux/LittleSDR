@@ -15,8 +15,8 @@ android {
         applicationId = "app.littlesdr"
         minSdk = 28
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.2.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -32,7 +32,7 @@ android {
                 targets += listOf(
                     "littlesdr", "sdrpp_core", "audio_sink", "radio",
                     "rtl_sdr_source", "airspy_source", "airspyhf_source", "hackrf_source",
-                    "rtl_tcp_source", "spyserver_source", "kiwisdr_source",
+                    "rtl_tcp_source", "spyserver_source", "kiwisdr_source", "ft8_decoder",
                 )
             }
         }
@@ -76,6 +76,33 @@ android {
             // Modules are dlopen()ed by name, keep them uncompressed & extracted
             useLegacyPackaging = true
         }
+    }
+}
+
+// Country database used by the FT8 decoder (callsign -> country), shipped as assets/res/cty
+abstract class CtyAssetsTask : DefaultTask() {
+    @get:InputDirectory
+    abstract val source: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val out = outputDir.get().asFile.resolve("res/cty")
+        out.deleteRecursively()
+        out.mkdirs()
+        source.get().asFile.listFiles { f -> f.extension == "dat" }?.forEach { it.copyTo(out.resolve(it.name)) }
+    }
+}
+
+val ctyAssets = tasks.register<CtyAssetsTask>("ctyAssets") {
+    source.set(rootProject.layout.projectDirectory.dir("third_party/sdrpp-brown/root/res/cty"))
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(ctyAssets, CtyAssetsTask::outputDir)
     }
 }
 

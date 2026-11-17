@@ -23,12 +23,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmarks
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
@@ -74,7 +77,7 @@ import kotlinx.coroutines.launch
 private enum class Sheet { None, Source, Memories }
 
 @Composable
-fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit) {
+fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> Unit) {
     val ready by vm.ready.collectAsStateWithLifecycle()
     val stateHolder = vm.state.collectAsStateWithLifecycle()
     val viewHolder = vm.view.collectAsStateWithLifecycle()
@@ -92,18 +95,14 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit) {
     val usb by vm.usbDevice.collectAsStateWithLifecycle()
     val menu by vm.sourceMenu.collectAsStateWithLifecycle()
     val gainControls by vm.gainControls.collectAsStateWithLifecycle()
+    val ft8State by vm.ft8.collectAsStateWithLifecycle()
+    val ft8Active = ft8State.enabled
     val error by vm.error.collectAsStateWithLifecycle()
     vm.steps.collectAsStateWithLifecycle()
     val step = vm.stepFor(mode)
 
     var sheet by rememberSaveable { mutableStateOf(Sheet.None) }
 
-    // Keep the screen on while receiving
-    val view = LocalView.current
-    DisposableEffect(playing) {
-        view.keepScreenOn = playing
-        onDispose { view.keepScreenOn = false }
-    }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -171,6 +170,8 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit) {
                             onSource = { sheet = Sheet.Source },
                             onMemories = { sheet = Sheet.Memories },
                             onSettings = onOpenSettings,
+                            onFt8 = onOpenFt8,
+                            ft8Active = ft8Active,
                         )
                         Header(stateHolder, onTune = vm::tune)
                         Spacer(Modifier.height(6.dp))
@@ -243,6 +244,8 @@ private fun TopRow(
     onSource: () -> Unit,
     onMemories: () -> Unit,
     onSettings: () -> Unit,
+    onFt8: () -> Unit,
+    ft8Active: Boolean,
 ) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.weight(1f)) {
@@ -251,6 +254,12 @@ private fun TopRow(
                 label = { Text(source.ifBlank { "Choisir une source" }, maxLines = 1) },
                 leadingIcon = { Icon(if (usb) Icons.Default.Usb else Icons.Default.Router, null, Modifier.size(AssistChipDefaults.IconSize)) },
             )
+        }
+        IconButton(onClick = onFt8) {
+            // Badge while the decoder runs, so it isn't forgotten (it costs CPU during reception)
+            BadgedBox(badge = { if (ft8Active) Badge(containerColor = MaterialTheme.colorScheme.primary) }) {
+                Icon(Icons.Default.Forum, if (ft8Active) "FT8 / FT4 (décodeur actif)" else "FT8 / FT4")
+            }
         }
         IconButton(onClick = onMemories) { Icon(Icons.Default.Bookmarks, "Fréquences") }
         IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Réglages") }

@@ -64,4 +64,14 @@ namespace engine {
     std::string optionsJson();
     // Set one option, key like "input.decimation", "fft.size", "audio.latency", "demod.nb"
     void setOption(const std::string& key, double value);
+    // Text options: "operator.location" (Maidenhead locator), "operator.callsign"
+    void setOptionString(const std::string& key, const std::string& value);
+
+    // ------------------------------------------------------------------ FT8 / FT4
+    // { enabled, ft8:{processing,onFrequency,dial,...}, ft4:{...}, results:[...] }
+    std::string ft8Json();
+    // "enabled" (decoder module on/off), "ft8"/"ft4" (processing), "clear"
+    void ft8Set(const std::string& key, double value);
+    // Country position (CTY database) for each callsign: lat, lon pairs (NaN when unknown)
+    std::vector<double> ctyLatLon(const std::vector<std::string>& calls);
 }

@@ -6,6 +6,7 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,16 +21,22 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.littlesdr.engine.Engine
 import app.littlesdr.ui.MainScreen
+import app.littlesdr.ui.Ft8Screen
 import app.littlesdr.ui.SettingsScreen
 import app.littlesdr.ui.RadioViewModel
 import app.littlesdr.ui.theme.LittleSdrTheme
+
+private enum class Screen { Main, Settings, Ft8 }
 
 class MainActivity : ComponentActivity() {
     private val vm: RadioViewModel by viewModels()
@@ -48,16 +55,25 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         setContent {
             val data by vm.data.collectAsStateWithLifecycle()
+            val playing by vm.state.collectAsStateWithLifecycle().let { s -> remember { derivedStateOf { s.value.playing } } }
+            // Screen stays on while receiving, on every page (main, FT8, settings)
+            LaunchedEffect(playing) {
+                if (playing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
             LittleSdrTheme(data.appearance) {
-                var settings by rememberSaveable { mutableStateOf(false) }
-                BackHandler(enabled = settings) { settings = false }
+                var screen by rememberSaveable { mutableStateOf(Screen.Main) }
+                BackHandler(enabled = screen != Screen.Main) { screen = Screen.Main }
                 AnimatedContent(
-                    targetState = settings,
+                    targetState = screen,
                     transitionSpec = { fadeIn() togetherWith fadeOut() },
                     label = "screen",
-                ) { showSettings ->
-                    if (showSettings) SettingsScreen(vm, onBack = { settings = false })
-                    else MainScreen(vm, onOpenSettings = { settings = true })
+                ) { s ->
+                    when (s) {
+                        Screen.Main -> MainScreen(vm, onOpenSettings = { screen = Screen.Settings }, onOpenFt8 = { screen = Screen.Ft8 })
+                        Screen.Settings -> SettingsScreen(vm, onBack = { screen = Screen.Main })
+                        Screen.Ft8 -> Ft8Screen(vm, onBack = { screen = Screen.Main })
+                    }
                 }
             }
         }

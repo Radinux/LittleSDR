@@ -253,3 +253,33 @@ fun AudioSection(a: AudioOptions, outputs: List<Pair<Int, String>>, setNum: SetN
         )
     }
 }
+
+
+// ---------------------------------------------------------------- Operator
+
+@Composable
+fun OperatorSection(o: app.littlesdr.engine.OperatorOptions, setText: (String, String) -> Unit) {
+    OptionCard("Opérateur") {
+        var call by remember(o.callsign) { mutableStateOf(o.callsign) }
+        var loc by remember(o.location) { mutableStateOf(o.location) }
+        OutlinedTextField(
+            value = call,
+            onValueChange = { call = it.uppercase().filter { c -> c.isLetterOrDigit() || c == '/' }.take(12) },
+            label = { Text("Indicatif") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { setText("operator.callsign", call) }),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+        )
+        OutlinedTextField(
+            value = loc,
+            onValueChange = { loc = it.uppercase().filter { c -> c.isLetterOrDigit() }.take(8) },
+            label = { Text("Locator (ex. JN18)") },
+            supportingText = { Text("Sert à calculer la distance des stations FT8") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { setText("operator.location", loc) }),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+        )
+    }
+}

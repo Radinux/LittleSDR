@@ -75,6 +75,17 @@ endforeach ()
 # Extra entry points compiled into radio.so (advanced demodulator options)
 target_sources(radio PRIVATE modules/radio_ext.cpp)
 
+# FT8/FT4 decoder: upstream sources, with main.cpp included through modules/ft8_ext.cpp
+set(FT8_DIR "${SDRPP_ROOT}/decoder_modules/ft8_decoder")
+file(GLOB_RECURSE FT8_SRC "${FT8_DIR}/src/*.cpp" "${FT8_DIR}/src/*.c")
+list(FILTER FT8_SRC EXCLUDE REGEX "/main\\.cpp$")
+list(FILTER FT8_SRC EXCLUDE REGEX "sdrpp_ft8_mshv_main\\.cpp$")
+add_library(ft8_decoder SHARED ${FT8_SRC} modules/ft8_ext.cpp) # wav/riff live in the core
+set_target_properties(ft8_decoder PROPERTIES PREFIX "")
+target_include_directories(ft8_decoder PRIVATE "${FT8_DIR}/src")
+target_compile_options(ft8_decoder PRIVATE ${SDRPP_MODULE_COMPILER_FLAGS})
+target_link_libraries(ft8_decoder PRIVATE sdrpp_core log)
+
 # Our own AAudio sink (upstream android_audio_sink needs NativeActivity)
 add_library(audio_sink SHARED modules/aaudio_sink/main.cpp)
 set_target_properties(audio_sink PROPERTIES PREFIX "")

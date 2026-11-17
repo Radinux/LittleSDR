@@ -112,6 +112,28 @@ JNIEXPORT jstring JNICALL JNI_FN(options)(JNIEnv* env, jclass) {
 JNIEXPORT void JNICALL JNI_FN(setOption)(JNIEnv* env, jclass, jstring key, jdouble value) {
     engine::setOption(str(env, key), value);
 }
+JNIEXPORT void JNICALL JNI_FN(setOptionString)(JNIEnv* env, jclass, jstring key, jstring value) {
+    engine::setOptionString(str(env, key), str(env, value));
+}
+JNIEXPORT jstring JNICALL JNI_FN(ft8Json)(JNIEnv* env, jclass) {
+    return env->NewStringUTF(engine::ft8Json().c_str());
+}
+JNIEXPORT void JNICALL JNI_FN(ft8Set)(JNIEnv* env, jclass, jstring key, jdouble value) {
+    engine::ft8Set(str(env, key), value);
+}
+JNIEXPORT jdoubleArray JNICALL JNI_FN(ctyLatLon)(JNIEnv* env, jclass, jobjectArray calls) {
+    std::vector<std::string> v;
+    jsize n = env->GetArrayLength(calls);
+    for (jsize i = 0; i < n; i++) {
+        auto s = (jstring)env->GetObjectArrayElement(calls, i);
+        v.push_back(str(env, s));
+        env->DeleteLocalRef(s);
+    }
+    auto r = engine::ctyLatLon(v);
+    jdoubleArray arr = env->NewDoubleArray((jsize)r.size());
+    env->SetDoubleArrayRegion(arr, 0, (jsize)r.size(), r.data());
+    return arr;
+}
 JNIEXPORT void JNICALL JNI_FN(setVolume)(JNIEnv*, jclass, jfloat v) { engine::setVolume(v); }
 
 // ---------------------------------------------------------------- display

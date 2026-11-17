@@ -10,12 +10,20 @@ data class AdvancedOptions(
     val fft: FftOptions = FftOptions(),
     val audio: AudioOptions = AudioOptions(),
     val demod: DemodOptions = DemodOptions(),
+    val operator: OperatorOptions = OperatorOptions(),
 ) {
     companion object {
         private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
         fun parse(s: String): AdvancedOptions = runCatching { json.decodeFromString(serializer(), s) }.getOrDefault(AdvancedOptions())
     }
 }
+
+@Serializable
+data class OperatorOptions(
+    /** Maidenhead locator (e.g. JN18), used for distances to FT8 stations */
+    val location: String = "",
+    val callsign: String = "",
+)
 
 @Serializable
 data class InputOptions(

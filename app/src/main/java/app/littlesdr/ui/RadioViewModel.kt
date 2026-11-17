@@ -10,6 +10,13 @@ import app.littlesdr.data.DisplaySettings
 import app.littlesdr.data.Memory
 import app.littlesdr.engine.AdvancedOptions
 import app.littlesdr.engine.Engine
+import app.littlesdr.engine.Ft8Link
+import app.littlesdr.engine.Ft8Message
+import app.littlesdr.engine.Ft8State
+import app.littlesdr.engine.Ft8Station
+import app.littlesdr.engine.Ft8Traffic
+import app.littlesdr.engine.GeoPoint
+import app.littlesdr.engine.Maidenhead
 import app.littlesdr.engine.NativeBridge
 import app.littlesdr.engine.Mode
 import app.littlesdr.engine.RadioState
@@ -76,6 +83,15 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _advanced = MutableStateFlow(AdvancedOptions())
     val advanced: StateFlow<AdvancedOptions> = _advanced.asStateFlow()
+
+    private val _ft8 = MutableStateFlow(Ft8State())
+    val ft8: StateFlow<Ft8State> = _ft8.asStateFlow()
+    private var ft8Poller: Job? = null
+
+    private val _ft8Traffic = MutableStateFlow(Ft8Traffic(emptyList(), emptyList()))
+    val ft8Traffic: StateFlow<Ft8Traffic> = _ft8Traffic.asStateFlow()
+    private val gridCache = HashMap<String, String>()          // callsign -> last locator seen
+    private val countryCache = HashMap<String, GeoPoint?>()    // callsign -> CTY country position
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -199,6 +215,66 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------------ display
     fun setDisplay(s: DisplaySettings) = viewModelScope.launch { store.setDisplay(s) }
     fun setAppearance(a: Appearance) = viewModelScope.launch { store.setAppearance(a) }
+
+    fun setOptionString(key: String, value: String) = viewModelScope.launch { _advanced.value = Engine.setOptionString(key, value) }
+
+    // ------------------------------------------------------------------ FT8 / FT4
+    /** Poll decodes while the FT8 screen is visible. */
+    fun watchFt8(visible: Boolean) {
+        ft8Poller?.cancel()
+        if (!visible) return
+        ft8Poller = viewModelScope.launch {
+            while (isActive) {
+                if (Engine.ready.value) {
+                    _ft8.value = Engine.ft8()
+                    _ft8Traffic.value = buildTraffic(_ft8.value)
+                }
+                delay(1500)
+            }
+        }
+    }
+
+    /** Stations (with a position) and recent transmissions, for the FT8 map. */
+    private suspend fun buildTraffic(s: Ft8State): Ft8Traffic {
+        data class Seen(var time: Long, var cq: Boolean, var snr: Double, var heard: Boolean)
+        val seen = LinkedHashMap<String, Seen>()
+        val links = ArrayList<Ft8Link>()
+        val newest = s.results.maxOfOrNull { it.time } ?: 0L
+        for (r in s.results) { // newest first
+            val m = Ft8Message.parse(r.message) ?: continue
+            m.grid?.let { gridCache.putIfAbsent(m.sender, it) }
+            seen.getOrPut(m.sender) { Seen(r.time, m.recipient == null, r.snr, true) }.heard = true
+            m.recipient?.let { to ->
+                seen.getOrPut(to) { Seen(r.time, false, Double.NaN, false) }
+                if (newest - r.time <= 120_000) links += Ft8Link(m.sender, to, r.time)
+            }
+        }
+        // Country positions for stations without a locator (one native call for all unknowns)
+        val unknown = seen.keys.filter { it !in gridCache && it !in countryCache }
+        if (unknown.isNotEmpty()) {
+            val ll = Engine.call { NativeBridge.ctyLatLon(unknown.toTypedArray()) }
+            unknown.forEachIndexed { i, c ->
+                val lat = ll[2 * i]
+                val lon = ll[2 * i + 1]
+                countryCache[c] = if (lat.isNaN()) null else GeoPoint(lat, lon)
+            }
+        }
+        val stations = seen.mapNotNull { (call, v) ->
+            val grid = gridCache[call]?.let { Maidenhead.toLatLon(it) }
+            val pos = grid ?: countryCache[call] ?: return@mapNotNull null
+            Ft8Station(call, pos, grid != null, v.time, v.cq, v.snr, v.heard)
+        }
+        return Ft8Traffic(stations, links)
+    }
+
+    fun ft8Set(key: String, value: Boolean) = viewModelScope.launch { _ft8.value = Engine.ft8Set(key, if (value) 1.0 else 0.0) }
+    fun ft8Clear() = viewModelScope.launch { _ft8.value = Engine.ft8Set("clear", 1.0) }
+
+    /** Tune the receiver on an FT8/FT4 channel: USB, VFO on the dial, so you can also listen. */
+    fun tuneDigital(dialHz: Long) {
+        Engine.setMode(Mode.USB)
+        tune(dialHz + 1_500.0) // middle of the 3 kHz passband
+    }
 
     fun refreshAdvanced() = viewModelScope.launch { if (Engine.ready.value) _advanced.value = Engine.options() }
     fun setOption(key: String, value: Double) = viewModelScope.launch { _advanced.value = Engine.setOption(key, value) }

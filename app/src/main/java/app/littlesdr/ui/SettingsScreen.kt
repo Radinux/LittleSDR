@@ -116,6 +116,7 @@ fun SettingsScreen(vm: RadioViewModel, onBack: () -> Unit) {
                     DemodSection(adv.demod, vm::setOption, vm::setOption)
                     InputSection(adv.input, playing, vm::setOption, vm::setOption)
                     AudioSection(adv.audio, remember { vm.audioOutputs() }, vm::setOption)
+                    OperatorSection(adv.operator, vm::setOptionString)
                     AboutSection()
                     Spacer(Modifier.height(16.dp))
                 }
