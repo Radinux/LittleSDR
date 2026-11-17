@@ -79,7 +79,10 @@ private:
         if (AAudio_createStreamBuilder(&b) != AAUDIO_OK) { flog::error("AAudio: builder failed"); return; }
         AAudioStreamBuilder_setDirection(b, AAUDIO_DIRECTION_OUTPUT);
         AAudioStreamBuilder_setSharingMode(b, AAUDIO_SHARING_MODE_SHARED);
-        AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+        // POWER_SAVING: goes through the regular mixer with deep buffers. LOW_LATENCY streams can
+        // get an MMAP path that some devices silently suspend when the screen turns off (the
+        // stream keeps "running" but nothing is heard), and they cost more battery in background.
+        AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_POWER_SAVING);
         AAudioStreamBuilder_setUsage(b, AAUDIO_USAGE_MEDIA);
         AAudioStreamBuilder_setContentType(b, AAUDIO_CONTENT_TYPE_SPEECH);
         AAudioStreamBuilder_setSampleRate(b, (int32_t)sampleRate);
@@ -94,9 +97,10 @@ private:
             stream = nullptr;
             return;
         }
-        // ~4 bursts of buffering: low latency without underruns from the DSP thread jitter
+        // Buffer: N bursts (latency setting), at least 40 ms to absorb DSP thread jitter
         int32_t burst = AAudioStream_getFramesPerBurst(stream);
-        AAudioStream_setBufferSizeInFrames(stream, burst * g_bursts.load());
+        int32_t frames = std::max(burst * g_bursts.load(), (int32_t)(sampleRate * 0.04));
+        AAudioStream_setBufferSizeInFrames(stream, frames);
         r = AAudioStream_requestStart(stream);
         if (r != AAUDIO_OK) {
             flog::error("AAudio: start failed: {}", AAudio_convertResultToText(r));

@@ -53,6 +53,22 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _sourceMenu = MutableStateFlow<List<SmWidget>>(emptyList())
     val sourceMenu: StateFlow<List<SmWidget>> = _sourceMenu.asStateFlow()
+
+    /** Gain sliders and AGC switches of the current receiver, shown on the main panel. */
+    val gainControls: StateFlow<List<SmWidget>> = sourceMenu
+        .map { menu -> menu.filter(::isGainControl) }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private fun isGainControl(w: SmWidget): Boolean {
+        val gainWords = listOf("gain", "lna", "vga", "mixer", "attenuat")
+        return when (w) {
+            is SmWidget.SliderInt -> (w.title ?: w.label).lowercase().let { t -> gainWords.any { it in t } }
+            is SmWidget.SliderFloat -> (w.title ?: w.label).lowercase().let { t -> gainWords.any { it in t } }
+            is SmWidget.Checkbox -> "agc" in w.label.lowercase()
+            else -> false
+        }
+    }
     private var menuPoller: Job? = null
 
     // Renderer colors (fill, line, background), set from the Compose theme
@@ -95,6 +111,18 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                 if (kotlin.math.abs(target - s.vfoBandwidth) >= maxOf(step, s.vfoBandwidth * 0.06)) {
                     Engine.setBandwidth(target.toFloat())
                 }
+            }
+        }
+        // Source settings feed the gain block of the main panel: keep them fresh
+        viewModelScope.launch {
+            while (isActive) {
+                if (Engine.ready.value) _sourceMenu.value = Engine.sourceMenu()
+                delay(2000)
+            }
+        }
+        viewModelScope.launch {
+            Engine.state.map { it.playing }.distinctUntilChanged().collect {
+                if (Engine.ready.value) _sourceMenu.value = Engine.sourceMenu()
             }
         }
         // Demodulator options depend on the mode: refresh them when it changes

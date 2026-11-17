@@ -47,6 +47,7 @@ import app.littlesdr.engine.Mode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.littlesdr.engine.RadioState
@@ -89,11 +91,19 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit) {
     val selectedSource by vm.selectedSource.collectAsStateWithLifecycle()
     val usb by vm.usbDevice.collectAsStateWithLifecycle()
     val menu by vm.sourceMenu.collectAsStateWithLifecycle()
+    val gainControls by vm.gainControls.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     vm.steps.collectAsStateWithLifecycle()
     val step = vm.stepFor(mode)
 
     var sheet by rememberSaveable { mutableStateOf(Sheet.None) }
+
+    // Keep the screen on while receiving
+    val view = LocalView.current
+    DisposableEffect(playing) {
+        view.keepScreenOn = playing
+        onDispose { view.keepScreenOn = false }
+    }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -171,6 +181,8 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit) {
                             squelchLevel = controls.squelchLevel,
                             volume = controls.volume,
                             autoBandwidth = data.radio.autoBandwidth,
+                            gain = gainControls,
+                            onGainAction = { vm.sourceAction(it) },
                             signalDb = vm.signalDb, step = step,
                             onMode = vm::setMode,
                             onStep = { s -> mode?.let { vm.setStep(it, s) } },

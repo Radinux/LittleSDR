@@ -178,7 +178,22 @@ object Engine {
 
     fun tuneCenter(hz: Double) = post { NativeBridge.tuneCenter(hz) }
 
-    suspend fun start(): Boolean = call { NativeBridge.start() }
+    suspend fun start(): Boolean = call {
+        NativeBridge.start().also { ok -> if (ok) _state.value = _state.value.copy(playing = true) }
+    }
+
+    /**
+     * Stops the radio and ends the process (app swiped away / closed while idle): frees the
+     * native engine, the USB device and the audio stream instead of lingering in RAM.
+     * The short delay lets the engine's config autosave threads flush to disk.
+     */
+    fun shutdownAndExit() {
+        scope.launch {
+            if (_ready.value) NativeBridge.stop()
+            delay(1500)
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }
+    }
     suspend fun stop() = call { NativeBridge.stop() }
 
     fun setMode(mode: Mode) = post { NativeBridge.setMode(mode.ordinal) }

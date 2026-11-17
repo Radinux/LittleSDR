@@ -25,6 +25,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.littlesdr.engine.Engine
 import app.littlesdr.ui.MainScreen
 import app.littlesdr.ui.SettingsScreen
 import app.littlesdr.ui.RadioViewModel
@@ -65,6 +66,13 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleUsbIntent(intent)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Back out / swipe away while idle: really quit (native engine, USB, audio).
+        // While playing, the foreground service keeps the radio going in background.
+        if (isFinishing && !isChangingConfigurations && !Engine.state.value.playing) Engine.shutdownAndExit()
     }
 
     override fun onResume() {

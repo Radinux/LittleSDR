@@ -18,6 +18,7 @@ import app.littlesdr.R
 import app.littlesdr.engine.Engine
 import app.littlesdr.ui.formatFrequency
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.dropWhile
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -47,7 +48,8 @@ class RadioService : LifecycleService() {
             }
         }
         lifecycleScope.launch {
-            Engine.state.map { it.playing }.distinctUntilChanged().collect { playing ->
+            // Wait until playback is seen running, then stop the service when it stops
+            Engine.state.map { it.playing }.distinctUntilChanged().dropWhile { !it }.collect { playing ->
                 if (!playing) stopSelf()
             }
         }
@@ -62,6 +64,13 @@ class RadioService : LifecycleService() {
             }
         }
         return START_NOT_STICKY
+    }
+
+    /** Swiped away from recents while playing: stop everything and leave RAM. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        Engine.shutdownAndExit()
     }
 
     override fun onDestroy() {

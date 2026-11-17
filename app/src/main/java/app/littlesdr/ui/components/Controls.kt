@@ -44,6 +44,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.littlesdr.engine.Mode
+import app.littlesdr.engine.SmAction
+import app.littlesdr.engine.SmGui
+import app.littlesdr.engine.SmWidget
 import kotlinx.coroutines.flow.StateFlow
 import app.littlesdr.ui.formatHz
 import app.littlesdr.ui.theme.ReadoutStyle
@@ -149,6 +152,8 @@ fun DemodControls(
     squelchLevel: Float,
     volume: Float,
     autoBandwidth: Boolean,
+    gain: List<SmWidget>,
+    onGainAction: (SmAction) -> Unit,
     signalDb: StateFlow<Float>,
     step: Double,
     onMode: (Mode) -> Unit,
@@ -166,6 +171,7 @@ fun DemodControls(
             Spacer(Modifier.weight(1f))
             SignalMeter(signalDb, Modifier.width(140.dp))
         }
+        if (gain.isNotEmpty()) GainControls(gain, onGainAction)
         val m = mode ?: Mode.NFM
         LabeledSlider(
             title = "Bande passante",
@@ -244,5 +250,70 @@ fun SignalMeter(signal: StateFlow<Float>, modifier: Modifier = Modifier) {
         }
         Spacer(Modifier.width(6.dp))
         Text(if (db <= -149f) "—" else "${db.roundToInt()} dB", style = ReadoutStyle, modifier = Modifier.width(52.dp))
+    }
+}
+
+
+// R820T/R828D tuner gain steps (dB): the RTL-SDR module only exposes the step index (29 steps)
+private val R820T_GAINS = floatArrayOf(
+    0.0f, 0.9f, 1.4f, 2.7f, 3.7f, 7.7f, 8.7f, 12.5f, 14.4f, 15.7f, 16.6f, 19.7f, 20.7f, 22.9f, 25.4f,
+    28.0f, 29.7f, 32.8f, 33.8f, 36.4f, 37.2f, 38.6f, 40.2f, 42.1f, 43.4f, 43.9f, 44.5f, 48.0f, 49.6f,
+)
+
+/**
+ * Gain block built from the receiver's own settings (SmGui): every gain-like slider and AGC switch
+ * of the current driver, so RTL-SDR, Airspy (LNA/mixer/VGA), HackRF, rtl_tcp... all get one.
+ */
+@Composable
+fun GainControls(widgets: List<SmWidget>, onAction: (SmAction) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        val agc = widgets.filterIsInstance<SmWidget.Checkbox>()
+        widgets.forEach { w ->
+            when (w) {
+                is SmWidget.SliderInt -> {
+                    val r820 = w.fmt == "none" && w.max - w.min == R820T_GAINS.size - 1
+                    LabeledSlider(
+                        title = w.title ?: w.label.ifBlank { "Gain" },
+                        value = w.value.toFloat(),
+                        range = w.min.toFloat()..w.max.toFloat().coerceAtLeast(w.min + 1f),
+                        valueText = { v ->
+                            val i = v.roundToInt()
+                            when {
+                                r820 -> "${R820T_GAINS[(i - w.min).coerceIn(0, R820T_GAINS.size - 1)]} dB"
+                                w.fmt == "db" -> "$i dB"
+                                else -> "$i"
+                            }
+                        },
+                        onChange = { onAction(SmGui.int(w.id, it.roundToInt())) },
+                        enabled = !w.disabled,
+                        snap = 1f,
+                        live = true,
+                    )
+                }
+                is SmWidget.SliderFloat -> LabeledSlider(
+                    title = w.title ?: w.label.ifBlank { "Gain" },
+                    value = w.value,
+                    range = w.min..w.max.coerceAtLeast(w.min + 0.001f),
+                    valueText = { v -> String.format(java.util.Locale.ROOT, "%.${w.decimals.coerceIn(0, 2)}f", v) + if (w.fmt == "db") " dB" else "" },
+                    onChange = { onAction(SmGui.float(w.id, it)) },
+                    enabled = !w.disabled,
+                    snap = if (w.step > 0f) w.step else 0f,
+                    live = true,
+                )
+                else -> Unit
+            }
+        }
+        if (agc.isNotEmpty()) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                agc.forEach { c ->
+                    FilterChip(
+                        selected = c.value,
+                        onClick = { onAction(SmGui.bool(c.id, !c.value)) },
+                        label = { Text(c.label) },
+                        enabled = !c.disabled,
+                    )
+                }
+            }
+        }
     }
 }
