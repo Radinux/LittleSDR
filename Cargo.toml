@@ -1,0 +1,31 @@
+[package]
+name = "littlesdr-engine"
+version = "0.1.0"
+edition = "2021"
+description = "LittleSDR SDR engine: sources, DSP chain with live reconfiguration, audio output"
+license = "GPL-3.0-or-later"
+
+[lib]
+name = "littlesdr"
+path = "src/lib.rs"
+
+[[bin]]
+name = "littlesdr"
+path = "src/main.rs"
+
+[features]
+default = ["rtlsdr", "audio"]
+# RTL-SDR over USB through the system librtlsdr
+rtlsdr = []
+# Sound card output (cpal: ALSA / PipeWire on Linux, AAudio on Android later)
+audio = ["dep:cpal"]
+
+[dependencies]
+cpal = { version = "0.15", optional = true }
+
+[profile.dev]
+opt-level = 2 # DSP is unusable unoptimized
+
+[profile.release]
+opt-level = 3
+lto = "thin"
