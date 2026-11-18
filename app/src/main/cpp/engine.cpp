@@ -11,6 +11,7 @@
 #include <gui/main_window.h>
 #include <gui/tuner.h>
 #include <gui/smgui.h>
+#include <gui/style.h>
 #include <signal_path/signal_path.h>
 #include <utils/flog.h>
 #include <utils/cty.h>
@@ -220,6 +221,11 @@ namespace engine {
         io.DisplaySize = ImVec2(1080, 2000);
         unsigned char* px; int w, h;
         io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        // SDR++'s fonts are never loaded here (no GUI); some module menus still read them, e.g.
+        // KiwiSDR's map button uses style::baseFont->FontSize. Point them all at the default font.
+        ImFont* defaultFont = io.Fonts->Fonts.empty() ? nullptr : io.Fonts->Fonts[0];
+        style::notificationFont = style::tinyFont = style::baseFont = defaultFont;
+        style::bigFont = style::mediumFont = style::hugeFont = defaultFont;
 
         // Source menus record into SmGui draw lists instead of drawing
         SmGui::init(true);
@@ -635,7 +641,7 @@ namespace engine {
                 j["demod"] = json::parse(buf.data(), nullptr, false);
             }
         }
-        return j.dump();
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     void setOption(const std::string& key, double v) {

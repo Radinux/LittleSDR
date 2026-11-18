@@ -87,7 +87,7 @@ extern "C" SDRPP_EXPORT int littlesdr_ft8_json(void* instance, char* out, int ca
             { "country", r.qth },
         });
     }
-    std::string s = j.dump();
+    std::string s = j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     int n = (int)std::min<size_t>(s.size(), (size_t)cap - 1);
     memcpy(out, s.data(), n);
     out[n] = 0;

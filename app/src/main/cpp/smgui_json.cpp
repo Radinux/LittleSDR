@@ -177,6 +177,6 @@ namespace smguijson {
         SmGui::startRecord(&dl);
         drawMenu();
         SmGui::stopRecord();
-        return toJson(dl).dump();
+        return toJson(dl).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 }

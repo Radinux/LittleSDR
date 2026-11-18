@@ -27,6 +27,35 @@
 using json = nlohmann::json;
 
 namespace {
+    // RDS text uses the EBU Latin character set (EN 50067, annex E), not UTF-8: 0x80-0xFF are
+    // accented letters (0x98 = û, 0x82 = é...). Passing them raw to the JSON serializer throws.
+    const char* const EBU_HIGH[128] = {
+        "á","à","é","è","í","ì","ó","ò","ú","ù","Ñ","Ç","Ş","ß","¡","Ĳ",
+        "â","ä","ê","ë","î","ï","ô","ö","û","ü","ñ","ç","ş","ğ","ı","ĳ",
+        "ª","α","©","‰","Ğ","ě","ň","ő","π","€","£","$","←","↑","→","↓",
+        "º","¹","²","³","±","İ","ń","ű","µ","¿","÷","°","¼","½","¾","§",
+        "Á","À","É","È","Í","Ì","Ó","Ò","Ú","Ù","Ř","Č","Š","Ž","Đ","Ŀ",
+        "Â","Ä","Ê","Ë","Î","Ï","Ô","Ö","Û","Ü","ř","č","š","ž","đ","ŀ",
+        "Ã","Å","Æ","Œ","ŷ","Ý","Õ","Ø","Þ","Ŋ","Ŕ","Ć","Ś","Ź","Ŧ","ð",
+        "ã","å","æ","œ","ŵ","ý","õ","ø","þ","ŋ","ŕ","ć","ś","ź","ŧ"," ",
+    };
+
+    std::string ebuToUtf8(const std::string& in) {
+        std::string out;
+        out.reserve(in.size());
+        for (unsigned char c : in) {
+            if (c >= 0x80) { out += EBU_HIGH[c - 0x80]; }
+            else if (c >= 0x20 && c != 0x7F) { out += (char)c; }
+            else { out += ' '; } // control codes (e.g. 0x0D end of RadioText)
+        }
+        return out;
+    }
+
+    // Never let a stray byte abort the process: invalid UTF-8 is replaced
+    std::string safeDump(const json& j) { return j.dump(-1, ' ', false, json::error_handler_t::replace); }
+}
+
+namespace {
     // AGC lives in the AM / SSB / CW demodulators, all with the same member names
     template <class D>
     bool agcGet(demod::Demodulator* d, json& out) {
@@ -89,7 +118,7 @@ extern "C" SDRPP_EXPORT int littlesdr_radio_options(void* instance, char* out, i
         j["agc"] = false;
         anyAgcGet(r->selectedDemod, j);
     }
-    std::string s = j.dump();
+    std::string s = safeDump(j);
     int n = (int)std::min<size_t>(s.size(), (size_t)cap - 1);
     memcpy(out, s.data(), n);
     out[n] = 0;
@@ -154,13 +183,13 @@ extern "C" SDRPP_EXPORT int littlesdr_radio_rds(void* instance, char* out, int c
             s.erase(0, std::min(s.find_first_not_of(' '), s.size()));
             return s;
         };
-        if (d.PSNameValid()) { j["ps"] = trim(d.getPSName(false)); }
-        if (d.radioTextValid()) { j["rt"] = trim(d.getRadioText(false)); }
+        if (d.PSNameValid()) { j["ps"] = trim(ebuToUtf8(d.getPSName(false))); }
+        if (d.radioTextValid()) { j["rt"] = trim(ebuToUtf8(d.getRadioText(false))); }
         if (d.piCodeValid()) {
             char pi[8];
             snprintf(pi, sizeof pi, "%04X", d.getPICode());
             j["pi"] = pi;
-            j["callsign"] = d.getCallsign();
+            j["callsign"] = ebuToUtf8(d.getCallsign());
         }
         if (d.programTypeValid()) {
             int pty = (int)d.getProgramType();
@@ -168,7 +197,7 @@ extern "C" SDRPP_EXPORT int littlesdr_radio_rds(void* instance, char* out, int c
             if (pty > 0 && pty < 32) { j["pty"] = us ? rds::PROGRAM_TYPE_US_TO_STR[pty] : rds::PROGRAM_TYPE_EU_TO_STR[pty]; }
         }
     }
-    std::string s = j.dump();
+    std::string s = safeDump(j);
     int n = (int)std::min<size_t>(s.size(), (size_t)cap - 1);
     memcpy(out, s.data(), n);
     out[n] = 0;
