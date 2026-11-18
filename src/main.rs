@@ -6,7 +6,8 @@
 //!
 //! Live commands on stdin: freq <f> (or +1k / -500 to step), rate <r>, mode <m>, bw <Hz>,
 //!   pitch <Hz>, gain <dB>|auto, vol <0-2>, ds 0|1|2, bt on|off (bias-tee), stereo on|off,
-//!   nb on|off [threshold], fx <filter> on|off, fx <filter> <param> <value>, status, quit.
+//!   nb on|off [threshold], fx <filter> on|off, fx <filter> <param> <value>, meter on|off,
+//!   status, quit.
 //!   Filters: hp lp cw notch anotch nr eq agc limit
 
 use littlesdr::audio::{AudioSink, WavSink};
@@ -92,7 +93,7 @@ fn main() {
             "--verbose" | "-v" => verbose = true,
             "--script" => script = args.next().unwrap_or_default(),
             "-h" | "--help" => {
-                println!("{}", include_str!("main.rs").lines().take(10).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("main.rs").lines().take(11).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
                 return;
             }
             other => {
@@ -230,6 +231,9 @@ fn main() {
                 },
                 _ => eprintln!("fx <filter> on|off  |  fx <filter> <param> <value>"),
             },
+            "meter" | "sm" => {
+                let _ = eng_tx.send(EngineCtl::Meter(v.is_empty() || on(v)));
+            }
             "status" | "s" => {
                 let _ = eng_tx.send(EngineCtl::Status);
             }
@@ -291,7 +295,7 @@ fn main() {
             }
             "quit" | "q" | "exit" => break,
             "" => {}
-            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | stereo | nb | fx | status | quit  ({other}?)"),
+            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | meter | stereo | nb | fx | status | quit  ({other}?)"),
         }
     }
     let _ = src.ctl.send(SourceCtl::Stop);

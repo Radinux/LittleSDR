@@ -8,5 +8,6 @@ pub mod audio_fx;
 pub mod dsp;
 pub mod engine;
 pub mod linear;
+pub mod meter;
 pub mod source;
 pub mod stereo;

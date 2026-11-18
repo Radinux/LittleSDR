@@ -16,7 +16,8 @@
 use crate::audio::AudioSink;
 use crate::audio_fx::AudioChain;
 use crate::dsp::{lowpass, Deemphasis, DecimFir, FmDemod, Frame, Interp, Nco, NoiseBlanker, C32};
-use crate::linear::{AmDemod, Sideband, SsbDemod};
+use crate::linear::{AmDemod, Sideband, SsbDemod, SSB_LOW_CUT};
+use crate::meter::{Meter, Reading};
 use crate::source::IqBlock;
 use crate::stereo::StereoDecoder;
 use std::collections::VecDeque;
@@ -123,6 +124,8 @@ pub enum EngineCtl {
     Filter(String, bool),
     /// Audio filter parameter
     Param(String, String, f32),
+    /// Print the signal meter every second on stderr
+    Meter(bool),
     /// Print the state on stderr
     Status,
     Stop,
@@ -227,6 +230,8 @@ pub struct Engine {
     pub fx: AudioChain,
     /// Confirm every command on stderr (command-line use)
     pub echo: bool,
+    meter: Meter,
+    pub meter_echo: bool,
     delay: VecDeque<Frame>,
     mute: usize,    // audio samples still muted
     fade_in: usize, // ramp position after a mute (0 = none)
@@ -252,6 +257,8 @@ impl Engine {
             back: Back::new(mode, true, bandwidth[mode.index()], pitch),
             fx: AudioChain::new(),
             echo: false,
+            meter: Meter::new(),
+            meter_echo: false,
             delay: VecDeque::with_capacity(DELAY * 4),
             mute: 0,
             fade_in: 0,
@@ -287,6 +294,7 @@ impl Engine {
                 format!("bandwidth {:.0} Hz", self.bandwidth[self.mode.index()])
             }
             EngineCtl::CwPitch(_) => format!("CW pitch {:.0} Hz", self.pitch),
+            EngineCtl::Meter(on) => format!("meter {}", if *on { "on" } else { "off" }),
             EngineCtl::Stereo(_) => format!("stereo {}", if self.stereo { "on" } else { "off" }),
             EngineCtl::Blanker(..) => match &self.blanker {
                 Some(b) => format!("noise blanker on (x{:.0})", b.threshold),
@@ -365,6 +373,7 @@ impl Engine {
                     eprintln!("[engine] unknown parameter '{id} {key}'");
                 }
             }
+            EngineCtl::Meter(on) => self.meter_echo = *on,
             EngineCtl::Status => eprintln!("{}", self.status()),
             _ => {}
         }
@@ -394,7 +403,39 @@ impl Engine {
             Some(b) => s += &format!(", noise blanker x{:.0} ({} samples blanked, avg {:.4})", b.threshold, b.blanked, b.avg),
             None => s += ", noise blanker off",
         }
-        s + &format!(", audio latency {:.1} ms\n", self.fx.latency() as f64 / AUDIO_RATE * 1000.0) + &self.fx.describe()
+        s += &format!(", audio latency {:.1} ms\n", self.fx.latency() as f64 / AUDIO_RATE * 1000.0);
+        if let Some(r) = self.reading() {
+            s += &format!("[meter] {}\n", Self::format_reading(&r));
+        }
+        s + &self.fx.describe()
+    }
+
+    /// Channel limits relative to the tuned frequency (Hz)
+    fn channel(&self) -> (f64, f64) {
+        let bw = self.bandwidth[self.mode.index()];
+        match self.mode {
+            Mode::Wfm => (-90e3, 90e3),
+            Mode::Nfm => (-6.25e3, 6.25e3),
+            Mode::Am | Mode::Cw => (-bw / 2.0, bw / 2.0),
+            Mode::Usb => (SSB_LOW_CUT, SSB_LOW_CUT + bw),
+            Mode::Lsb => (-SSB_LOW_CUT - bw, -SSB_LOW_CUT),
+        }
+    }
+
+    /// Latest signal meter reading (refreshed 4 times a second)
+    pub fn reading(&self) -> Option<Reading> {
+        self.meter.reading
+    }
+
+    pub fn format_reading(r: &Reading) -> String {
+        let mut s = format!(
+            "signal {:6.1} dBFS, noise {:6.1} dBFS, SNR {:5.1} dB | ADC {:5.1} dBFS, {:.2} % clipped",
+            r.signal_dbfs, r.noise_dbfs, r.snr_db, r.adc_dbfs, r.clip_pct
+        );
+        if let Some(a) = r.gain_advice() {
+            s += &format!("  << {a}");
+        }
+        s
     }
 
     /// Processes one IQ block, appends 48 kHz stereo frames to `out`.
@@ -416,11 +457,13 @@ impl Engine {
         } else if block.settle_ms > 0.0 {
             self.soft_switch(block.settle_ms);
         }
+        self.offset = self.freq - block.center;
+        let (lo, hi) = self.channel();
+        self.meter.feed(&block.samples, block.rate, self.offset + lo, self.offset + hi);
         if let Some(b) = &mut self.blanker {
             b.process(&mut block.samples);
         }
         let front = self.front.as_mut().unwrap();
-        self.offset = self.freq - block.center;
         self.nco.set(self.offset, block.rate);
         self.nco.mix(&mut block.samples);
 
@@ -462,6 +505,8 @@ impl Engine {
 pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dyn AudioSink>, mut engine: Engine, verbose: bool) {
     let mut out = Vec::new();
     let mut last_report = Instant::now();
+    let mut last_meter = Instant::now();
+    let mut last_advice: Option<Instant> = None;
     let start = Instant::now();
     loop {
         loop {
@@ -489,6 +534,20 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
             Err(RecvTimeoutError::Disconnected) => {
                 sink.finish();
                 return;
+            }
+        }
+        if last_meter.elapsed() >= Duration::from_secs(1) {
+            last_meter = Instant::now();
+            if let Some(r) = engine.reading() {
+                if engine.meter_echo {
+                    eprintln!("[meter] {}", Engine::format_reading(&r));
+                } else if let Some(a) = r.gain_advice() {
+                    // Unasked, but at most every 10 s
+                    if last_advice.map_or(true, |t| t.elapsed() > Duration::from_secs(10)) {
+                        last_advice = Some(Instant::now());
+                        eprintln!("[engine] {a} ({:.1} % clipped, ADC {:.0} dBFS)", r.clip_pct, r.adc_dbfs);
+                    }
+                }
             }
         }
         if verbose && last_report.elapsed() > Duration::from_secs(5) {
