@@ -27,6 +27,8 @@ pub enum SourceCtl {
     Center(u64),
     /// Tuner gain in dB, None = automatic
     Gain(Option<f32>),
+    /// RTL-SDR direct sampling for HF on dongles without upconverter: 0 off, 1 I, 2 Q branch
+    DirectSampling(u8),
     Stop,
 }
 
@@ -36,6 +38,7 @@ pub struct SourceConfig {
     pub rate: u32,
     pub center: u64,
     pub gain: Option<f32>,
+    pub direct_sampling: u8,
 }
 
 pub struct SourceHandle {

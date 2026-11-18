@@ -1,11 +1,13 @@
 //! Command-line LittleSDR: listen with the engine, change settings live.
 //!
-//!   littlesdr [--usb [N] | --rtltcp HOST:PORT] [--freq 96.5M] [--rate 2.4M] [--mode wfm|nfm]
-//!             [--gain DB|auto] [--wav out.wav] [--no-audio] [--script "3s rate 1.024M; 6s quit"]
+//!   littlesdr [--usb [N] | --rtltcp HOST:PORT] [--freq 96.5M] [--rate 2.4M]
+//!             [--mode wfm|nfm|am|usb|lsb|cw] [--gain DB|auto] [--ds 0|1|2] [--wav out.wav]
+//!             [--no-audio] [--script "3s rate 1.024M; 6s quit"]
 //!
-//! Live commands on stdin: freq <f>, rate <r>, mode wfm|nfm, gain <dB>|auto, vol <0-2>,
-//!   stereo on|off, nb on|off [threshold], fx <filter> on|off, fx <filter> <param> <value>,
-//!   status, quit. Filters: hp lp cw notch anotch nr eq agc limit
+//! Live commands on stdin: freq <f> (or +1k / -500 to step), rate <r>, mode <m>, bw <Hz>,
+//!   pitch <Hz>, gain <dB>|auto, vol <0-2>, ds 0|1|2, stereo on|off, nb on|off [threshold],
+//!   fx <filter> on|off, fx <filter> <param> <value>, status, quit.
+//!   Filters: hp lp cw notch anotch nr eq agc limit
 
 use littlesdr::audio::{AudioSink, WavSink};
 use littlesdr::engine::{self, Engine, EngineCtl, Mode};
@@ -26,11 +28,20 @@ fn parse_hz(s: &str) -> Option<f64> {
     num.parse::<f64>().ok().map(|v| v * mul)
 }
 
-/// Hardware center kept 250 kHz below the tuned frequency: the RTL-SDR's DC spike stays out
-/// of the channel. Returns (center, VFO offset).
-fn plan(freq: f64, rate: f64) -> (u64, f64) {
+/// Hardware center for a new tuning: 250 kHz below the tuned frequency, so the RTL-SDR's DC
+/// spike stays out of the channel.
+fn plan(freq: f64, rate: f64) -> u64 {
     let offset = if rate >= 1e6 { 250e3 } else { 0.0 };
-    ((freq - offset).round() as u64, offset)
+    (freq - offset).round() as u64
+}
+
+/// Whether the hardware must move to receive `freq`: the channel must fit in the clean part
+/// of the captured band and stay clear of the DC spike. Otherwise only the VFO moves.
+fn needs_retune(freq: f64, center: u64, rate: f64, mode: Mode) -> bool {
+    let d = (freq - center as f64).abs();
+    let edge = rate * 0.45 - mode.half_band();
+    let guard = if rate >= 1e6 { mode.half_band() + 5e3 } else { 0.0 };
+    d > edge || d < guard
 }
 
 enum Cmd {
@@ -45,6 +56,7 @@ fn main() {
     let mut rate = 2.4e6;
     let mut mode = Mode::Wfm;
     let mut gain: Option<f32> = None;
+    let mut ds: u8 = 0;
     let mut wav: Option<String> = None;
     let mut audio = cfg!(feature = "audio");
     let mut script = String::new();
@@ -57,13 +69,14 @@ fn main() {
             }
             "--freq" => freq = args.next().and_then(|v| parse_hz(&v)).expect("--freq"),
             "--rate" => rate = args.next().and_then(|v| parse_hz(&v)).expect("--rate"),
-            "--mode" => mode = args.next().and_then(|v| Mode::parse(&v)).expect("--mode wfm|nfm"),
+            "--mode" => mode = args.next().and_then(|v| Mode::parse(&v)).expect("--mode wfm|nfm|am|usb|lsb|cw"),
             "--gain" => gain = args.next().and_then(|v| v.parse().ok()),
+            "--ds" => ds = args.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--wav" => wav = args.next(),
             "--no-audio" => audio = false,
             "--script" => script = args.next().unwrap_or_default(),
             "-h" | "--help" => {
-                println!("{}", include_str!("main.rs").lines().take(9).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("main.rs").lines().take(10).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
                 return;
             }
             other => {
@@ -91,9 +104,9 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let (center, offset) = plan(freq, rate);
+    let center = plan(freq, rate);
     let (iq_tx, iq_rx) = mpsc::sync_channel(64);
-    let src = source::spawn(src, SourceConfig { rate: rate as u32, center, gain }, iq_tx);
+    let src = source::spawn(src, SourceConfig { rate: rate as u32, center, gain, direct_sampling: ds }, iq_tx);
 
     // Output
     let sink: Box<dyn AudioSink> = match (&wav, audio) {
@@ -112,7 +125,7 @@ fn main() {
     let (eng_tx, eng_rx) = mpsc::channel();
     let eng = std::thread::Builder::new()
         .name("engine".into())
-        .spawn(move || engine::run(iq_rx, eng_rx, sink, Engine::new(mode, offset), true))
+        .spawn(move || engine::run(iq_rx, eng_rx, sink, Engine::new(mode, freq), true))
         .unwrap();
     eprintln!("[littlesdr] {:.3} MHz {:?}, {:.0} S/s", freq / 1e6, mode, rate);
 
@@ -148,6 +161,18 @@ fn main() {
 
     let mut cur_freq = freq;
     let mut cur_rate = rate;
+    let mut cur_center = center;
+    let mut cur_mode = mode;
+    // Moves the hardware only if the channel no longer fits where it is
+    let follow = |f: f64, r: f64, m: Mode, c: &mut u64| -> bool {
+        if needs_retune(f, *c, r, m) {
+            *c = plan(f, r);
+            let _ = src.ctl.send(SourceCtl::Center(*c));
+            true
+        } else {
+            false
+        }
+    };
     let on = |v: &str| matches!(v, "on" | "1" | "yes");
     for Cmd::Line(line) in cmd_rx {
         let words: Vec<&str> = line.split_whitespace().collect();
@@ -175,28 +200,41 @@ fn main() {
                 let _ = eng_tx.send(EngineCtl::Status);
             }
             "freq" | "f" => {
-                if let Some(f) = parse_hz(v) {
-                    cur_freq = f;
-                    let (center, offset) = plan(cur_freq, cur_rate);
-                    let _ = src.ctl.send(SourceCtl::Center(center));
-                    let _ = eng_tx.send(EngineCtl::Offset(offset));
-                    eprintln!("[littlesdr] {:.3} MHz", f / 1e6);
+                let step = v.starts_with('+') || v.starts_with('-');
+                if let Some(f) = parse_hz(v.trim_start_matches('+')) {
+                    cur_freq = if step { cur_freq + f } else { f };
+                    let _ = eng_tx.send(EngineCtl::Tune(cur_freq));
+                    let moved = follow(cur_freq, cur_rate, cur_mode, &mut cur_center);
+                    eprintln!("[littlesdr] {:.4} MHz{}", cur_freq / 1e6, if moved { " (hardware retuned)" } else { "" });
                 }
             }
             "rate" | "r" => {
                 if let Some(r) = parse_hz(v) {
                     cur_rate = r;
-                    let (center, offset) = plan(cur_freq, cur_rate);
-                    let _ = eng_tx.send(EngineCtl::Offset(offset));
-                    let _ = src.ctl.send(SourceCtl::Center(center));
+                    follow(cur_freq, cur_rate, cur_mode, &mut cur_center);
                     let _ = src.ctl.send(SourceCtl::Rate(r as u32));
                     eprintln!("[littlesdr] rate -> {:.0} S/s", r);
                 }
             }
             "mode" | "m" => {
                 if let Some(m) = Mode::parse(v) {
+                    cur_mode = m;
                     let _ = eng_tx.send(EngineCtl::Mode(m));
+                    follow(cur_freq, cur_rate, cur_mode, &mut cur_center);
                 }
+            }
+            "bw" => {
+                if let Some(b) = parse_hz(v) {
+                    let _ = eng_tx.send(EngineCtl::Bandwidth(b));
+                }
+            }
+            "pitch" => {
+                if let Some(p) = parse_hz(v) {
+                    let _ = eng_tx.send(EngineCtl::CwPitch(p));
+                }
+            }
+            "ds" => {
+                let _ = src.ctl.send(SourceCtl::DirectSampling(v.parse().unwrap_or(0)));
             }
             "gain" | "g" => {
                 let _ = src.ctl.send(SourceCtl::Gain(v.parse().ok()));
@@ -208,7 +246,7 @@ fn main() {
             }
             "quit" | "q" | "exit" => break,
             "" => {}
-            other => eprintln!("commands: freq | rate | mode | gain | vol | stereo | nb | fx | status | quit  ({other}?)"),
+            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | stereo | nb | fx | status | quit  ({other}?)"),
         }
     }
     let _ = src.ctl.send(SourceCtl::Stop);

@@ -1,8 +1,12 @@
 //! Demodulation chain with live reconfiguration.
 //!
 //! IQ (any rate) -> [noise blanker] -> NCO (VFO offset) -> decimating FIR -> fractional
-//! resampler -> fixed IF rate -> FM discriminator -> stereo decoder (WFM) or audio low-pass
-//! (NFM) -> de-emphasis -> switchable audio filters -> 48 kHz stereo frames.
+//! resampler -> fixed IF rate -> demodulator -> switchable audio filters -> 48 kHz frames.
+//! Demodulators: WFM (stereo decoder, de-emphasis), NFM, AM, USB / LSB / CW (`linear`).
+//!
+//! The engine is tuned by absolute frequency: the VFO offset is worked out per block from the
+//! hardware center the block was captured at, so retuning inside the captured band only moves
+//! the NCO, and a hardware retune is followed exactly when its samples arrive.
 //!
 //! The IF rate is fixed per mode, so a new hardware sample rate only rebuilds the front end
 //! (NCO step, FIR, resampler ratio). The demodulator, stereo decoder, filters and the sound
@@ -12,6 +16,7 @@
 use crate::audio::AudioSink;
 use crate::audio_fx::AudioChain;
 use crate::dsp::{lowpass, Deemphasis, DecimFir, FmDemod, Frame, Interp, Nco, NoiseBlanker, C32};
+use crate::linear::{AmDemod, Sideband, SsbDemod};
 use crate::source::IqBlock;
 use crate::stereo::StereoDecoder;
 use std::collections::VecDeque;
@@ -27,43 +32,88 @@ const FADE: usize = 240; // 5 ms
 pub enum Mode {
     Wfm,
     Nfm,
+    Am,
+    Usb,
+    Lsb,
+    Cw,
 }
 
 impl Mode {
+    pub const ALL: [Mode; 6] = [Mode::Wfm, Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Cw];
+
     pub fn parse(s: &str) -> Option<Mode> {
         match s.to_ascii_lowercase().as_str() {
             "wfm" | "fm" => Some(Mode::Wfm),
             "nfm" => Some(Mode::Nfm),
+            "am" => Some(Mode::Am),
+            "usb" => Some(Mode::Usb),
+            "lsb" => Some(Mode::Lsb),
+            "cw" => Some(Mode::Cw),
             _ => None,
         }
+    }
+    fn index(self) -> usize {
+        Mode::ALL.iter().position(|m| *m == self).unwrap()
     }
     /// Intermediate rate, a multiple of 48 kHz
     fn if_rate(self) -> f64 {
         match self {
             Mode::Wfm => 240_000.0,
-            Mode::Nfm => 48_000.0,
+            _ => 48_000.0,
         }
     }
-    /// Half the channel width kept by the front end
-    fn half_band(self) -> f64 {
+    /// Half the channel width kept by the front end (the demodulator narrows it further)
+    pub fn half_band(self) -> f64 {
         match self {
             Mode::Wfm => 100_000.0,
             Mode::Nfm => 8_000.0,
+            Mode::Am => 10_000.0,
+            Mode::Usb | Mode::Lsb | Mode::Cw => 5_000.0,
         }
     }
     fn deviation(self) -> f64 {
         match self {
             Mode::Wfm => 75_000.0,
-            Mode::Nfm => 5_000.0,
+            _ => 5_000.0,
+        }
+    }
+    /// Default channel bandwidth (Hz), None when it is fixed (FM)
+    pub fn default_bandwidth(self) -> Option<f64> {
+        match self {
+            Mode::Wfm | Mode::Nfm => None,
+            Mode::Am => Some(9_000.0),
+            Mode::Usb | Mode::Lsb => Some(2_700.0),
+            Mode::Cw => Some(500.0),
+        }
+    }
+    /// Accepted bandwidth range
+    pub fn bandwidth_range(self) -> (f64, f64) {
+        match self {
+            Mode::Am => (2_000.0, 16_000.0),
+            Mode::Usb | Mode::Lsb => (500.0, 4_000.0),
+            Mode::Cw => (50.0, 1_500.0),
+            _ => (0.0, 0.0),
+        }
+    }
+    fn sideband(self) -> Option<Sideband> {
+        match self {
+            Mode::Usb => Some(Sideband::Upper),
+            Mode::Lsb => Some(Sideband::Lower),
+            Mode::Cw => Some(Sideband::Cw),
+            _ => None,
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub enum EngineCtl {
-    /// VFO offset from the hardware center (Hz)
-    Offset(f64),
+    /// Tuned frequency (Hz, absolute)
+    Tune(f64),
     Mode(Mode),
+    /// Channel bandwidth of the current mode (Hz; AM, SSB, CW)
+    Bandwidth(f64),
+    /// CW tone pitch (Hz)
+    CwPitch(f64),
     Volume(f32),
     /// Broadcast FM stereo (falls back to mono without pilot anyway)
     Stereo(bool),
@@ -102,10 +152,12 @@ impl Front {
 enum Back {
     Wfm { fm: FmDemod, stereo: StereoDecoder, deemph: [Deemphasis; 2] },
     Nfm { fm: FmDemod, audio: DecimFir<f32> },
+    Am(AmDemod),
+    Ssb(SsbDemod),
 }
 
 impl Back {
-    fn new(mode: Mode, stereo: bool) -> Back {
+    fn new(mode: Mode, stereo: bool, bw: f64, pitch: f64) -> Back {
         let ifr = mode.if_rate();
         match mode {
             Mode::Wfm => {
@@ -121,6 +173,8 @@ impl Back {
                 fm: FmDemod::new(ifr, mode.deviation()),
                 audio: DecimFir::new(lowpass(3_900.0 / ifr, 900.0 / ifr), 1),
             },
+            Mode::Am => Back::Am(AmDemod::new(bw)),
+            Mode::Usb | Mode::Lsb | Mode::Cw => Back::Ssb(SsbDemod::new(mode.sideband().unwrap(), bw, pitch)),
         }
     }
 
@@ -145,6 +199,8 @@ impl Back {
                 audio.process(&demod, &mut a);
                 out.extend(a.into_iter().map(Frame::mono));
             }
+            Back::Am(d) => d.process(iq, out),
+            Back::Ssb(d) => d.process(iq, out),
         }
     }
 }
@@ -157,7 +213,10 @@ pub struct Stats {
 
 pub struct Engine {
     mode: Mode,
+    freq: f64,
     offset: f64,
+    bandwidth: [f64; 6], // per mode, remembered across mode changes
+    pitch: f64,
     volume: f32,
     stereo: bool,
     nco: Nco,
@@ -173,17 +232,22 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(mode: Mode, offset: f64) -> Engine {
+    pub fn new(mode: Mode, freq: f64) -> Engine {
+        let bandwidth = Mode::ALL.map(|m| m.default_bandwidth().unwrap_or(0.0));
+        let pitch = 700.0;
         Engine {
             mode,
-            offset,
+            freq,
+            offset: 0.0,
+            bandwidth,
+            pitch,
             volume: 0.8,
             stereo: true,
             nco: Nco::new(),
             blanker: None,
             blank_threshold: 6.0,
             front: None,
-            back: Back::new(mode, true),
+            back: Back::new(mode, true, bandwidth[mode.index()], pitch),
             fx: AudioChain::new(),
             delay: VecDeque::with_capacity(DELAY * 4),
             mute: 0,
@@ -206,15 +270,45 @@ impl Engine {
 
     pub fn control(&mut self, c: &EngineCtl) {
         match c {
-            EngineCtl::Offset(o) => self.offset = *o,
+            EngineCtl::Tune(f) => self.freq = *f,
             EngineCtl::Volume(v) => self.volume = v.clamp(0.0, 2.0),
             EngineCtl::Mode(m) if *m != self.mode => {
+                let same_front = m.if_rate() == self.mode.if_rate() && m.half_band() == self.mode.half_band();
                 self.mode = *m;
-                self.back = Back::new(*m, self.stereo);
-                if let Some(f) = &self.front {
+                match (&mut self.back, m.sideband()) {
+                    // USB <-> LSB <-> CW: same demodulator, only its band moves; no gap
+                    (Back::Ssb(d), Some(sb)) => {
+                        d.set_sideband(sb);
+                        d.set_bandwidth(self.bandwidth[m.index()]);
+                    }
+                    _ => {
+                        self.back = Back::new(*m, self.stereo, self.bandwidth[m.index()], self.pitch);
+                        self.soft_switch(5.0);
+                    }
+                }
+                if let (Some(f), false) = (&self.front, same_front) {
                     self.front = Some(Front::new(f.rate, *m));
                 }
-                self.soft_switch(5.0);
+            }
+            EngineCtl::Bandwidth(bw) => {
+                let (lo, hi) = self.mode.bandwidth_range();
+                if hi == 0.0 {
+                    eprintln!("[engine] the bandwidth is fixed in {:?}", self.mode);
+                    return;
+                }
+                let bw = bw.clamp(lo, hi);
+                self.bandwidth[self.mode.index()] = bw;
+                match &mut self.back {
+                    Back::Am(d) => d.set_bandwidth(bw),
+                    Back::Ssb(d) => d.set_bandwidth(bw),
+                    _ => {}
+                }
+            }
+            EngineCtl::CwPitch(hz) => {
+                self.pitch = hz.clamp(200.0, 1500.0);
+                if let Back::Ssb(d) = &mut self.back {
+                    d.set_pitch(self.pitch);
+                }
             }
             EngineCtl::Stereo(on) => {
                 self.stereo = *on;
@@ -244,7 +338,17 @@ impl Engine {
     }
 
     pub fn status(&self) -> String {
-        let mut s = format!("[engine] {:?}", self.mode);
+        let mut s = format!("[engine] {:.4} MHz {:?}", self.freq / 1e6, self.mode);
+        match &self.back {
+            Back::Am(d) => s += &format!(", bandwidth {:.0} Hz", d.bandwidth()),
+            Back::Ssb(d) => {
+                s += &format!(", bandwidth {:.0} Hz, AGC {:+.0} dB", d.bandwidth(), d.agc_gain_db());
+                if self.mode == Mode::Cw {
+                    s += &format!(", pitch {:.0} Hz", self.pitch);
+                }
+            }
+            _ => {}
+        }
         if let Back::Wfm { stereo, .. } = &self.back {
             s += &format!(
                 ", stereo {} (pilot {:.3}, {})",
@@ -283,6 +387,7 @@ impl Engine {
             b.process(&mut block.samples);
         }
         let front = self.front.as_mut().unwrap();
+        self.offset = self.freq - block.center;
         self.nco.set(self.offset, block.rate);
         self.nco.mix(&mut block.samples);
 

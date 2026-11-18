@@ -123,17 +123,23 @@ pub fn lowpass(cutoff: f64, transition: f64) -> Vec<f32> {
 }
 
 /// FIR filter + integer decimation, computing only the kept outputs.
+#[derive(Clone)]
 pub struct DecimFir<T: Sample> {
     taps: Vec<f32>,
     factor: usize,
     buf: Vec<T>,
     next: usize, // index in buf of the last input sample of the next output
+    hist: usize, // input samples kept between calls (>= taps - 1)
 }
+
+/// History kept by every DecimFir: enough for the longest `lowpass` filter, so `set_taps`
+/// can lengthen a filter with real past samples instead of zeros.
+const FIR_HIST: usize = 1022;
 
 impl<T: Sample> DecimFir<T> {
     pub fn new(taps: Vec<f32>, factor: usize) -> Self {
-        let n = taps.len();
-        Self { taps, factor: factor.max(1), buf: vec![T::default(); n - 1], next: n - 1 }
+        let hist = (taps.len() - 1).max(FIR_HIST);
+        Self { taps, factor: factor.max(1), buf: vec![T::default(); hist], next: hist, hist }
     }
 
     pub fn factor(&self) -> usize {
@@ -153,9 +159,93 @@ impl<T: Sample> DecimFir<T> {
             out.push(acc);
             i += self.factor;
         }
-        let drop = self.buf.len() - (n - 1);
+        let drop = self.buf.len() - self.hist;
         self.buf.drain(..drop);
         self.next = i - drop;
+    }
+
+    /// New taps, keeping the input history: a live bandwidth change does not restart the
+    /// filter, so there is no gap and no click.
+    pub fn set_taps(&mut self, taps: Vec<f32>) {
+        if taps.len() - 1 > self.hist {
+            let more = taps.len() - 1 - self.hist;
+            self.buf.splice(0..0, std::iter::repeat(T::default()).take(more));
+            self.next += more;
+            self.hist += more;
+        }
+        self.taps = taps;
+    }
+}
+
+/// A DecimFir whose taps can be replaced while running. Filters of different lengths have
+/// different delays, so swapping taps outright would jump the signal in time (a click): the
+/// old and new filters run side by side for `fade` outputs and are crossfaded.
+pub struct SwapFir<T: Sample> {
+    cur: DecimFir<T>,
+    old: Option<DecimFir<T>>,
+    fade: usize,
+    pos: usize,
+    scratch: Vec<T>,
+}
+
+impl<T: Sample> SwapFir<T> {
+    pub fn new(taps: Vec<f32>, factor: usize, fade: usize) -> Self {
+        Self { cur: DecimFir::new(taps, factor), old: None, fade: fade.max(1), pos: 0, scratch: Vec::new() }
+    }
+
+    pub fn set_taps(&mut self, taps: Vec<f32>) {
+        // A swap during a fade restarts it from the filter being faded in
+        self.old = Some(self.cur.clone());
+        self.cur.set_taps(taps);
+        self.pos = 0;
+    }
+
+    pub fn process(&mut self, input: &[T], out: &mut Vec<T>) {
+        let start = out.len();
+        self.cur.process(input, out);
+        let Some(old) = &mut self.old else { return };
+        self.scratch.clear();
+        old.process(input, &mut self.scratch);
+        for (n, o) in out[start..].iter_mut().zip(&self.scratch) {
+            let g = (self.pos as f32 / self.fade as f32).min(1.0);
+            *n = *o * (1.0 - g) + *n * g;
+            self.pos += 1;
+        }
+        if self.pos >= self.fade {
+            self.old = None;
+        }
+    }
+}
+
+/// Integer upsampler: polyphase FIR interpolation (zero-stuffing + low-pass, computed per
+/// phase). `taps` are designed at the output rate; the gain of `factor` is applied here.
+pub struct Upsample<T: Sample> {
+    phases: Vec<Vec<f32>>,
+    buf: Vec<T>,
+}
+
+impl<T: Sample> Upsample<T> {
+    pub fn new(taps: &[f32], factor: usize) -> Self {
+        let k = taps.len().div_ceil(factor);
+        let phases: Vec<Vec<f32>> =
+            (0..factor).map(|p| (0..k).map(|j| taps.get(j * factor + p).copied().unwrap_or(0.0) * factor as f32).collect()).collect();
+        Self { phases, buf: vec![T::default(); k - 1] }
+    }
+
+    pub fn process(&mut self, input: &[T], out: &mut Vec<T>) {
+        let k = self.phases[0].len();
+        self.buf.extend_from_slice(input);
+        for i in k - 1..self.buf.len() {
+            for ph in &self.phases {
+                let mut acc = T::default();
+                for (j, &t) in ph.iter().enumerate() {
+                    acc = acc + self.buf[i - j] * t;
+                }
+                out.push(acc);
+            }
+        }
+        let drop = self.buf.len() - (k - 1);
+        self.buf.drain(..drop);
     }
 }
 
@@ -414,6 +504,47 @@ mod tests {
         assert!(x.iter().all(|z| z.norm_sqr() < 1.1), "a spike went through");
         // A few dozen samples blanked per spike, the rest untouched
         assert!(nb.blanked < 5 * 40, "{}", nb.blanked);
+    }
+
+    #[test]
+    fn set_taps_keeps_the_stream_continuous() {
+        // A DC level through a filter whose length changes mid-stream stays at DC
+        let mut f = DecimFir::<f32>::new(lowpass(0.1, 0.05), 1);
+        let mut out = Vec::new();
+        f.process(&vec![1.0; 2000], &mut out);
+        f.set_taps(lowpass(0.05, 0.01));
+        f.process(&vec![1.0; 2000], &mut out);
+        f.set_taps(lowpass(0.2, 0.1));
+        f.process(&vec![1.0; 2000], &mut out);
+        assert_eq!(out.len(), 6000);
+        assert!(out[500..].iter().all(|v| (v - 1.0).abs() < 1e-3), "glitch");
+    }
+
+    #[test]
+    fn upsample_keeps_a_tone_and_rejects_images() {
+        let (rate, l) = (12e3, 4);
+        let x = tone(rate, 1000.0, 6000);
+        let mut up = Upsample::new(&lowpass(4500.0 / 48e3, 3000.0 / 48e3), l);
+        let mut y = Vec::new();
+        up.process(&x[..1234], &mut y);
+        up.process(&x[1234..], &mut y);
+        assert_eq!(y.len(), 6000 * l);
+        // Expect a clean 1 kHz complex tone at 48 kHz: correlate and measure the residue
+        let skip = 1000;
+        let mut ref_phase = C32::default();
+        for (i, z) in y[skip..].iter().enumerate() {
+            let p = 2.0 * PI * 1000.0 * (i + skip) as f64 / 48e3;
+            ref_phase += *z * C32::new(p.cos() as f32, -p.sin() as f32);
+        }
+        let n = (y.len() - skip) as f32;
+        let a = ref_phase * (1.0 / n);
+        assert!((a.norm_sqr().sqrt() - 1.0).abs() < 0.01, "gain {}", a.norm_sqr().sqrt());
+        let mut err = 0.0;
+        for (i, z) in y[skip..].iter().enumerate() {
+            let p = 2.0 * PI * 1000.0 * (i + skip) as f64 / 48e3;
+            err += (*z - C32::new(p.cos() as f32, p.sin() as f32) * a).norm_sqr();
+        }
+        assert!(10.0 * (err / n).log10() < -60.0, "residue {} dB", 10.0 * (err / n).log10());
     }
 
     #[test]

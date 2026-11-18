@@ -5,7 +5,7 @@ use littlesdr::source::{u8_to_iq, IqBlock};
 fn main() {
     let path = std::env::args().nth(1).expect("capture.u8");
     let raw = std::fs::read(path).expect("read");
-    let mut e = Engine::new(Mode::Wfm, 250e3);
+    let mut e = Engine::new(Mode::Wfm, 96.5e6);
     let mut out = Vec::new();
     for (i, chunk) in raw.chunks(16384).enumerate() {
         if i == 20 {

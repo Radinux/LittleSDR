@@ -26,6 +26,7 @@ extern "C" {
     fn rtlsdr_set_tuner_gain_mode(dev: *mut c_void, manual: c_int) -> c_int;
     fn rtlsdr_set_tuner_gain(dev: *mut c_void, gain: c_int) -> c_int;
     fn rtlsdr_get_tuner_gains(dev: *mut c_void, gains: *mut c_int) -> c_int;
+    fn rtlsdr_set_direct_sampling(dev: *mut c_void, on: c_int) -> c_int;
     fn rtlsdr_reset_buffer(dev: *mut c_void) -> c_int;
     fn rtlsdr_read_async(dev: *mut c_void, cb: AsyncCb, ctx: *mut c_void, buf_num: u32, buf_len: u32) -> c_int;
     fn rtlsdr_cancel_async(dev: *mut c_void) -> c_int;
@@ -115,6 +116,9 @@ impl Source for RtlSdr {
         let dev = Dev(raw);
         unsafe {
             rtlsdr_set_sample_rate(dev.0, cfg.rate);
+            if cfg.direct_sampling > 0 {
+                rtlsdr_set_direct_sampling(dev.0, cfg.direct_sampling as c_int);
+            }
             rtlsdr_set_center_freq(dev.0, cfg.center as u32);
         }
         dev.set_gain(cfg.gain);
@@ -159,6 +163,11 @@ impl Source for RtlSdr {
                     shared.center.store(f, Ordering::Relaxed);
                 }
                 Ok(SourceCtl::Gain(g)) => dev.set_gain(g),
+                Ok(SourceCtl::DirectSampling(m)) => unsafe {
+                    rtlsdr_set_direct_sampling(dev.0, m as c_int);
+                    // The tuner is re-enabled / bypassed: the frequency must be set again
+                    rtlsdr_set_center_freq(dev.0, shared.center.load(Ordering::Relaxed) as u32);
+                },
                 Ok(SourceCtl::Stop) | Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => {}
             }
