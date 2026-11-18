@@ -136,6 +136,13 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     val error: StateFlow<String?> = _error.asStateFlow()
 
     init {
+        // The SSTV decoder outlives the ViewModel (engine kept by the service): pick it up again
+        viewModelScope.launch {
+            Engine.ready.first { it }
+            val s = Engine.sstv()
+            _sstv.value = s
+            if (s.enabled && sstvPoller == null) sstvPoller = viewModelScope.launch { pollSstv() }
+        }
         // New sample rate (source change / samplerate change): show the full span again
         viewModelScope.launch {
             Engine.state.map { it.sampleRate }.distinctUntilChanged().collect { sr ->
@@ -523,6 +530,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         if (!Engine.ready.value) return@launch
         _sstv.value = Engine.sstvSet("enabled", if (on) 1.0 else 0.0)
         sstvPoller?.cancel()
+        sstvPoller = null
         if (on) sstvPoller = viewModelScope.launch { pollSstv() }
     }
 
@@ -561,9 +569,13 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         val bmp = if (rows < full.height) Bitmap.createBitmap(full, 0, 0, full.width, rows) else full
         val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.ROOT).format(Date())
         val mhz = String.format(Locale.ROOT, "%.3fMHz", state.value.vfoFrequency / 1e6)
-        val file = File(sstvDir, "${stamp}_${s.finishedMode.replace(' ', '-')}_$mhz.png")
-        withContext(Dispatchers.IO) { file.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) } }
-        Storage.scan(getApplication(), file)
+        val saved = runCatching {
+            val file = File(sstvDir, "${stamp}_${s.finishedMode.replace(' ', '-')}_$mhz.png")
+            withContext(Dispatchers.IO) { file.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) } }
+            file
+        }
+        saved.onSuccess { Storage.scan(getApplication(), it) }
+            .onFailure { _error.value = "Image SSTV non enregistrée : ${it.message}" }
         refreshSstvGallery()
     }
 
@@ -595,9 +607,20 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         if (_kiwiServers.value.isEmpty()) _error.value = "Liste des KiwiSDR indisponible (connexion internet ?)"
     }
 
-    fun setKiwiSite(hostPort: String, name: String) = viewModelScope.launch {
-        Engine.kiwiSetSite(KiwiDirectory.resolve(hostPort.trim()), name)
-        _sourceMenu.value = Engine.sourceMenu()
+    private var kiwiJob: Job? = null
+
+    /** Only the latest pick counts: an earlier, slower one is cancelled before it reaches the engine. */
+    fun setKiwiSite(hostPort: String, name: String) {
+        kiwiJob?.cancel()
+        kiwiJob = viewModelScope.launch {
+            val resolved = KiwiDirectory.resolve(hostPort.trim()) // cancelled here if a newer pick came
+            if (resolved == null) {
+                _error.value = "« $name » ne répond pas (récepteur éteint ou proxy kiwisdr.com indisponible)"
+                return@launch
+            }
+            Engine.kiwiSetSite(resolved, name)
+            _sourceMenu.value = Engine.sourceMenu()
+        }
     }
 
     /** Refresh the settings menu while the sheet is open (status texts, device lists). */

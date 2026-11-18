@@ -34,7 +34,7 @@ LittleSDR est une **refonte de l'interface**, pas un fork : le traitement du sig
 - **Joystick d'accord** : plus on l'écarte, plus le VFO défile vite
 - Zoom (boutons, double tap, pincement), le VFO reste toujours visible
 - **Encoche** en haut du spectre : RDS en FM, horaires ondes courtes **EiBi** ailleurs
-- **Plan de bandes** coloré sous le waterfall (radioamateur, radiodiffusion, CB, aviation, marine) selon la région UIT
+- **Plan de bandes** coloré sous le waterfall (HAM, Broadcast, FM, DAB, TV, CB, PMR, aviation, marine, satellites) selon la région UIT
 
 **Décodage**
 - **FT8 / FT4** : liste groupée par cycle et **carte** des stations avec les liaisons émetteur → destinataire

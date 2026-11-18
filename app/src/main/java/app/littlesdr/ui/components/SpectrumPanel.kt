@@ -261,7 +261,8 @@ fun SpectrumPanel(
                     val c = seg.kind.color
                     drawRect(c.copy(alpha = 0.55f), Offset(x0, y0), Size(x1 - x0, stripH))
                     drawLine(c, Offset(x0, y0), Offset(x1, y0), 2.dp.toPx())
-                    val layout = measurer.measure(seg.label, bandLabelStyle)
+                    // Type of allocation (HAM, Broadcast, Avion…), not the band's wavelength
+                    val layout = measurer.measure(seg.tag, bandLabelStyle)
                     if (layout.size.width + 8.dp.toPx() < x1 - x0) {
                         // Label centered on the visible part of the band
                         val tx = ((x0 + x1) / 2f - layout.size.width / 2f)
@@ -420,7 +421,12 @@ val BandKind.color: Color
     get() = when (this) {
         BandKind.HAM -> Color(0xFF3DBE7A)
         BandKind.BROADCAST -> Color(0xFF4F8EF7)
+        BandKind.FM -> Color(0xFF6E6BF2)
+        BandKind.DAB -> Color(0xFFE8628F)
+        BandKind.TV -> Color(0xFF8C93A3)
         BandKind.CB -> Color(0xFFF29A38)
+        BandKind.PMR -> Color(0xFFE8C547)
         BandKind.AIR -> Color(0xFFB27CF2)
         BandKind.MARINE -> Color(0xFF26B9C9)
+        BandKind.SAT -> Color(0xFFEF5B4C)
     }

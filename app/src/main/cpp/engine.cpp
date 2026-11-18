@@ -66,7 +66,7 @@ namespace engine {
             { "Radio", "radio" },
             { "FT8/FT4 Decoder", "ft8_decoder" }, // created disabled, enabled from the FT8 screen
             { "TinyCW Decoder", "tinycw_decoder" }, // created disabled, enabled from the Morse tab
-            { "Recorder", "recorder" },
+            { "Recorder", "recorder" }, // REC_INSTANCE
         };
         constexpr const char* FT8_INSTANCE = "FT8/FT4 Decoder";
         constexpr const char* CW_INSTANCE = "TinyCW Decoder";
@@ -878,7 +878,14 @@ namespace engine {
     }
 
     // ================================================================== text options
-    namespace { void* moduleSymbol(const char* module, const char* sym); }
+    namespace {
+        void* moduleSymbol(const char* module, const char* sym);
+        constexpr const char* REC_INSTANCE = "Recorder";
+        void* recInstance() {
+            auto it = core::moduleManager.instances.find(REC_INSTANCE);
+            return it == core::moduleManager.instances.end() ? nullptr : (void*)it->second.instance;
+        }
+    }
 
     void setOptionString(const std::string& key, const std::string& value) {
         std::lock_guard<std::recursive_mutex> lck(g_mtx);
@@ -890,10 +897,8 @@ namespace engine {
         }
         else if (key == "recorder.path") {
             using Fn = void (*)(void*, const char*);
-            auto it = core::moduleManager.instances.find("Recorder");
-            if (auto fn = (Fn)moduleSymbol("recorder", "littlesdr_rec_set_path")) {
-                if (it != core::moduleManager.instances.end()) { fn(it->second.instance, value.c_str()); }
-            }
+            auto fn = (Fn)moduleSymbol("recorder", "littlesdr_rec_set_path");
+            if (void* inst = recInstance(); fn && inst) { fn(inst, value.c_str()); }
         }
         else if (key == "operator.callsign") {
             sigpath::iqFrontEnd.operatorCallsign = value;
@@ -995,10 +1000,10 @@ namespace engine {
         std::lock_guard<std::recursive_mutex> lck(g_mtx);
         using Fn = int (*)(void*, char*, int);
         auto fn = (Fn)moduleSymbol("recorder", "littlesdr_rec_json");
-        auto it = core::moduleManager.instances.find("Recorder");
-        if (!fn || it == core::moduleManager.instances.end()) { return "{}"; }
+        void* inst = recInstance();
+        if (!fn || !inst) { return "{}"; }
         std::vector<char> buf(8192);
-        fn(it->second.instance, buf.data(), (int)buf.size());
+        fn(inst, buf.data(), (int)buf.size());
         return std::string(buf.data());
     }
 
@@ -1006,8 +1011,7 @@ namespace engine {
         std::lock_guard<std::recursive_mutex> lck(g_mtx);
         using Fn = void (*)(void*, const char*, double);
         auto fn = (Fn)moduleSymbol("recorder", "littlesdr_rec_set");
-        auto it = core::moduleManager.instances.find("Recorder");
-        if (fn && it != core::moduleManager.instances.end()) { fn(it->second.instance, key.c_str(), v); }
+        if (void* inst = recInstance(); fn && inst) { fn(inst, key.c_str(), v); }
     }
 
     // ------------------------------------------------------------------ SSTV

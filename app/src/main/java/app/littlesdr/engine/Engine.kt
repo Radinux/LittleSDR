@@ -109,7 +109,10 @@ object Engine {
     @Volatile private var bandwidthHoldUntil = 0L
     @Volatile private var squelchHoldUntil = 0L
 
+    private var appContext: Context? = null
+
     fun init(context: Context) {
+        appContext = context.applicationContext
         if (_ready.value) return
         val root = File(context.filesDir, "sdr").absolutePath
         val cache = context.cacheDir.absolutePath
@@ -210,7 +213,13 @@ object Engine {
      */
     fun shutdownAndExit() {
         scope.launch {
-            if (_ready.value) NativeBridge.stop()
+            if (_ready.value) {
+                // An open WAV only gets its final sizes when closed
+                val file = RecorderState.parse(NativeBridge.recJson()).file
+                NativeBridge.recSet("stop", 0.0)
+                appContext?.let { ctx -> if (file.isNotEmpty()) app.littlesdr.data.Storage.scan(ctx, File(file)) }
+                NativeBridge.stop()
+            }
             delay(1500)
             android.os.Process.killProcess(android.os.Process.myPid())
         }

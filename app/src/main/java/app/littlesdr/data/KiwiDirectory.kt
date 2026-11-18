@@ -31,6 +31,8 @@ data class KiwiServer(
     val bandsText: String,
 ) {
     val free: Boolean get() = users < usersMax
+    /** Reached through the kiwisdr.com proxy (often unreachable) rather than directly */
+    val proxied: Boolean get() = ".proxy" in hostPort && "kiwisdr.com" in hostPort
 
     fun distanceKm(fromLat: Double, fromLon: Double): Double? {
         val la = lat ?: return null
@@ -75,27 +77,34 @@ class KiwiDirectory(context: Context) {
 
     companion object {
         /**
-         * Address actually serving the receiver. kiwisdr.com proxies ("*.proxy.kiwisdr.com",
-         * about half the public list) answer port 80 with redirects (to :8073, at times through
-         * proxy2), and SDR++'s WebSocket client takes any reply as a connection: it then waits
-         * for data forever. Follows the HTTP redirects once; the original address on failure.
+         * Address actually serving the receiver, or null when nothing answers. kiwisdr.com proxies
+         * ("*.proxy.kiwisdr.com", about half the public list) answer with redirects (to :8073, at
+         * times through proxy2), and SDR++'s WebSocket client takes any reply as a connection: it
+         * then waits for data forever. Their port 80 is often down while 8073 answers, so both are
+         * tried. Short timeouts: an unreachable receiver is reported in a few seconds.
          */
-        suspend fun resolve(hostPort: String): String = withContext(Dispatchers.IO) {
-            runCatching {
-                val conn = URL("http://$hostPort/").openConnection() as HttpURLConnection
-                conn.instanceFollowRedirects = true
-                conn.connectTimeout = 5_000
-                conn.readTimeout = 5_000
-                try {
-                    conn.responseCode // follows the redirects
-                    val u = conn.url
-                    if (u.protocol != "http" || u.host.isNullOrBlank()) hostPort
-                    else "${u.host}:${if (u.port > 0) u.port else 80}"
-                } finally {
-                    conn.disconnect()
-                }
-            }.getOrDefault(hostPort)
+        suspend fun resolve(hostPort: String): String? = withContext(Dispatchers.IO) {
+            val host = hostPort.substringBeforeLast(':')
+            val proxied = ".proxy" in host && host.endsWith("kiwisdr.com")
+            val candidates = if (proxied) listOf(hostPort, "$host:8073").distinct() else listOf(hostPort)
+            candidates.firstNotNullOfOrNull { probe(it) }
         }
+
+        private fun probe(hostPort: String): String? = runCatching {
+            val conn = URL("http://$hostPort/").openConnection() as HttpURLConnection
+            conn.instanceFollowRedirects = true
+            conn.connectTimeout = 3_000
+            conn.readTimeout = 3_000
+            try {
+                conn.responseCode // follows the redirects
+                val u = conn.url
+                // The proxy sends "?kiwi_not_found" when the receiver behind it is offline
+                if (u.protocol != "http" || u.host.isNullOrBlank() || "kiwi_not_found" in (u.query ?: "")) null
+                else "${u.host}:${if (u.port > 0) u.port else 80}"
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrNull()
 
         private const val LIST_URL = "http://rx.linkfanel.net/kiwisdr_com.js"
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }

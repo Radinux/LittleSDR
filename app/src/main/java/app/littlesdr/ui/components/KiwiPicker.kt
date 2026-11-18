@@ -93,20 +93,23 @@ private fun KiwiPickerDialog(
     LaunchedEffect(Unit) { onLoad(false) }
     var query by rememberSaveable { mutableStateOf("") }
     var freeOnly by rememberSaveable { mutableStateOf(true) }
+    // Receivers behind the kiwisdr.com proxy are often unreachable: hidden unless asked for
+    var directOnly by rememberSaveable { mutableStateOf(true) }
     var manual by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
 
     // Nearest first when the operator locator is known, otherwise by name
-    val shown = remember(servers, query, freeOnly, position) {
+    val shown = remember(servers, query, freeOnly, directOnly, position) {
         val q = query.trim().lowercase()
         servers.asSequence()
             .filter { !freeOnly || it.free }
+            .filter { !directOnly || !it.proxied }
             .filter { q.isEmpty() || q in it.name.lowercase() || q in it.location.lowercase() || q in it.hostPort.lowercase() }
             .map { it to position?.let { p -> it.distanceKm(p.lat, p.lon) } }
             .sortedWith(compareBy<Pair<KiwiServer, Double?>> { it.second ?: Double.MAX_VALUE }.thenBy { it.first.name.lowercase() })
             .toList()
     }
-    LaunchedEffect(query, freeOnly) { listState.scrollToItem(0) }
+    LaunchedEffect(query, freeOnly, directOnly) { listState.scrollToItem(0) }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
@@ -153,6 +156,7 @@ private fun KiwiPickerDialog(
                         modifier = Modifier.weight(1.2f),
                     )
                     FilterChip(selected = freeOnly, onClick = { freeOnly = !freeOnly }, label = { Text("Places libres") })
+                    FilterChip(selected = directOnly, onClick = { directOnly = !directOnly }, label = { Text("Accès direct") })
                     OutlinedTextField(
                         value = manual, onValueChange = { manual = it },
                         placeholder = { Text("Adresse : hôte:8073") },
@@ -204,7 +208,8 @@ private fun KiwiRow(s: KiwiServer, km: Double?, onClick: () -> Unit) {
             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1.4f),
         )
         Text(
-            s.location, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            if (s.proxied) "${s.location} · proxy" else s.location,
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
         )
         Text(

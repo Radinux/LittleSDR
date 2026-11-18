@@ -1,15 +1,21 @@
 package app.littlesdr.engine
 
 /** What a frequency range is allocated to, drawn as a colored strip under the waterfall. */
-enum class BandKind(val label: String) {
-    HAM("Radioamateur"),
-    BROADCAST("Radiodiffusion"),
-    CB("CB / usage libre"),
-    AIR("Aviation"),
-    MARINE("Marine"),
+enum class BandKind(val label: String, val short: String) {
+    HAM("Radioamateur", "HAM"),
+    BROADCAST("Radiodiffusion AM / ondes courtes", "Broadcast"),
+    FM("Radio FM", "FM"),
+    DAB("Radio numérique DAB+", "DAB"),
+    TV("Télévision", "TV"),
+    CB("CB 27 MHz", "CB"),
+    PMR("PMR / talkies-walkies", "PMR"),
+    AIR("Aviation", "Avion"),
+    MARINE("Marine", "Marine"),
+    SAT("Satellites", "SAT"),
 }
 
-data class BandSegment(val startHz: Double, val endHz: Double, val kind: BandKind, val label: String)
+/** [label]: band name (e.g. "40 m"); [tag]: short type drawn on the strip (e.g. "HAM"). */
+data class BandSegment(val startHz: Double, val endHz: Double, val kind: BandKind, val label: String, val tag: String = kind.short)
 
 /**
  * Main allocations per ITU region (1 = Europe, Africa, Middle East; 2 = Americas;
@@ -27,7 +33,10 @@ object BandPlan {
     private fun m(v: Double) = v * 1e6
 
     /** [regions]: the ITU regions where the segment applies. */
-    private class Entry(val start: Double, val end: Double, val kind: BandKind, val label: String, val regions: Set<Int> = ALL)
+    private class Entry(
+        val start: Double, val end: Double, val kind: BandKind, val label: String,
+        val regions: Set<Int> = ALL, val tag: String = kind.short,
+    )
 
     private val ALL = setOf(1, 2, 3)
     private val R1 = setOf(1)
@@ -84,28 +93,38 @@ object BandPlan {
         Entry(k(18900.0), k(19020.0), BandKind.BROADCAST, "15 m"),
         Entry(k(21450.0), k(21850.0), BandKind.BROADCAST, "13 m"),
         Entry(k(25670.0), k(26100.0), BandKind.BROADCAST, "11 m"),
-        Entry(m(87.5), m(108.0), BandKind.BROADCAST, "FM", R13),
-        Entry(m(88.0), m(108.0), BandKind.BROADCAST, "FM", R2),
-        Entry(m(174.0), m(240.0), BandKind.BROADCAST, "DAB+ / TV", R1),
-        Entry(m(174.0), m(216.0), BandKind.BROADCAST, "TV VHF", R2),
-        Entry(m(470.0), m(694.0), BandKind.BROADCAST, "TV UHF", R1),
-        Entry(m(470.0), m(608.0), BandKind.BROADCAST, "TV UHF", R2),
-        Entry(m(470.0), m(698.0), BandKind.BROADCAST, "TV UHF", R3),
+        Entry(m(87.5), m(108.0), BandKind.FM, "FM", R13),
+        Entry(m(88.0), m(108.0), BandKind.FM, "FM", R2),
+        Entry(m(174.0), m(240.0), BandKind.DAB, "DAB+ (bande III)", R1),
+        Entry(m(174.0), m(216.0), BandKind.TV, "TV VHF", R2),
+        Entry(m(470.0), m(694.0), BandKind.TV, "TV UHF", R1),
+        Entry(m(470.0), m(608.0), BandKind.TV, "TV UHF", R2),
+        Entry(m(470.0), m(698.0), BandKind.TV, "TV UHF", R3),
 
         // ---- Licence-free radio
         Entry(k(26965.0), k(27405.0), BandKind.CB, "CB"),
-        Entry(m(446.0), m(446.2), BandKind.CB, "PMR446", R1),
-        Entry(m(433.05), m(434.79), BandKind.CB, "LPD433", R1),
-        Entry(m(462.55), m(467.725), BandKind.CB, "FRS / GMRS", R2),
-        Entry(m(476.425), m(477.4125), BandKind.CB, "CB UHF", R3),
+        Entry(m(446.0), m(446.2), BandKind.PMR, "PMR446", R1),
+        Entry(m(433.05), m(434.79), BandKind.PMR, "LPD433", R1, tag = "LPD"),
+        Entry(m(462.55), m(467.725), BandKind.PMR, "FRS / GMRS", R2, tag = "FRS"),
+        Entry(m(476.425), m(477.4125), BandKind.PMR, "CB UHF", R3, tag = "UHF CB"),
 
         // ---- Aeronautical and maritime
         Entry(m(108.0), m(137.0), BandKind.AIR, "Aviation"),
         Entry(m(156.0), m(162.025), BandKind.MARINE, "VHF marine"),
+
+        // ---- Satellites (downlinks receivable with an SDR); drawn over the ham bands they share
+        Entry(m(137.0), m(138.0), BandKind.SAT, "Météo NOAA / Meteor"),
+        Entry(m(145.8), m(146.0), BandKind.SAT, "Satellites amateur / ISS"),
+        Entry(m(435.0), m(438.0), BandKind.SAT, "Satellites amateur"),
+        Entry(m(1525.0), m(1559.0), BandKind.SAT, "Inmarsat (bande L)"),
+        Entry(m(1559.0), m(1610.0), BandKind.SAT, "GNSS (GPS, Galileo…)", tag = "GNSS"),
+        Entry(m(1616.0), m(1626.5), BandKind.SAT, "Iridium"),
+        Entry(m(1690.0), m(1710.0), BandKind.SAT, "Météo HRPT"),
     )
 
     private val byRegion = (1..3).associateWith { r ->
-        ENTRIES.filter { r in it.regions }.map { BandSegment(it.start, it.end, it.kind, it.label) }.sortedBy { it.startHz }
+        // Sorted by start: a sub-band (satellites inside a ham band) is drawn over its parent
+        ENTRIES.filter { r in it.regions }.map { BandSegment(it.start, it.end, it.kind, it.label, it.tag) }.sortedBy { it.startHz }
     }
 
     fun segments(region: Int): List<BandSegment> = byRegion[region] ?: byRegion.getValue(1)
