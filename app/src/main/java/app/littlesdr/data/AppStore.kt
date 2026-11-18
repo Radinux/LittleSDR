@@ -31,6 +31,10 @@ data class DisplaySettings(
     val spectrumFraction: Float = 0.35f,
     /** Waterfall palette, see ui/theme/Palettes.kt (0 = Turbo). */
     val palette: Int = 0,
+    /** Colored band plan strip under the waterfall (ham, broadcast, CB...) */
+    val bandPlan: Boolean = true,
+    /** ITU region of the band plan: 1 Europe/Africa, 2 Americas, 3 Asia/Oceania */
+    val ituRegion: Int = 1,
 )
 
 @Serializable

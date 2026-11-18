@@ -75,8 +75,9 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     private fun isGainControl(w: SmWidget): Boolean {
         val gainWords = listOf("gain", "lna", "vga", "mixer", "attenuat")
         return when (w) {
-            is SmWidget.SliderInt -> (w.title ?: w.label).lowercase().let { t -> gainWords.any { it in t } }
-            is SmWidget.SliderFloat -> (w.title ?: w.label).lowercase().let { t -> gainWords.any { it in t } }
+            // Unlabelled sliders are recognised by their id (SpyServer: "##spyserver_source_gain")
+            is SmWidget.SliderInt -> "${w.title ?: w.label} ${w.id}".lowercase().let { t -> gainWords.any { it in t } }
+            is SmWidget.SliderFloat -> "${w.title ?: w.label} ${w.id}".lowercase().let { t -> gainWords.any { it in t } }
             is SmWidget.Checkbox -> "agc" in w.label.lowercase()
             else -> false
         }

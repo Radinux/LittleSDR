@@ -77,11 +77,14 @@ import kotlin.math.roundToInt
 
 @Composable
 fun ModeSelector(selected: Mode?, onSelect: (Mode) -> Unit, modifier: Modifier = Modifier) {
-    Row(
-        modifier.horizontalScroll(rememberScrollState()),
+    // Every mode visible (a scrolling row hid LSB/CW off the edge), in a reading order:
+    // FM / AM family, then sidebands, CW and raw I/Q. The enum order is SDR++'s mode ids.
+    FlowRow(
+        modifier,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Mode.entries.forEach { m ->
+        MODE_ORDER.forEach { m ->
             FilterChip(
                 selected = m == selected,
                 onClick = { onSelect(m) },
@@ -93,6 +96,8 @@ fun ModeSelector(selected: Mode?, onSelect: (Mode) -> Unit, modifier: Modifier =
         }
     }
 }
+
+private val MODE_ORDER = listOf(Mode.NFM, Mode.WFM, Mode.AM, Mode.DSB, Mode.LSB, Mode.USB, Mode.CW, Mode.RAW)
 
 private val STEPS = listOf(1.0, 10.0, 50.0, 100.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 6_250.0, 8_330.0, 9_000.0,
     10_000.0, 12_500.0, 25_000.0, 50_000.0, 100_000.0, 200_000.0, 1_000_000.0)

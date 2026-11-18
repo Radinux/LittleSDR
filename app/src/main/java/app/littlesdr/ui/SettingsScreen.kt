@@ -1,5 +1,9 @@
 package app.littlesdr.ui
 
+import androidx.compose.material3.RadioButton
+import app.littlesdr.ui.components.color
+import app.littlesdr.engine.BandPlan
+import app.littlesdr.engine.BandKind
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -109,6 +113,7 @@ fun SettingsScreen(vm: RadioViewModel, onBack: () -> Unit) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     AppearanceSection(appearance) { vm.setAppearance(it) }
                     SpectrumSection(display) { vm.setDisplay(it) }
+                    BandPlanSection(display) { vm.setDisplay(it) }
                     FftSection(adv.fft, vm::setOption, vm::setOption)
                     Spacer(Modifier.height(16.dp))
                 }
@@ -275,7 +280,53 @@ private fun SpectrumSection(d: DisplaySettings, onChange: (DisplaySettings) -> U
             )
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = { onChange(DisplaySettings(palette = d.palette)) }) { Text("Valeurs par défaut") }
+            TextButton(onClick = {
+                onChange(DisplaySettings(palette = d.palette, bandPlan = d.bandPlan, ituRegion = d.ituRegion))
+            }) { Text("Valeurs par défaut") }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Band plan
+
+@Composable
+private fun BandPlanSection(d: DisplaySettings, onChange: (DisplaySettings) -> Unit) {
+    Section("Plan de bandes") {
+        ListItem(
+            headlineContent = { Text("Bandes sous le waterfall") },
+            supportingContent = { Text("Bandeau coloré : radioamateur, radiodiffusion, CB…") },
+            trailingContent = { Switch(checked = d.bandPlan, onCheckedChange = { onChange(d.copy(bandPlan = it)) }) },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        Column(
+            Modifier.padding(horizontal = 20.dp, vertical = 8.dp).alpha(if (d.bandPlan) 1f else 0.38f),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            SettingLabel("Zone radio (région UIT)", "Les attributions de fréquences diffèrent selon la région du monde")
+            BandPlan.REGIONS.forEach { (id, name) ->
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .selectable(selected = d.ituRegion == id, enabled = d.bandPlan, role = Role.RadioButton) {
+                            onChange(d.copy(ituRegion = id))
+                        }
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = d.ituRegion == id, onClick = null, enabled = d.bandPlan)
+                    Text(name, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
+                }
+            }
+            // Legend
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                BandKind.entries.forEach { k ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(12.dp).clip(RoundedCornerShape(3.dp)).background(k.color))
+                        Text(k.label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 6.dp))
+                    }
+                }
+            }
         }
     }
 }

@@ -64,13 +64,21 @@ set(LITTLESDR_MODULES
     source_modules/airspyhf_source
     source_modules/hackrf_source
     source_modules/rtl_tcp_source
-    source_modules/spyserver_source
     source_modules/kiwisdr_source
     decoder_modules/radio)
 foreach (mod ${LITTLESDR_MODULES})
     get_filename_component(modname "${mod}" NAME)
     add_subdirectory("${SDRPP_ROOT}/${mod}" "modules/${modname}")
 endforeach ()
+
+# SpyServer: upstream sources, with main.cpp included through modules/spyserver_ext.cpp
+set(SPY_DIR "${SDRPP_ROOT}/source_modules/spyserver_source/src")
+add_library(spyserver_source SHARED "${SPY_DIR}/spyserver_client.cpp" modules/spyserver_ext.cpp)
+set_target_properties(spyserver_source PROPERTIES PREFIX "")
+target_include_directories(spyserver_source PRIVATE "${SPY_DIR}" "${SDRPP_CORE_ROOT}")
+target_compile_definitions(spyserver_source PRIVATE SPYSERVER_MAIN_CPP="${SPY_DIR}/main.cpp")
+target_compile_options(spyserver_source PRIVATE ${SDRPP_MODULE_COMPILER_FLAGS})
+target_link_libraries(spyserver_source PRIVATE sdrpp_core log)
 
 # Extra entry points compiled into radio.so (advanced demodulator options)
 target_sources(radio PRIVATE modules/radio_ext.cpp)

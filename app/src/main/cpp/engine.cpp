@@ -14,6 +14,7 @@
 #include <gui/style.h>
 #include <signal_path/signal_path.h>
 #include <utils/flog.h>
+#include <chrono>
 #include <utils/cty.h>
 #include <radio_interface.h>
 
@@ -315,18 +316,27 @@ namespace engine {
         core::configManager.release(true);
     }
 
+    bool spyServerAdjust();
+
     std::string sourceMenuJson(const std::string& diffId, int type, bool b, int i, float f, const std::string& s) {
         std::lock_guard<std::recursive_mutex> lck(g_mtx);
         SmGui::DrawListElem diff;
         diff.type = (SmGui::DrawListElemType)type;
         diff.b = b; diff.i = i; diff.f = f; diff.str = s;
-        return smguijson::renderSourceMenu(diffId, diff);
+        std::string out = smguijson::renderSourceMenu(diffId, diff);
+        if (spyServerAdjust()) {
+            SmGui::DrawListElem none;
+            out = smguijson::renderSourceMenu("", none);
+        }
+        return out;
     }
 
     // SDR++ changes some VFO offsets on the waterfall side only (reference / bandwidth changes,
     // e.g. switching to USB) and lets the GUI loop copy them to the DSP every frame through
     // updateFromWaterfall(). There is no such loop here, so without this the display (waterfall
     // data) and the audio (DSP VFO) drift apart, and the drift survives restarts.
+    void spyServerMonitor();
+
     void syncVfo() {
         std::lock_guard<std::recursive_mutex> lck(g_mtx);
         sigpath::vfoManager.updateFromWaterfall(&gui::waterfall);
@@ -344,10 +354,138 @@ namespace engine {
     }
 
     // ------------------------------------------------------------------ playback
+    // SpyServer (modules/spyserver_ext.cpp): the first connection to a server switches to an
+    // internet-friendly stream; when that happens while playing, playback is restarted.
+    bool spyServerAdjust() {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        if (sigpath::sourceManager.getSelectedName() != "SpyServer Source") { return false; }
+        auto mod = core::moduleManager.modules.find("spyserver_source");
+        auto inst = core::moduleManager.instances.find("SpyServer Source");
+        if (mod == core::moduleManager.modules.end() || !mod->second.handle || inst == core::moduleManager.instances.end()) { return false; }
+        using AdjustFn = int (*)(void*);
+        auto adjust = (AdjustFn)dlsym(mod->second.handle, "littlesdr_spyserver_adjust");
+        if (!adjust) { return false; }
+        int r = adjust(inst->second.instance);
+        if (r == -1) {
+            gui::mainWindow.setPlayState(false);
+            r = adjust(inst->second.instance);
+            gui::mainWindow.setPlayState(true);
+        }
+        return r != 0;
+    }
+
+    // SpyServer automatic rate. When the server (or the network) delivers less than the chosen
+    // sample rate, FFT lines arrive slower than g_fftRate (the frontend makes them from the
+    // samples): two consecutive 3 s windows below 75 % -> next lower rate, playback restarted.
+    // Cautious way back up: after g_spyUpDelay seconds of clean stream, try one rate higher
+    // (only to undo our own steps down). A step up that fails again doubles the delay.
+    namespace {
+        constexpr double SPY_WINDOW_S = 3.0;
+        constexpr double SPY_UP_DELAY_S = 60.0;
+        constexpr double SPY_UP_DELAY_MAX_S = 600.0;
+        constexpr double SPY_UP_PROBATION_S = 30.0;
+
+        std::chrono::steady_clock::time_point g_spyWindowStart;
+        uint64_t g_spyWindowLines = 0;
+        int g_spySlowWindows = 0;
+        bool g_spyWarmup = true;
+        int g_spyStepsDown = 0;          // our own steps below the server's saved rate
+        double g_spyCleanSecs = 0.0;     // clean stream since the last change
+        double g_spyUpDelay = SPY_UP_DELAY_S;
+        bool g_spyOnProbation = false;   // just stepped up: a quick failure means "not yet"
+        uint64_t g_spyServerKey = 0;
+
+        void* spySymbol(const char* name) {
+            auto mod = core::moduleManager.modules.find("spyserver_source");
+            if (mod == core::moduleManager.modules.end() || !mod->second.handle) { return nullptr; }
+            return dlsym(mod->second.handle, name);
+        }
+
+        void* spyInstance() {
+            auto inst = core::moduleManager.instances.find("SpyServer Source");
+            return inst == core::moduleManager.instances.end() ? nullptr : (void*)inst->second.instance;
+        }
+    }
+
+    void spyServerResetWindow() {
+        g_spyWindowStart = std::chrono::steady_clock::now();
+        { std::lock_guard<std::mutex> l(g_fft.mtx); g_spyWindowLines = g_fft.written; }
+        g_spySlowWindows = 0;
+        g_spyCleanSecs = 0.0;
+        g_spyWarmup = true; // the first window after a (re)start includes connection and buffering
+    }
+
+    // Changes the rate with the stream stopped (the sample rate can't change while running)
+    bool spyServerChangeRate(const char* fn) {
+        auto change = (int (*)(void*))spySymbol(fn);
+        void* inst = spyInstance();
+        if (!change || !inst) { return false; }
+        gui::mainWindow.setPlayState(false);
+        bool changed = change(inst) != 0;
+        gui::mainWindow.setPlayState(true);
+        spyServerResetWindow();
+        return changed;
+    }
+
+    void spyServerMonitor() {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        if (!gui::mainWindow.isPlaying() || sigpath::sourceManager.getSelectedName() != "SpyServer Source") {
+            g_spyWindowStart = {};
+            return;
+        }
+        // Another server: our steps down don't apply to it
+        auto keyFn = (uint64_t (*)(void*))spySymbol("littlesdr_spyserver_key");
+        uint64_t key = (keyFn && spyInstance()) ? keyFn(spyInstance()) : 0;
+        if (key != g_spyServerKey) {
+            g_spyServerKey = key;
+            g_spyStepsDown = 0;
+            g_spyUpDelay = SPY_UP_DELAY_S;
+            g_spyOnProbation = false;
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        if (g_spyWindowStart == std::chrono::steady_clock::time_point{}) { spyServerResetWindow(); return; }
+        double secs = std::chrono::duration<double>(now - g_spyWindowStart).count();
+        if (secs < SPY_WINDOW_S) { return; }
+        uint64_t written;
+        { std::lock_guard<std::mutex> l(g_fft.mtx); written = g_fft.written; }
+        double ratio = written >= g_spyWindowLines
+            ? (double)(written - g_spyWindowLines) / secs / std::max(1.0f, g_fftRate.load()) : 1.0;
+        g_spyWindowStart = now;
+        g_spyWindowLines = written;
+        if (g_spyWarmup) { g_spyWarmup = false; return; }
+
+        if (ratio < 0.75) {
+            g_spyCleanSecs = 0.0;
+            if (++g_spySlowWindows < 2) { return; }
+            flog::warn("SpyServer: receiving {}% of the stream", (int)(ratio * 100));
+            if (g_spyOnProbation) {
+                // The higher rate still doesn't fit: wait longer before the next try
+                g_spyUpDelay = std::min(g_spyUpDelay * 2.0, SPY_UP_DELAY_MAX_S);
+                g_spyOnProbation = false;
+            }
+            if (spyServerChangeRate("littlesdr_spyserver_step_down")) { g_spyStepsDown++; }
+            return;
+        }
+        g_spySlowWindows = 0;
+        if (ratio < 0.95) { return; } // borderline: neither worse nor clean
+        g_spyCleanSecs += secs;
+        if (g_spyOnProbation && g_spyCleanSecs >= SPY_UP_PROBATION_S) {
+            g_spyOnProbation = false; // the step up held
+        }
+        if (g_spyStepsDown > 0 && !g_spyOnProbation && g_spyCleanSecs >= g_spyUpDelay) {
+            if (spyServerChangeRate("littlesdr_spyserver_step_up")) {
+                g_spyStepsDown--;
+                g_spyOnProbation = true;
+            }
+        }
+    }
+
     bool start() {
         std::lock_guard<std::recursive_mutex> lck(g_mtx);
         if (sigpath::sourceManager.getSelectedName().empty()) { return false; }
         gui::mainWindow.setPlayState(true);
+        spyServerAdjust(); // playing without "Connect" first connects here
         return gui::mainWindow.isPlaying();
     }
 

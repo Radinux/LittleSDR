@@ -1,5 +1,7 @@
 package app.littlesdr.ui.components
 
+import app.littlesdr.engine.BandPlan
+import app.littlesdr.engine.BandKind
 import androidx.compose.foundation.AndroidExternalSurface
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -107,6 +109,7 @@ fun SpectrumPanel(
     val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     val measurer = rememberTextMeasurer(cacheSize = 32) // ~13 labels per frame
     val labelStyle = TextStyle(fontSize = 10.sp, color = labelColor, fontFeatureSettings = "tnum")
+    val bandLabelStyle = TextStyle(fontSize = 9.sp, color = Color.White, fontWeight = FontWeight.Medium)
 
     Box(modifier) {
         AndroidExternalSurface(Modifier.fillMaxSize()) {
@@ -247,6 +250,26 @@ fun SpectrumPanel(
 
             drawLine(Color.Black.copy(alpha = 0.4f), Offset(0f, specH), Offset(w, specH), 1.dp.toPx())
 
+            // Band plan strip along the bottom of the waterfall
+            if (display.bandPlan) {
+                val stripH = BAND_STRIP_HEIGHT.toPx()
+                val y0 = h - stripH
+                drawRect(Color.Black.copy(alpha = 0.35f), Offset(0f, y0), Size(w, stripH))
+                BandPlan.visible(display.ituRegion, left, left + bw).forEach { seg ->
+                    val x0 = xOf(seg.startHz).coerceIn(0f, w)
+                    val x1 = xOf(seg.endHz).coerceIn(0f, w).coerceAtLeast(x0 + 3f)
+                    val c = seg.kind.color
+                    drawRect(c.copy(alpha = 0.55f), Offset(x0, y0), Size(x1 - x0, stripH))
+                    drawLine(c, Offset(x0, y0), Offset(x1, y0), 2.dp.toPx())
+                    val layout = measurer.measure(seg.label, bandLabelStyle)
+                    if (layout.size.width + 8.dp.toPx() < x1 - x0) {
+                        // Label centered on the visible part of the band
+                        val tx = ((x0 + x1) / 2f - layout.size.width / 2f)
+                        drawText(layout, topLeft = Offset(tx, y0 + (stripH - layout.size.height) / 2f))
+                    }
+                }
+            }
+
         }
 
         // RDS notch hanging from the top edge: station name, programme type, scrolling RadioText
@@ -265,7 +288,8 @@ fun SpectrumPanel(
             onZoomIn = { zoomAroundVfo(st, vw, 0.5, setView) },
             onZoomOut = { zoomAroundVfo(st, vw, 2.0, setView) },
             onReset = onResetZoom,
-            modifier = Modifier.align(Alignment.BottomStart).padding(start = 14.dp, bottom = 12.dp),
+            modifier = Modifier.align(Alignment.BottomStart)
+                .padding(start = 14.dp, bottom = if (display.bandPlan) BAND_STRIP_HEIGHT + 8.dp else 12.dp),
         )
 
         // Rounded corners: the Vulkan SurfaceView can't be clipped by Compose,
@@ -387,3 +411,16 @@ private fun NotchTicker(text: String) {
         modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE),
     )
 }
+
+
+private val BAND_STRIP_HEIGHT = 15.dp
+
+/** Band plan colors, readable over any waterfall palette (also used for the legend in Settings). */
+val BandKind.color: Color
+    get() = when (this) {
+        BandKind.HAM -> Color(0xFF3DBE7A)
+        BandKind.BROADCAST -> Color(0xFF4F8EF7)
+        BandKind.CB -> Color(0xFFF29A38)
+        BandKind.AIR -> Color(0xFFB27CF2)
+        BandKind.MARINE -> Color(0xFF26B9C9)
+    }

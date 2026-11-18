@@ -39,6 +39,9 @@ namespace engine {
     // Push pending waterfall-side VFO changes to the DSP (SDR++'s GUI does this every frame)
     void syncVfo();
 
+    // SpyServer: step the sample rate down when the stream arrives slower than real time
+    void spyServerMonitor();
+
     // ------------------------------------------------------------------ tuning
     void tune(double freqHz);        // move the VFO (and the center if needed)
     void tuneCenter(double freqHz);  // move the hardware center frequency, VFO offset kept at 0
