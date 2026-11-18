@@ -73,6 +73,8 @@ import app.littlesdr.ui.components.RadioTab
 import app.littlesdr.ui.components.FrequencyDisplay
 import app.littlesdr.ui.components.MemoriesPanel
 import app.littlesdr.ui.components.MorseTab
+import app.littlesdr.ui.components.SstvTab
+import app.littlesdr.ui.components.RecordTab
 import app.littlesdr.ui.components.KiwiServerButton
 import app.littlesdr.ui.components.SourcePanel
 import app.littlesdr.ui.components.SpectrumPanel
@@ -101,6 +103,11 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val menu by vm.sourceMenu.collectAsStateWithLifecycle()
     val gainControls by vm.gainControls.collectAsStateWithLifecycle()
     val cw by vm.cw.collectAsStateWithLifecycle()
+    val sstv by vm.sstv.collectAsStateWithLifecycle()
+    val rec by vm.rec.collectAsStateWithLifecycle()
+    val recordings by vm.recordings.collectAsStateWithLifecycle()
+    val sstvImage by vm.sstvImage.collectAsStateWithLifecycle()
+    val sstvGallery by vm.sstvGallery.collectAsStateWithLifecycle()
     val kiwiServers by vm.kiwiServers.collectAsStateWithLifecycle()
     val kiwiLoading by vm.kiwiLoading.collectAsStateWithLifecycle()
     val rds by vm.rds.collectAsStateWithLifecycle()
@@ -236,11 +243,27 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                     latency = advanced.audio.latency,
                                     onDevice = { vm.setOption("audio.device", it.toDouble()) },
                                     onLatency = { vm.setOption("audio.latency", it.toDouble()) },
+                                    stereo = advanced.demod.stereo.takeIf { advanced.demod.stereoAllowed },
+                                    onStereo = { vm.setOption("demod.stereo", it) },
                                 )
                                 ControlTab.Bands -> BandsTab(stateHolder.value.vfoFrequency, vm::applyPreset)
                                 ControlTab.Morse -> MorseTab(
                                     cw = cw, mode = controls.mode,
                                     onEnable = { vm.setCwEnabled(it) }, onWatch = vm::watchCw, onTune = vm::tuneCw,
+                                )
+                                ControlTab.Sstv -> SstvTab(
+                                    sstv = sstv, image = sstvImage, gallery = sstvGallery,
+                                    onEnable = { vm.setSstvEnabled(it) },
+                                    onStartManual = { vm.sstvStartManual(it) },
+                                    onFinish = { vm.sstvFinish() },
+                                    onRefreshGallery = { vm.refreshSstvGallery() },
+                                    onDelete = { f -> vm.deleteFile(f) { vm.refreshSstvGallery() } },
+                                )
+                                ControlTab.Record -> RecordTab(
+                                    rec = rec, recordings = recordings, playing = playing, folder = vm.storageLabel(),
+                                    onWatch = vm::watchRecorder,
+                                    onSet = { k, v -> vm.setRecorder(k, v) },
+                                    onDelete = { f -> vm.deleteFile(f) { vm.refreshRecordings() } },
                                 )
                                 ControlTab.Memories -> MemoriesPanel(
                                     memories = data.memories, currentFrequency = stateHolder.value.vfoFrequency,

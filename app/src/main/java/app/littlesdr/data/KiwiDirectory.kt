@@ -74,6 +74,29 @@ class KiwiDirectory(context: Context) {
     }.getOrDefault(false)
 
     companion object {
+        /**
+         * Address actually serving the receiver. kiwisdr.com proxies ("*.proxy.kiwisdr.com",
+         * about half the public list) answer port 80 with redirects (to :8073, at times through
+         * proxy2), and SDR++'s WebSocket client takes any reply as a connection: it then waits
+         * for data forever. Follows the HTTP redirects once; the original address on failure.
+         */
+        suspend fun resolve(hostPort: String): String = withContext(Dispatchers.IO) {
+            runCatching {
+                val conn = URL("http://$hostPort/").openConnection() as HttpURLConnection
+                conn.instanceFollowRedirects = true
+                conn.connectTimeout = 5_000
+                conn.readTimeout = 5_000
+                try {
+                    conn.responseCode // follows the redirects
+                    val u = conn.url
+                    if (u.protocol != "http" || u.host.isNullOrBlank()) hostPort
+                    else "${u.host}:${if (u.port > 0) u.port else 80}"
+                } finally {
+                    conn.disconnect()
+                }
+            }.getOrDefault(hostPort)
+        }
+
         private const val LIST_URL = "http://rx.linkfanel.net/kiwisdr_com.js"
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
         private val GPS = Regex("""\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)""")
@@ -103,7 +126,7 @@ class KiwiDirectory(context: Context) {
                     antenna = str("antenna").trim(),
                     bandsText = str("bands"),
                 )
-            }
+            }.distinctBy { it.hostPort } // the list has the same receiver twice at times (UI key)
         }
 
         /** "http://host:8073/" -> "host:8073" (port 80 when absent). Plain http only. */

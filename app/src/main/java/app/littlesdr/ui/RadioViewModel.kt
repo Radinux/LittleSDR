@@ -13,8 +13,11 @@ import app.littlesdr.data.Memory
 import app.littlesdr.engine.AdvancedOptions
 import app.littlesdr.engine.Engine
 import app.littlesdr.data.KiwiDirectory
+import app.littlesdr.data.Storage
 import app.littlesdr.data.KiwiServer
 import app.littlesdr.engine.CwState
+import app.littlesdr.engine.SstvState
+import app.littlesdr.engine.RecorderState
 import app.littlesdr.engine.Ft8Link
 import app.littlesdr.engine.Ft8Message
 import app.littlesdr.engine.Ft8State
@@ -30,7 +33,14 @@ import app.littlesdr.engine.RadioState
 import app.littlesdr.engine.SmAction
 import app.littlesdr.engine.SmWidget
 import app.littlesdr.service.RadioService
+import android.graphics.Bitmap
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -444,6 +454,130 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         tune(freqHz)
     }
 
+    // ---- Recorder (audio / baseband WAV into the app's storage), polled while its tab is shown
+    private val _rec = MutableStateFlow(RecorderState())
+    val rec: StateFlow<RecorderState> = _rec.asStateFlow()
+    private val _recordings = MutableStateFlow<List<File>>(emptyList())
+    val recordings: StateFlow<List<File>> = _recordings.asStateFlow()
+    private var recPoller: Job? = null
+    private var recPath = ""
+
+    // Documents/LittleSDR/Audio or .../Baseband, following the recording mode
+    private fun recDir(audio: Boolean) = Storage.dir(getApplication(), if (audio) Storage.AUDIO else Storage.BASEBAND)
+
+    private suspend fun ensureRecPath(audio: Boolean = _rec.value.audio) {
+        val p = recDir(audio).path
+        if (p != recPath) {
+            Engine.recorderPath(p)
+            recPath = p
+        }
+    }
+
+    fun watchRecorder(open: Boolean) {
+        recPoller?.cancel()
+        if (!open) return
+        refreshRecordings()
+        recPoller = viewModelScope.launch {
+            while (isActive) {
+                if (Engine.ready.value) {
+                    ensureRecPath()
+                    _rec.value = Engine.recorder()
+                }
+                delay(if (_rec.value.recording || _rec.value.audio) 250 else 1000)
+            }
+        }
+    }
+
+    fun setRecorder(key: String, value: Double) = viewModelScope.launch {
+        if (!Engine.ready.value) return@launch
+        val file = _rec.value.file
+        if (key == "start") ensureRecPath(Engine.recorder().audio)
+        _rec.value = Engine.recorderSet(key, value)
+        if (key == "stop" && file.isNotEmpty()) Storage.scan(getApplication(), File(file))
+        if (key == "stop" || key == "start") refreshRecordings()
+    }
+
+    /** Where the files go, as the user sees it in a file manager ("Documents/LittleSDR"). */
+    fun storageLabel(): String = Storage.root(getApplication()).path
+        .removePrefix(android.os.Environment.getExternalStorageDirectory().path).trimStart('/')
+
+    fun refreshRecordings() = viewModelScope.launch {
+        _recordings.value = withContext(Dispatchers.IO) {
+            listOf(recDir(true), recDir(false))
+                .flatMap { d -> d.listFiles { f -> f.extension == "wav" }.orEmpty().toList() }
+                .sortedByDescending { it.name }
+        }
+    }
+
+    // ---- SSTV: polled while the decoder is on (tab shown or not), finished images saved as PNG
+    private val _sstv = MutableStateFlow(SstvState())
+    val sstv: StateFlow<SstvState> = _sstv.asStateFlow()
+    private val _sstvImage = MutableStateFlow<Bitmap?>(null)
+    val sstvImage: StateFlow<Bitmap?> = _sstvImage.asStateFlow()
+    private val _sstvGallery = MutableStateFlow<List<File>>(emptyList())
+    val sstvGallery: StateFlow<List<File>> = _sstvGallery.asStateFlow()
+    private var sstvPoller: Job? = null
+    private val sstvDir: File get() = Storage.dir(getApplication(), Storage.SSTV) // Documents/LittleSDR/SSTV
+
+    fun setSstvEnabled(on: Boolean) = viewModelScope.launch {
+        if (!Engine.ready.value) return@launch
+        _sstv.value = Engine.sstvSet("enabled", if (on) 1.0 else 0.0)
+        sstvPoller?.cancel()
+        if (on) sstvPoller = viewModelScope.launch { pollSstv() }
+    }
+
+    fun sstvStartManual(modeIndex: Int) = viewModelScope.launch { _sstv.value = Engine.sstvSet("start", modeIndex.toDouble()) }
+    fun sstvFinish() = viewModelScope.launch { _sstv.value = Engine.sstvSet("stop", 0.0) }
+
+    private suspend fun pollSstv() {
+        var seenVersion = -1L
+        var seenFinished = Engine.sstv().finished // images finished before this session are not saved again
+        while (true) {
+            val s = Engine.sstv()
+            if (s.finished != seenFinished) {
+                seenFinished = s.finished
+                saveSstv(s)
+            }
+            if (s.version != seenVersion && s.width > 0) {
+                seenVersion = s.version
+                _sstvImage.value = toBitmap(Engine.sstvImage(0))
+            }
+            _sstv.value = s
+            delay(if (s.receiving) 400 else 1000)
+        }
+    }
+
+    private fun toBitmap(a: IntArray): Bitmap? {
+        if (a.size < 2) return null
+        val w = a[0]
+        val h = a[1]
+        if (w <= 0 || h <= 0 || a.size < 2 + w * h) return null
+        return Bitmap.createBitmap(a, 2, w, w, h, Bitmap.Config.ARGB_8888)
+    }
+
+    private suspend fun saveSstv(s: SstvState) {
+        val full = toBitmap(Engine.sstvImage(1)) ?: return
+        val rows = s.finishedRows.coerceIn(1, full.height)
+        val bmp = if (rows < full.height) Bitmap.createBitmap(full, 0, 0, full.width, rows) else full
+        val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.ROOT).format(Date())
+        val mhz = String.format(Locale.ROOT, "%.3fMHz", state.value.vfoFrequency / 1e6)
+        val file = File(sstvDir, "${stamp}_${s.finishedMode.replace(' ', '-')}_$mhz.png")
+        withContext(Dispatchers.IO) { file.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) } }
+        Storage.scan(getApplication(), file)
+        refreshSstvGallery()
+    }
+
+    fun refreshSstvGallery() = viewModelScope.launch {
+        _sstvGallery.value = withContext(Dispatchers.IO) {
+            sstvDir.listFiles { f -> f.extension == "png" }?.sortedByDescending { it.name }.orEmpty()
+        }
+    }
+
+    fun deleteFile(f: File, refresh: () -> Unit) = viewModelScope.launch {
+        withContext(Dispatchers.IO) { f.delete() }
+        refresh()
+    }
+
     // ---- KiwiSDR server picker
     private val kiwiDirectory = KiwiDirectory(app)
     private val _kiwiServers = MutableStateFlow<List<KiwiServer>>(emptyList())
@@ -462,7 +596,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setKiwiSite(hostPort: String, name: String) = viewModelScope.launch {
-        Engine.kiwiSetSite(hostPort.trim(), name)
+        Engine.kiwiSetSite(KiwiDirectory.resolve(hostPort.trim()), name)
         _sourceMenu.value = Engine.sourceMenu()
     }
 

@@ -85,6 +85,15 @@ namespace engine {
     // KiwiSDR: server to use ("host:port"), as picked in the app
     void kiwiSetSite(const std::string& hostPort, const std::string& loc);
     void cwSet(const std::string& key, double value);
+    // Recorder: JSON state; "mode" (0 baseband 500 kHz / 1 audio), "stereo", "start", "stop".
+    // Folder: setOptionString("recorder.path", dir)
+    std::string recJson();
+    void recSet(const std::string& key, double value);
+    // SSTV decoder: JSON status; "enabled", "start" (manual, mode index), "stop" (end image now)
+    std::string sstvJson();
+    void sstvSet(const std::string& key, double value);
+    // ARGB pixels of the current (0) or last finished (1) image
+    std::vector<uint32_t> sstvImage(int which, int& w, int& h);
     // Country position (CTY database) for each callsign: lat, lon pairs (NaN when unknown)
     std::vector<double> ctyLatLon(const std::vector<std::string>& calls);
     // RDS of the current WFM station: {active, ps, rt, pi, callsign, pty}

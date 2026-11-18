@@ -22,11 +22,12 @@ LittleSDR est une **refonte de l'interface**, pas un fork : le traitement du sig
 ## ✨ Fonctionnalités
 
 **Réception**
-- Démodulation NFM, WFM (stéréo, RDS), AM, DSB, USB, LSB, CW
+- Démodulation NFM, WFM (stéréo ou mono, RDS), AM, DSB, USB, LSB, CW
 - Bande passante au pas de 1 kHz, ou **automatique en FM** (mesurée sur le signal)
 - Gain RF du récepteur, AGC, squelch, noise blanker, réduction de bruit FM, désaccentuation
 - **Préréglages de bandes** : FM, LW, MW, HF, CB (40 canaux), VHF, UHF, PMR446 (16 canaux)
 - Fréquences mémorisées
+- **Enregistrement** du son (stéréo ou mono) ou du **baseband IQ** (500 kHz autour de la fréquence accordée), en WAV
 
 **Affichage**
 - Spectre et waterfall rendus en **Vulkan**, six palettes (Turbo, Viridis, Inferno, Magma…)
@@ -38,10 +39,12 @@ LittleSDR est une **refonte de l'interface**, pas un fork : le traitement du sig
 **Décodage**
 - **FT8 / FT4** : liste groupée par cycle et **carte** des stations avec les liaisons émetteur → destinataire
 - **Morse (CW)** : tous les signaux de la portion CW d'une bande radioamateur, plus la fréquence accordée (décodeur neuronal TinyCW)
+- **SSTV** : images Martin, Scottie, Robot et PD (ISS sur 145,800 MHz…), mode reconnu automatiquement (VIS), correction de la dérive d'horloge
+- Images et enregistrements dans `Documents/LittleSDR` sur le téléphone
 - Locator automatique d'après la position du téléphone
 
 **Interface**
-- Paysage, panneau à onglets défilants (Récepteur, Radio, Audio, Bandes, Mémoires, Morse)
+- Paysage, panneau à onglets défilants (Récepteur, Radio, Audio, Bandes, Mémoires, Morse, SSTV, Enregistrer)
 - Material You (couleurs du fond d'écran) ou couleur d'accent au choix, thème sombre ou clair
 - Écoute écran éteint, écran maintenu allumé pendant la réception
 
@@ -84,7 +87,8 @@ C++ (NDK)                                app/src/main/cpp
  ├─ headless_backend     API backend de SDR++ sans NativeActivity
  ├─ smgui_json.cpp       menus des pilotes → widgets Compose
  ├─ spectrum_renderer    Vulkan : spectre + waterfall
- └─ modules/             sortie AAudio, extensions des modules (radio, FT8, morse, SpyServer, KiwiSDR)
+ ├─ sstv/                décodeur SSTV (SDR++Brown n'en a pas)
+ └─ modules/             sortie AAudio, extensions des modules (radio, FT8, morse, enregistreur, SpyServer, KiwiSDR)
 
 third_party/sdrpp-brown                  moteur SDR++Brown (sous-module, non modifié)
 kit/build-kit.sh                         dépendances natives, sans Docker

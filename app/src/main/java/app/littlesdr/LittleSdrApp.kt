@@ -3,6 +3,7 @@ package app.littlesdr
 import android.app.Application
 import android.os.BatteryManager
 import app.littlesdr.data.AppStore
+import app.littlesdr.data.Storage
 import app.littlesdr.data.EiBiRepository
 import app.littlesdr.engine.Engine
 import app.littlesdr.usb.UsbSdrManager
@@ -22,6 +23,7 @@ class LittleSdrApp : Application() {
         usb = UsbSdrManager(this).also { it.register() }
         val battery = getSystemService(BatteryManager::class.java)
         Engine.batteryLevel = { battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) }
+        Storage.init(this)
         Engine.init(this)
         usb.scan()
     }

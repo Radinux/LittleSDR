@@ -47,6 +47,12 @@ object NativeBridge {
     @JvmStatic external fun kiwiSetSite(hostPort: String, location: String)
     @JvmStatic external fun cwJson(): String
     @JvmStatic external fun cwSet(key: String, value: Double)
+    @JvmStatic external fun recJson(): String
+    @JvmStatic external fun recSet(key: String, value: Double)
+    @JvmStatic external fun sstvJson(): String
+    @JvmStatic external fun sstvSet(key: String, value: Double)
+    /** [width, height, ARGB pixels...] of the current (0) or last finished (1) SSTV image */
+    @JvmStatic external fun sstvImage(which: Int): IntArray
     @JvmStatic external fun ctyLatLon(calls: Array<String>): DoubleArray
     @JvmStatic external fun rdsJson(): String
 

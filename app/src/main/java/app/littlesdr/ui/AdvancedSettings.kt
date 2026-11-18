@@ -128,6 +128,11 @@ fun DemodSection(d: DemodOptions, setNum: SetNum, setBool: SetBool) {
                 d.deemp,
             ) { setNum("demod.deemp", it.toDouble()) }
         }
+        if (d.stereoAllowed) {
+            if (any) Divider()
+            any = true
+            SwitchRow("Stéréo", "Décode le son stéréo des radios FM (sinon mono, moins de souffle)", d.stereo) { setBool("demod.stereo", it) }
+        }
         if (d.ifnrAllowed) {
             if (any) Divider()
             any = true

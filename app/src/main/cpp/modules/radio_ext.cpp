@@ -117,6 +117,10 @@ extern "C" SDRPP_EXPORT int littlesdr_radio_options(void* instance, char* out, i
         j["snapInterval"] = r->snapInterval;
         j["agc"] = false;
         anyAgcGet(r->selectedDemod, j);
+        // Broadcast FM stereo (WFM only)
+        auto w = dynamic_cast<demod::WFM*>(r->selectedDemod);
+        j["stereoAllowed"] = w != nullptr;
+        j["stereo"] = w ? w->_stereo : false;
     }
     std::string s = safeDump(j);
     int n = (int)std::min<size_t>(s.size(), (size_t)cap - 1);
@@ -152,6 +156,14 @@ extern "C" SDRPP_EXPORT void littlesdr_radio_set(void* instance, const char* key
         config.acquire();
         config.conf[r->name][r->selectedDemod->getName()]["snapInterval"] = r->snapInterval;
         config.release(true);
+    }
+    else if (k == "stereo") {
+        if (auto w = dynamic_cast<demod::WFM*>(r->selectedDemod)) {
+            w->setStereo(v != 0.0);
+            w->_config->acquire();
+            w->_config->conf[w->name][w->getName()]["stereo"] = w->_stereo;
+            w->_config->release(true);
+        }
     }
     else if (k == "agcAttack") {
         anyAgcSet(r->selectedDemod, true, (float)v);

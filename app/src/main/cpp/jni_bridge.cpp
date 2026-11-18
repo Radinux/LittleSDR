@@ -1,6 +1,7 @@
 // JNI surface of the native engine, mirrored by app.littlesdr.engine.NativeBridge (Kotlin).
 #include <jni.h>
 #include <android/native_window_jni.h>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -11,12 +12,66 @@
 #define JNI_FN(name) Java_app_littlesdr_engine_NativeBridge_##name
 
 namespace {
+    // Java strings <-> standard UTF-8. JNI's *StringUTF* functions use "modified" UTF-8, where a
+    // character outside the BMP (emoji, e.g. in KiwiSDR names) is two 3-byte surrogates: invalid
+    // UTF-8 for nlohmann::json (a config save then throws and aborts the process), and CheckJNI
+    // aborts on a real 4-byte sequence passed to NewStringUTF. Convert from/to UTF-16 instead.
+    void putUtf8(std::string& r, uint32_t cp) {
+        if (cp < 0x80) { r += (char)cp; }
+        else if (cp < 0x800) { r += (char)(0xC0 | (cp >> 6)); r += (char)(0x80 | (cp & 0x3F)); }
+        else if (cp < 0x10000) {
+            r += (char)(0xE0 | (cp >> 12)); r += (char)(0x80 | ((cp >> 6) & 0x3F)); r += (char)(0x80 | (cp & 0x3F));
+        }
+        else {
+            r += (char)(0xF0 | (cp >> 18)); r += (char)(0x80 | ((cp >> 12) & 0x3F));
+            r += (char)(0x80 | ((cp >> 6) & 0x3F)); r += (char)(0x80 | (cp & 0x3F));
+        }
+    }
+
     std::string str(JNIEnv* env, jstring s) {
         if (!s) { return ""; }
-        const char* c = env->GetStringUTFChars(s, nullptr);
-        std::string r(c);
-        env->ReleaseStringUTFChars(s, c);
+        jsize n = env->GetStringLength(s);
+        const jchar* c = env->GetStringChars(s, nullptr);
+        std::string r;
+        r.reserve(n);
+        for (jsize i = 0; i < n; i++) {
+            uint32_t cp = c[i];
+            if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < n && c[i + 1] >= 0xDC00 && c[i + 1] <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (c[++i] - 0xDC00);
+            }
+            else if (cp >= 0xD800 && cp <= 0xDFFF) { cp = 0xFFFD; } // lone surrogate
+            putUtf8(r, cp);
+        }
+        env->ReleaseStringChars(s, c);
         return r;
+    }
+
+    jstring jstr(JNIEnv* env, const std::string& s) {
+        std::u16string u;
+        u.reserve(s.size());
+        const auto* p = (const unsigned char*)s.data();
+        size_t n = s.size(), i = 0;
+        while (i < n) {
+            uint32_t cp = p[i];
+            int len = cp < 0x80 ? 1 : (cp >> 5) == 0x6 ? 2 : (cp >> 4) == 0xE ? 3 : (cp >> 3) == 0x1E ? 4 : 0;
+            bool ok = len > 0 && i + len <= n;
+            if (ok && len > 1) {
+                cp &= 0xFF >> (len + 1);
+                for (int k = 1; k < len; k++) {
+                    if ((p[i + k] & 0xC0) != 0x80) { ok = false; break; }
+                    cp = (cp << 6) | (p[i + k] & 0x3F);
+                }
+            }
+            if (!ok) { u += (char16_t)0xFFFD; i++; continue; }
+            i += len;
+            if (cp >= 0x10000) {
+                cp -= 0x10000;
+                u += (char16_t)(0xD800 + (cp >> 10));
+                u += (char16_t)(0xDC00 + (cp & 0x3FF));
+            }
+            else { u += (char16_t)cp; }
+        }
+        return env->NewString((const jchar*)u.data(), (jsize)u.size());
     }
 
     void argbToFloat(jint c, float out[4]) {
@@ -54,7 +109,7 @@ JNIEXPORT jobjectArray JNICALL JNI_FN(sourceNames)(JNIEnv* env, jclass) {
     auto names = engine::sourceNames();
     jobjectArray arr = env->NewObjectArray((jsize)names.size(), env->FindClass("java/lang/String"), nullptr);
     for (size_t i = 0; i < names.size(); i++) {
-        jstring s = env->NewStringUTF(names[i].c_str());
+        jstring s = jstr(env, names[i]);
         env->SetObjectArrayElement(arr, (jsize)i, s);
         env->DeleteLocalRef(s);
     }
@@ -62,7 +117,7 @@ JNIEXPORT jobjectArray JNICALL JNI_FN(sourceNames)(JNIEnv* env, jclass) {
 }
 
 JNIEXPORT jstring JNICALL JNI_FN(selectedSource)(JNIEnv* env, jclass) {
-    return env->NewStringUTF(engine::selectedSource().c_str());
+    return jstr(env, engine::selectedSource());
 }
 
 JNIEXPORT void JNICALL JNI_FN(selectSource)(JNIEnv* env, jclass, jstring name) {
@@ -70,7 +125,7 @@ JNIEXPORT void JNICALL JNI_FN(selectSource)(JNIEnv* env, jclass, jstring name) {
 }
 
 JNIEXPORT jstring JNICALL JNI_FN(sourceMenu)(JNIEnv* env, jclass, jstring diffId, jint type, jboolean b, jint i, jfloat f, jstring s) {
-    return env->NewStringUTF(engine::sourceMenuJson(str(env, diffId), type, b, i, f, str(env, s)).c_str());
+    return jstr(env, engine::sourceMenuJson(str(env, diffId), type, b, i, f, str(env, s)));
 }
 
 // ---------------------------------------------------------------- playback / tuning
@@ -109,7 +164,7 @@ JNIEXPORT jfloat JNICALL JNI_FN(estimateBandwidth)(JNIEnv*, jclass, jdouble minB
     return engine::estimateBandwidth(minBw, maxBw);
 }
 JNIEXPORT jstring JNICALL JNI_FN(options)(JNIEnv* env, jclass) {
-    return env->NewStringUTF(engine::optionsJson().c_str());
+    return jstr(env, engine::optionsJson());
 }
 JNIEXPORT void JNICALL JNI_FN(setOption)(JNIEnv* env, jclass, jstring key, jdouble value) {
     engine::setOption(str(env, key), value);
@@ -118,7 +173,7 @@ JNIEXPORT void JNICALL JNI_FN(setOptionString)(JNIEnv* env, jclass, jstring key,
     engine::setOptionString(str(env, key), str(env, value));
 }
 JNIEXPORT jstring JNICALL JNI_FN(ft8Json)(JNIEnv* env, jclass) {
-    return env->NewStringUTF(engine::ft8Json().c_str());
+    return jstr(env, engine::ft8Json());
 }
 JNIEXPORT void JNICALL JNI_FN(ft8Set)(JNIEnv* env, jclass, jstring key, jdouble value) {
     engine::ft8Set(str(env, key), value);
@@ -127,10 +182,32 @@ JNIEXPORT void JNICALL JNI_FN(kiwiSetSite)(JNIEnv* env, jclass, jstring hostPort
     engine::kiwiSetSite(str(env, hostPort), str(env, loc));
 }
 JNIEXPORT jstring JNICALL JNI_FN(cwJson)(JNIEnv* env, jclass) {
-    return env->NewStringUTF(engine::cwJson().c_str());
+    return jstr(env, engine::cwJson());
 }
 JNIEXPORT void JNICALL JNI_FN(cwSet)(JNIEnv* env, jclass, jstring key, jdouble value) {
     engine::cwSet(str(env, key), value);
+}
+JNIEXPORT jstring JNICALL JNI_FN(recJson)(JNIEnv* env, jclass) {
+    return jstr(env, engine::recJson());
+}
+JNIEXPORT void JNICALL JNI_FN(recSet)(JNIEnv* env, jclass, jstring key, jdouble value) {
+    engine::recSet(str(env, key), value);
+}
+JNIEXPORT jstring JNICALL JNI_FN(sstvJson)(JNIEnv* env, jclass) {
+    return jstr(env, engine::sstvJson());
+}
+JNIEXPORT void JNICALL JNI_FN(sstvSet)(JNIEnv* env, jclass, jstring key, jdouble value) {
+    engine::sstvSet(str(env, key), value);
+}
+JNIEXPORT jintArray JNICALL JNI_FN(sstvImage)(JNIEnv* env, jclass, jint which) {
+    int w = 0, h = 0;
+    auto px = engine::sstvImage(which, w, h);
+    // [width, height, ARGB pixels...]
+    jintArray arr = env->NewIntArray((jsize)px.size() + 2);
+    jint dims[2] = { w, h };
+    env->SetIntArrayRegion(arr, 0, 2, dims);
+    if (!px.empty()) { env->SetIntArrayRegion(arr, 2, (jsize)px.size(), (const jint*)px.data()); }
+    return arr;
 }
 JNIEXPORT jdoubleArray JNICALL JNI_FN(ctyLatLon)(JNIEnv* env, jclass, jobjectArray calls) {
     std::vector<std::string> v;
@@ -146,7 +223,7 @@ JNIEXPORT jdoubleArray JNICALL JNI_FN(ctyLatLon)(JNIEnv* env, jclass, jobjectArr
     return arr;
 }
 JNIEXPORT jstring JNICALL JNI_FN(rdsJson)(JNIEnv* env, jclass) {
-    return env->NewStringUTF(engine::rdsJson().c_str());
+    return jstr(env, engine::rdsJson());
 }
 JNIEXPORT void JNICALL JNI_FN(setVolume)(JNIEnv*, jclass, jfloat v) { engine::setVolume(v); }
 

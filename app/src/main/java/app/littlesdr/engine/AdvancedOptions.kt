@@ -71,6 +71,9 @@ data class DemodOptions(
     val agc: Boolean = false,
     val agcAttack: Float = 50f,
     val agcDecay: Float = 5f,
+    /** Broadcast FM stereo: only for WFM */
+    val stereoAllowed: Boolean = false,
+    val stereo: Boolean = false,
 )
 
 /** Frequency converters, same values as SDR++'s named offsets. */

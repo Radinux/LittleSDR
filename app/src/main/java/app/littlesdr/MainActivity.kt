@@ -42,6 +42,10 @@ class MainActivity : ComponentActivity() {
     private val vm: RadioViewModel by viewModels()
 
     private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    // Android 9-10: writing to Documents/LittleSDR needs the storage permission
+    private val storagePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) app.littlesdr.data.Storage.init(this)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,6 +57,9 @@ class MainActivity : ComponentActivity() {
         }
         handleUsbIntent(intent)
         if (Build.VERSION.SDK_INT >= 33) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (Build.VERSION.SDK_INT <= 29 &&
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         setContent {
             val data by vm.data.collectAsStateWithLifecycle()
             val playing by vm.state.collectAsStateWithLifecycle().let { s -> remember { derivedStateOf { s.value.playing } } }

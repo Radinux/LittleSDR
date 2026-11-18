@@ -22,6 +22,8 @@ import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.SettingsInputAntenna
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.LinearScale
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Waves
 import androidx.compose.material.icons.filled.Router
@@ -174,7 +176,7 @@ private fun LabeledSlider(
 }
 
 /** Tabs of the control panel (top cap of the right "pill"). */
-enum class ControlTab(val label: String) { Source("Récepteur"), Radio("Radio"), Audio("Audio"), Bands("Bandes"), Memories("Mémoires"), Morse("Morse") }
+enum class ControlTab(val label: String) { Source("Récepteur"), Radio("Radio"), Audio("Audio"), Bands("Bandes"), Memories("Mémoires"), Morse("Morse"), Sstv("SSTV"), Record("Enregistrer") }
 
 /**
  * Scrollable tab carousel: swipe sideways, edges fade out and tabs shrink as they approach them,
@@ -225,6 +227,8 @@ fun ControlTabBar(selected: ControlTab, onSelect: (ControlTab) -> Unit, modifier
                 ControlTab.Bands -> Icons.Default.Waves
                 ControlTab.Memories -> Icons.Default.Bookmarks
                 ControlTab.Morse -> Icons.Default.LinearScale
+                ControlTab.Sstv -> Icons.Default.Image
+                ControlTab.Record -> Icons.Default.FiberManualRecord
             }
             Column(
                 Modifier
@@ -289,6 +293,7 @@ fun RadioTab(
             Spacer(Modifier.weight(1f))
             SignalMeter(signalDb, Modifier.width(140.dp))
         }
+
         val m = mode ?: Mode.NFM
         LabeledSlider(
             title = "Bande passante",
@@ -359,6 +364,9 @@ fun AudioTab(
     latency: Int,
     onDevice: (Int) -> Unit,
     onLatency: (Int) -> Unit,
+    /** Broadcast FM stereo; null when the demodulator has none (everything but WFM) */
+    stereo: Boolean? = null,
+    onStereo: (Boolean) -> Unit = {},
 ) {
     // Mute keeps the previous level so un-muting restores it
     var lastVolume by remember { mutableFloatStateOf(if (volume > 0.001f) volume else 0.8f) }
@@ -379,6 +387,18 @@ fun AudioTab(
                     )
                 }
             },
+        )
+
+        SectionLabel("Stéréo / mono")
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(selected = stereo == true, enabled = stereo != null, onClick = { onStereo(true) }, label = { Text("Stéréo") })
+            FilterChip(selected = stereo == false, enabled = stereo != null, onClick = { onStereo(false) }, label = { Text("Mono") })
+        }
+        Text(
+            if (stereo != null) "Mono : moins de souffle sur une station faible."
+            else "Seules les radios FM (mode WFM) émettent en stéréo.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         SectionLabel("Sortie")

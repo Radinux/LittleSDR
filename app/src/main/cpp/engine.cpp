@@ -2,6 +2,7 @@
 // everything that draws. The Kotlin UI drives it through jni_bridge.cpp.
 #include "engine.h"
 #include "smgui_json.h"
+#include "sstv/sstv_decoder.h"
 
 #include <core.h>
 #include <config.h>
@@ -24,6 +25,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <thread>
 
 extern char* sdrppResourcesDirectory;
 extern char* sdrppModulesDirectory;
@@ -64,6 +66,7 @@ namespace engine {
             { "Radio", "radio" },
             { "FT8/FT4 Decoder", "ft8_decoder" }, // created disabled, enabled from the FT8 screen
             { "TinyCW Decoder", "tinycw_decoder" }, // created disabled, enabled from the Morse tab
+            { "Recorder", "recorder" },
         };
         constexpr const char* FT8_INSTANCE = "FT8/FT4 Decoder";
         constexpr const char* CW_INSTANCE = "TinyCW Decoder";
@@ -553,17 +556,29 @@ namespace engine {
     }
 
     // ------------------------------------------------------------------ demod
-    void setMode(int m) {
-        std::lock_guard<std::recursive_mutex> lck(g_mtx);
-        core::modComManager.callInterface(VFO_NAME, RADIO_IFACE_CMD_SET_MODE, &m, nullptr);
-        syncVfo();
-    }
-
     int mode() {
         std::lock_guard<std::recursive_mutex> lck(g_mtx);
         int m = -1;
         core::modComManager.callInterface(VFO_NAME, RADIO_IFACE_CMD_GET_MODE, nullptr, &m);
         return m;
+    }
+
+    namespace {
+        // TinyCW follows the tuned frequency only when the main window says "CW": that window is
+        // not used here, so mirror the radio's mode into it
+        void syncMainWindowMode() {
+            int m = mode();
+            const char* name = m == 5 ? "CW" : (m == 0 || m == 1) ? "FM" : (m == 4 || m == 6) ? "SSB" : "AM";
+            if (gui::mainWindow.getCurrentMode() != name) { gui::mainWindow.setCurrentMode(name); }
+        }
+    }
+
+    void setMode(int m) {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        core::modComManager.callInterface(VFO_NAME, RADIO_IFACE_CMD_SET_MODE, &m, nullptr);
+        syncVfo();
+        // Every mode change, Morse tab shown or not: TinyCW starts/stops the tuned-frequency decoder
+        syncMainWindowMode();
     }
 
     void setBandwidth(float hz) {
@@ -863,6 +878,8 @@ namespace engine {
     }
 
     // ================================================================== text options
+    namespace { void* moduleSymbol(const char* module, const char* sym); }
+
     void setOptionString(const std::string& key, const std::string& value) {
         std::lock_guard<std::recursive_mutex> lck(g_mtx);
         if (key == "operator.location") {
@@ -870,6 +887,13 @@ namespace engine {
             core::configManager.acquire();
             core::configManager.conf["operatorLocation"] = value;
             core::configManager.release(true);
+        }
+        else if (key == "recorder.path") {
+            using Fn = void (*)(void*, const char*);
+            auto it = core::moduleManager.instances.find("Recorder");
+            if (auto fn = (Fn)moduleSymbol("recorder", "littlesdr_rec_set_path")) {
+                if (it != core::moduleManager.instances.end()) { fn(it->second.instance, value.c_str()); }
+            }
         }
         else if (key == "operator.callsign") {
             sigpath::iqFrontEnd.operatorCallsign = value;
@@ -925,13 +949,6 @@ namespace engine {
             return it == core::moduleManager.instances.end() ? nullptr : (void*)it->second.instance;
         }
 
-        // TinyCW follows the tuned frequency only when the main window says "CW": that window is
-        // not used here, so mirror the radio's mode into it
-        void syncMainWindowMode() {
-            int m = mode();
-            const char* name = m == 5 ? "CW" : (m == 0 || m == 1) ? "FM" : (m == 4 || m == 6) ? "SSB" : "AM";
-            if (gui::mainWindow.getCurrentMode() != name) { gui::mainWindow.setCurrentMode(name); }
-        }
     }
 
     std::string cwJson() {
@@ -972,6 +989,96 @@ namespace engine {
         fn(it->second.instance, hostPort.c_str(), loc.c_str());
         if (restart) { gui::mainWindow.setPlayState(true); }
     }
+
+    // ------------------------------------------------------------------ Recorder
+    std::string recJson() {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        using Fn = int (*)(void*, char*, int);
+        auto fn = (Fn)moduleSymbol("recorder", "littlesdr_rec_json");
+        auto it = core::moduleManager.instances.find("Recorder");
+        if (!fn || it == core::moduleManager.instances.end()) { return "{}"; }
+        std::vector<char> buf(8192);
+        fn(it->second.instance, buf.data(), (int)buf.size());
+        return std::string(buf.data());
+    }
+
+    void recSet(const std::string& key, double v) {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        using Fn = void (*)(void*, const char*, double);
+        auto fn = (Fn)moduleSymbol("recorder", "littlesdr_rec_set");
+        auto it = core::moduleManager.instances.find("Recorder");
+        if (fn && it != core::moduleManager.instances.end()) { fn(it->second.instance, key.c_str(), v); }
+    }
+
+    // ------------------------------------------------------------------ SSTV
+    // Decoded from the radio's demodulated audio, taken before the volume (works muted)
+    namespace {
+        sstv::Decoder g_sstv;
+        dsp::stream<dsp::stereo_t>* g_sstvStream = nullptr;
+        std::thread g_sstvThread;
+
+        void sstvLoop(dsp::stream<dsp::stereo_t>* s) {
+            std::vector<float> mono;
+            float rate = sigpath::sinkManager.getStreamSampleRate(VFO_NAME);
+            auto lastRate = std::chrono::steady_clock::now();
+            while (true) {
+                int n = s->read();
+                if (n < 0) { break; }
+                mono.resize(n);
+                for (int i = 0; i < n; i++) { mono[i] = (s->readBuf[i].l + s->readBuf[i].r) * 0.5f; }
+                s->flush(); // release the splitter before decoding
+                auto now = std::chrono::steady_clock::now();
+                if (now - lastRate > std::chrono::seconds(1)) {
+                    rate = sigpath::sinkManager.getStreamSampleRate(VFO_NAME);
+                    lastRate = now;
+                }
+                g_sstv.feed(mono.data(), n, rate);
+            }
+        }
+    }
+
+    std::string sstvJson() {
+        auto st = g_sstv.status();
+        json j;
+        j["enabled"] = g_sstvStream != nullptr;
+        j["receiving"] = st.receiving;
+        j["mode"] = st.mode;
+        j["line"] = st.line;
+        j["width"] = st.width;
+        j["height"] = st.height;
+        j["version"] = st.version;
+        j["finished"] = st.finished;
+        j["finishedRows"] = st.finishedRows;
+        j["finishedMode"] = st.finishedMode;
+        j["lastComplete"] = st.lastComplete;
+        j["freq"] = st.freq;
+        j["slantPpm"] = st.slantPpm;
+        j["modes"] = json::array();
+        for (auto& m : sstv::modes()) { j["modes"].push_back(m.name); }
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+
+    void sstvSet(const std::string& key, double v) {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        if (key == "enabled") {
+            if (v != 0.0 && !g_sstvStream) {
+                g_sstvStream = sigpath::sinkManager.bindStream(VFO_NAME);
+                if (g_sstvStream) { g_sstvThread = std::thread(sstvLoop, g_sstvStream); }
+            }
+            else if (v == 0.0 && g_sstvStream) {
+                // Reader first: unbinding stops the splitter's writer, then deletes the stream
+                g_sstvStream->stopReader();
+                if (g_sstvThread.joinable()) { g_sstvThread.join(); }
+                sigpath::sinkManager.unbindStream(VFO_NAME, g_sstvStream);
+                g_sstvStream = nullptr;
+                g_sstv.reset();
+            }
+        }
+        else if (key == "start") { g_sstv.startManual((int)v); }
+        else if (key == "stop") { g_sstv.finishNow(); }
+    }
+
+    std::vector<uint32_t> sstvImage(int which, int& w, int& h) { return g_sstv.image(which, w, h); }
 
     std::vector<double> ctyLatLon(const std::vector<std::string>& calls) {
         std::vector<double> out;

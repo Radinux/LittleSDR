@@ -90,6 +90,15 @@ target_compile_definitions(kiwisdr_source PRIVATE KIWISDR_MAIN_CPP="${KIWI_DIR}/
 target_compile_options(kiwisdr_source PRIVATE ${SDRPP_MODULE_COMPILER_FLAGS})
 target_link_libraries(kiwisdr_source PRIVATE sdrpp_core log)
 
+# Recorder (audio / baseband WAV): upstream main.cpp included through modules/recorder_ext.cpp
+set(REC_DIR "${SDRPP_ROOT}/misc_modules/recorder/src")
+add_library(recorder SHARED modules/recorder_ext.cpp)
+set_target_properties(recorder PROPERTIES PREFIX "")
+target_include_directories(recorder PRIVATE "${REC_DIR}" "${SDRPP_ROOT}/decoder_modules/radio/src" "${SDRPP_CORE_ROOT}")
+target_compile_definitions(recorder PRIVATE RECORDER_MAIN_CPP="${REC_DIR}/main.cpp")
+target_compile_options(recorder PRIVATE ${SDRPP_MODULE_COMPILER_FLAGS})
+target_link_libraries(recorder PRIVATE sdrpp_core log)
+
 # SpyServer: upstream sources, with main.cpp included through modules/spyserver_ext.cpp
 set(SPY_DIR "${SDRPP_ROOT}/source_modules/spyserver_source/src")
 add_library(spyserver_source SHARED "${SPY_DIR}/spyserver_client.cpp" modules/spyserver_ext.cpp)
@@ -141,6 +150,7 @@ endforeach ()
 add_library(littlesdr SHARED
     jni_bridge.cpp
     engine.cpp
+    sstv/sstv_decoder.cpp
     smgui_json.cpp
     spectrum_renderer.cpp
     ${SHADER_HEADERS})

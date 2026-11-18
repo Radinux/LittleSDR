@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Documents/LittleSDR on the shared storage, or the app's own storage as a fallback -->
+    <external-path name="shared" path="Documents/LittleSDR/" />
+    <external-files-path name="app" path="LittleSDR/" />
+</paths>

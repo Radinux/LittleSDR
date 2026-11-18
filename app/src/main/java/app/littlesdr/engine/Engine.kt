@@ -257,6 +257,20 @@ object Engine {
         CwState.parse(NativeBridge.cwJson())
     }
 
+    suspend fun recorder(): RecorderState = call { RecorderState.parse(NativeBridge.recJson()) }
+    suspend fun recorderSet(key: String, value: Double): RecorderState = call {
+        NativeBridge.recSet(key, value)
+        RecorderState.parse(NativeBridge.recJson())
+    }
+    suspend fun recorderPath(dir: String) = call { NativeBridge.setOptionString("recorder.path", dir) }
+
+    suspend fun sstv(): SstvState = call { SstvState.parse(NativeBridge.sstvJson()) }
+    suspend fun sstvSet(key: String, value: Double): SstvState = call {
+        NativeBridge.sstvSet(key, value)
+        SstvState.parse(NativeBridge.sstvJson())
+    }
+    suspend fun sstvImage(which: Int): IntArray = call { NativeBridge.sstvImage(which) }
+
     suspend fun ft8(): Ft8State = call { Ft8State.parse(NativeBridge.ft8Json()) }
     suspend fun ft8Set(key: String, value: Double): Ft8State = call {
         NativeBridge.ft8Set(key, value)
