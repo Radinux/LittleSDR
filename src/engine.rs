@@ -342,7 +342,7 @@ impl Engine {
                     }
                 }
                 if let Some(r) = &mut self.rtty {
-                    r.set_polarity(*m != Mode::Lsb); // mark = higher RF frequency
+                    r.set_sideband(*m != Mode::Lsb); // mark = higher RF frequency
                 }
                 if let (Some(f), false) = (&self.front, same_front) {
                     self.front = Some(Front::new(f.rate, *m));
@@ -397,7 +397,7 @@ impl Engine {
                     for (k, v) in &self.rtty_cfg {
                         r.set(k, *v);
                     }
-                    r.set_polarity(self.mode != Mode::Lsb);
+                    r.set_sideband(self.mode != Mode::Lsb);
                     r
                 });
             }

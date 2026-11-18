@@ -7,7 +7,7 @@
 //! Live commands on stdin: freq <f> (or +1k / -500 to step), rate <r>, mode <m>, bw <Hz>,
 //!   pitch <Hz>, gain <dB>|auto, vol <0-2>, ds 0|1|2, bt on|off (bias-tee), stereo on|off,
 //!   nb on|off [threshold], fx <filter> on|off, fx <filter> <param> <value>, meter on|off,
-//!   rtty on|off, rtty shift|baud|center <v>, rtty rev|ita2|sql on|off, status, quit.
+//!   rtty on|off, rtty shift|baud|center <v>, rtty rev on|off|auto, rtty ita2|sql on|off, status, quit.
 //!   Filters: hp lp cw notch anotch nr eq agc limit
 
 use littlesdr::audio::{AudioSink, WavSink};
@@ -237,6 +237,7 @@ fn main() {
                 }
                 (key, Some(val)) => {
                     let x = match *val {
+                        "auto" => Some(-1.0),
                         "on" | "yes" => Some(1.0),
                         "off" | "no" => Some(0.0),
                         n => n.parse().ok(),
@@ -248,7 +249,7 @@ fn main() {
                         None => eprintln!("rtty {key} <number|on|off>"),
                     }
                 }
-                _ => eprintln!("rtty on|off  |  rtty shift 170 | baud 45.45 | center 2210 | rev on | ita2 on | sql off"),
+                _ => eprintln!("rtty on|off  |  rtty shift 170 | baud 45.45 | center 2210 | rev on|off|auto | ita2 on | sql off"),
             },
             "meter" | "sm" => {
                 let _ = eng_tx.send(EngineCtl::Meter(v.is_empty() || on(v)));

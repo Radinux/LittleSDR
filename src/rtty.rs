@@ -3,7 +3,10 @@
 //! Works on the demodulated audio (USB / LSB): the two tones are brought down around 0 Hz,
 //! low-passed and decimated, an FM discriminator gives the instantaneous frequency, a filter
 //! one half-bit long smooths it and a slicer decides mark / space. The slicer threshold
-//! follows the mark and space levels it sees, so a receiver tuned a little off still decodes.
+//! follows the two tone levels, so a receiver tuned a little off still decodes.
+//!
+//! Polarity differs between services (amateurs: mark = higher RF frequency; DWD weather: the
+//! reverse). By default both are framed in parallel and the one with valid stop bits wins.
 //!
 //! Defaults are amateur RTTY: 45.45 Bd, 170 Hz shift, tones around 2210 Hz in the audio.
 //! The mark is the higher RF frequency: higher audio tone in USB, lower in LSB.
@@ -42,45 +45,159 @@ enum Uart {
     Char { t: f64, code: u8, bit: u8 },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Polarity {
+    /// Both tried, the one that frames correctly wins
+    Auto,
+    /// Mark is the higher RF frequency (amateur convention)
+    Normal,
+    /// Mark is the lower RF frequency (e.g. DWD weather)
+    Reversed,
+}
+
+/// Start/stop framing and Baudot decoding for one polarity
+struct Framer {
+    /// Mark is the higher audio tone
+    mark_high: bool,
+    last: bool,
+    uart: Uart,
+    figs: bool,
+    text: String,
+    /// Share of recent characters with a valid stop bit: near 1 on a real signal with the
+    /// right polarity, around 0.5 on noise or the wrong polarity
+    quality: f32,
+    open: bool,
+    pending: VecDeque<char>,
+    chars: u64,
+    errors: u64,
+}
+
+impl Framer {
+    fn new(mark_high: bool) -> Framer {
+        Framer {
+            mark_high,
+            last: true,
+            uart: Uart::Idle,
+            figs: false,
+            text: String::new(),
+            quality: 0.0,
+            open: false,
+            pending: VecDeque::new(),
+            chars: 0,
+            errors: 0,
+        }
+    }
+
+    fn step(&mut self, high: bool, bit_len: f64, cfg: &FrameCfg) {
+        let mark = high == self.mark_high;
+        self.uart = match self.uart {
+            Uart::Idle => {
+                if self.last && !mark {
+                    Uart::Char { t: 0.0, code: 0, bit: 0 }
+                } else {
+                    Uart::Idle
+                }
+            }
+            Uart::Char { t, code, bit } => {
+                let t = t + 1.0;
+                // Sample points: middle of the start bit, of the 5 data bits, of the stop bit
+                if t < bit_len * (bit as f64 + 0.5) {
+                    Uart::Char { t, code, bit }
+                } else {
+                    match bit {
+                        0 if mark => Uart::Idle, // glitch, not a start bit
+                        0 => Uart::Char { t, code, bit: 1 },
+                        1..=5 => Uart::Char { t, code: code | ((mark as u8) << (bit - 1)), bit: bit + 1 },
+                        _ => {
+                            self.end_char(code, mark, cfg);
+                            Uart::Idle
+                        }
+                    }
+                }
+            }
+        };
+        self.last = mark;
+    }
+
+    fn end_char(&mut self, code: u8, stop_ok: bool, cfg: &FrameCfg) {
+        self.quality += 0.15 * ((stop_ok as u8 as f32) - self.quality);
+        if !cfg.squelch {
+            self.open = true;
+        } else if self.open && (self.quality < 0.6 || cfg.in_band < 0.3) {
+            self.open = false;
+            self.pending.clear();
+        } else if !self.open && self.quality > 0.8 && cfg.in_band > 0.45 {
+            self.open = true;
+            self.text.extend(self.pending.drain(..));
+        }
+        if !stop_ok {
+            self.errors += 1;
+            return;
+        }
+        self.chars += 1;
+        match code {
+            CODE_FIGS => self.figs = true,
+            CODE_LTRS => self.figs = false,
+            _ => {
+                let figs = if cfg.ita2 { &FIGS_ITA2 } else { &FIGS };
+                let c = if self.figs { figs[code as usize] } else { LTRS[code as usize] };
+                if c == ' ' && cfg.usos {
+                    self.figs = false;
+                }
+                match c {
+                    '\0' | '\u{7}' | '\r' => {}
+                    c if self.open => self.text.push(c),
+                    c => {
+                        // Held until the squelch opens: the start of a message isn't lost
+                        self.pending.push_back(c);
+                        if self.pending.len() > 16 {
+                            self.pending.pop_front();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct FrameCfg {
+    squelch: bool,
+    in_band: f32,
+    ita2: bool,
+    usos: bool,
+}
+
 pub struct Rtty {
     pub center: f64,
     pub shift: f64,
     pub baud: f64,
-    /// Mark above the center frequency in the audio (USB); false in LSB
-    pub mark_high: bool,
-    /// Manual polarity inversion, on top of the sideband
-    pub reverse: bool,
+    /// Sideband: mark (higher RF) is the higher audio tone in USB, the lower in LSB
+    pub usb: bool,
+    pub polarity: Polarity,
     /// Unshift on space: a space after figures returns to letters (common practice)
     pub usos: bool,
     /// International ITA2 figures instead of the US amateur variant
     pub ita2: bool,
+    /// Squelch enabled (`sql` parameter)
+    pub squelch: bool,
     nco: Nco,
     lp: DecimFir<C32>,
     prev: C32,
     smooth: VecDeque<f32>,
     smooth_sum: f32,
-    mark_lvl: f32,
-    space_lvl: f32,
-    last: bool,
-    uart: Uart,
-    figs: bool,
-    /// Characters decoded since the last `take_text`
-    text: String,
-    /// Squelch: share of recent characters with a valid stop bit. On a real signal it stays
-    /// near 1, on noise around 0.5. Characters wait in `pending` until it is convincing.
-    quality: f32,
+    /// Levels of the higher and lower tone (Hz from `center`), followed so that a receiver
+    /// tuned a little off still decodes
+    hi_lvl: f32,
+    lo_lvl: f32,
     /// Share of the 300-3000 Hz power that falls on the two tones (~1 on RTTY, ~0.1 on noise)
     in_band: f32,
     band_pow: f32,
     wide_pow: f32,
     wide_nco: Nco,
     wide_lp: DecimFir<C32>,
-    /// Squelch enabled (`sql` parameter)
-    pub squelch: bool,
-    open: bool,
-    pending: VecDeque<char>,
-    pub chars: u64,
-    pub errors: u64,
+    /// [mark = higher audio tone, mark = lower audio tone]
+    framers: [Framer; 2],
+    active: usize,
 }
 
 impl Rtty {
@@ -89,32 +206,25 @@ impl Rtty {
             center: 2_210.0,
             shift: 170.0,
             baud: 45.45,
-            mark_high: true,
-            reverse: false,
+            usb: true,
+            polarity: Polarity::Auto,
             usos: true,
             ita2: false,
+            squelch: true,
             nco: Nco::new(),
             lp: DecimFir::new(vec![1.0], DECIM),
             prev: C32::new(1.0, 0.0),
             smooth: VecDeque::new(),
             smooth_sum: 0.0,
-            mark_lvl: 85.0,
-            space_lvl: -85.0,
-            last: true,
-            uart: Uart::Idle,
-            figs: false,
-            text: String::new(),
-            quality: 0.0,
+            hi_lvl: 85.0,
+            lo_lvl: -85.0,
             in_band: 0.0,
             band_pow: 0.0,
             wide_pow: 1e-12,
             wide_nco: Nco::new(),
             wide_lp: DecimFir::new(lowpass(1_400.0 / AUDIO_RATE, 300.0 / AUDIO_RATE), DECIM),
-            squelch: true,
-            open: false,
-            pending: VecDeque::new(),
-            chars: 0,
-            errors: 0,
+            framers: [Framer::new(true), Framer::new(false)],
+            active: 0,
         };
         r.configure();
         r
@@ -128,10 +238,11 @@ impl Rtty {
         let n = ((RATE / self.baud) * 0.5).round().max(1.0) as usize;
         self.smooth = std::iter::repeat(0.0).take(n).collect();
         self.smooth_sum = 0.0;
-        self.mark_lvl = half as f32;
-        self.space_lvl = -half as f32;
+        self.hi_lvl = half as f32;
+        self.lo_lvl = -half as f32;
     }
 
+    /// `rev`: < 0 auto, 0 normal, > 0 reversed
     pub fn set(&mut self, key: &str, v: f64) -> bool {
         match key {
             "shift" => self.shift = v.clamp(50.0, 1000.0),
@@ -141,9 +252,13 @@ impl Rtty {
                 return true;
             }
             "rev" | "reverse" => {
-                self.reverse = v != 0.0;
-                let mh = self.mark_high;
-                self.set_polarity(mh);
+                self.polarity = if v < 0.0 {
+                    Polarity::Auto
+                } else if v == 0.0 {
+                    Polarity::Normal
+                } else {
+                    Polarity::Reversed
+                };
                 return true;
             }
             "ita2" => {
@@ -160,23 +275,56 @@ impl Rtty {
         true
     }
 
+    /// Sideband of the receiver (the mark is the higher RF frequency)
+    pub fn set_sideband(&mut self, usb: bool) {
+        self.usb = usb;
+    }
+
+    /// The framer matching a forced polarity
+    fn forced(&self) -> Option<usize> {
+        let normal = if self.usb { 0 } else { 1 }; // normal: mark = higher RF
+        match self.polarity {
+            Polarity::Auto => None,
+            Polarity::Normal => Some(normal),
+            Polarity::Reversed => Some(1 - normal),
+        }
+    }
+
+    /// Polarity currently decoded
+    pub fn decoding(&self) -> Polarity {
+        if (self.active == 0) == self.usb {
+            Polarity::Normal
+        } else {
+            Polarity::Reversed
+        }
+    }
+
     pub fn describe(&self) -> String {
+        let f = &self.framers[self.active];
+        let pol = match (self.polarity, self.decoding()) {
+            (Polarity::Auto, Polarity::Normal) => "auto: normal",
+            (Polarity::Auto, _) => "auto: reversed",
+            (Polarity::Normal, _) => "normal",
+            (Polarity::Reversed, _) => "reversed",
+        };
         format!(
-            "RTTY {:.2} Bd, shift {:.0} Hz, center {:.0} Hz{}{}, {} chars, {} framing errors, squelch {} (tones {:.0} % of the band)",
+            "RTTY {:.2} Bd, shift {:.0} Hz, center {:.0} Hz, polarity {}{}, {} chars, {} framing errors, squelch {} (tones {:.0} % of the band)",
             self.baud,
             self.shift,
             self.center,
-            if self.reverse { ", reversed" } else { "" },
+            pol,
             if self.ita2 { ", ITA2" } else { "" },
-            self.chars,
-            self.errors,
-            if !self.squelch { "off" } else if self.open { "open" } else { "closed" },
+            f.chars,
+            f.errors,
+            if !self.squelch { "off" } else if f.open { "open" } else { "closed" },
             self.in_band * 100.0
         )
     }
 
     pub fn take_text(&mut self) -> String {
-        std::mem::take(&mut self.text)
+        let a = self.active;
+        self.framers[1 - a].text.clear();
+        std::mem::take(&mut self.framers[a].text)
     }
 
     pub fn process(&mut self, audio: &[f32]) {
@@ -197,122 +345,52 @@ impl Rtty {
             self.wide_pow += a * (r.norm_sqr() - self.wide_pow);
         }
         self.in_band = (self.band_pow / self.wide_pow.max(1e-12)).min(1.0);
+        let cfg = FrameCfg { squelch: self.squelch, in_band: self.in_band, ita2: self.ita2, usos: self.usos };
+        let bit_len = RATE / self.baud;
         let k = (RATE / (2.0 * PI)) as f32;
+        let forced = self.forced();
         for s in d {
             let f = (s * self.prev.conj()).arg() * k; // Hz from the center
             self.prev = s;
             self.smooth_sum += f - self.smooth.pop_front().unwrap();
             self.smooth.push_back(f);
             let f = self.smooth_sum / self.smooth.len() as f32;
-            self.step(f);
-        }
-    }
-
-    fn is_mark(&self, f: f32) -> bool {
-        let thr = (self.mark_lvl + self.space_lvl) / 2.0;
-        let high = f > thr;
-        let mark_above = self.mark_lvl > self.space_lvl;
-        high == mark_above
-    }
-
-    fn step(&mut self, f: f32) {
-        let mark = self.is_mark(f);
-        let bit_len = RATE / self.baud;
-        self.uart = match self.uart {
-            Uart::Idle => {
-                if self.last && !mark {
-                    Uart::Char { t: 0.0, code: 0, bit: 0 }
-                } else {
-                    Uart::Idle
+            let high = f > (self.hi_lvl + self.lo_lvl) / 2.0;
+            self.learn(f, high);
+            for (i, fr) in self.framers.iter_mut().enumerate() {
+                if forced.map_or(true, |w| w == i) {
+                    fr.step(high, bit_len, &cfg);
                 }
             }
-            Uart::Char { t, code, bit } => {
-                let t = t + 1.0;
-                // Sample points: middle of the start bit, of the 5 data bits, of the stop bit
-                let at = bit_len * (bit as f64 + 0.5);
-                if t < at {
-                    Uart::Char { t, code, bit }
+        }
+        self.active = match forced {
+            Some(w) => w,
+            None => {
+                // Switch only to a framer whose squelch is open and that frames clearly better
+                let (a, b) = (self.active, 1 - self.active);
+                let (fa, fb) = (&self.framers[a], &self.framers[b]);
+                if fb.open && (!fa.open || fb.quality > fa.quality + 0.15) {
+                    b
                 } else {
-                    self.learn(f, mark);
-                    match bit {
-                        0 if mark => Uart::Idle, // glitch, not a start bit
-                        0 => Uart::Char { t, code, bit: 1 },
-                        1..=5 => Uart::Char { t, code: code | ((mark as u8) << (bit - 1)), bit: bit + 1 },
-                        _ => {
-                            self.quality += 0.15 * ((mark as u8 as f32) - self.quality);
-                            if !self.squelch {
-                                self.open = true;
-                            } else if self.open && (self.quality < 0.6 || self.in_band < 0.3) {
-                                self.open = false;
-                                self.pending.clear();
-                            } else if !self.open && self.quality > 0.8 && self.in_band > 0.45 {
-                                self.open = true;
-                                self.text.extend(self.pending.drain(..));
-                            }
-                            if mark {
-                                self.emit(code);
-                            } else {
-                                self.errors += 1;
-                            }
-                            Uart::Idle
-                        }
-                    }
+                    a
                 }
             }
         };
-        self.last = mark;
     }
 
-    /// Follows the mark and space levels (receiver mistuning) from the sampled bits
-    fn learn(&mut self, f: f32, mark: bool) {
-        let a = 0.05;
-        if mark {
-            self.mark_lvl += a * (f - self.mark_lvl);
+    /// Follows the two tone levels, kept at least a third of the shift apart
+    fn learn(&mut self, f: f32, high: bool) {
+        let a = (1.0 / (RATE * 0.25)) as f32;
+        if high {
+            self.hi_lvl += a * (f - self.hi_lvl);
         } else {
-            self.space_lvl += a * (f - self.space_lvl);
+            self.lo_lvl += a * (f - self.lo_lvl);
         }
-        // Keep them apart by at least a third of the shift, on the expected sides
         let half = (self.shift / 2.0) as f32;
-        let sign = if self.mark_high != self.reverse { 1.0 } else { -1.0 };
-        let mid = (self.mark_lvl + self.space_lvl) / 2.0;
-        if (self.mark_lvl - self.space_lvl) * sign < half * 0.66 {
-            self.mark_lvl = mid + sign * half * 0.33;
-            self.space_lvl = mid - sign * half * 0.33;
-        }
-    }
-
-    /// Resets the expected levels for the current sideband / polarity
-    pub fn set_polarity(&mut self, mark_high: bool) {
-        self.mark_high = mark_high;
-        let sign = if self.mark_high != self.reverse { 1.0 } else { -1.0 };
-        let half = (self.shift / 2.0) as f32;
-        self.mark_lvl = sign * half;
-        self.space_lvl = -sign * half;
-    }
-
-    fn emit(&mut self, code: u8) {
-        self.chars += 1;
-        match code {
-            CODE_FIGS => self.figs = true,
-            CODE_LTRS => self.figs = false,
-            _ => {
-                let figs = if self.ita2 { &FIGS_ITA2 } else { &FIGS };
-                let c = if self.figs { figs[code as usize] } else { LTRS[code as usize] };
-                if c == ' ' && self.usos {
-                    self.figs = false;
-                }
-                match c {
-                    '\0' | '\u{7}' | '\r' => {}
-                    c if self.open => self.text.push(c),
-                    c => {
-                        // Held until the squelch opens: the start of a message isn't lost
-                        self.pending.push_back(c);
-                        if self.pending.len() > 16 {
-                            self.pending.pop_front();
-                        }
-                    }
-                }
-            }
+        let mid = (self.hi_lvl + self.lo_lvl) / 2.0;
+        if self.hi_lvl - self.lo_lvl < half * 0.66 {
+            self.hi_lvl = mid + half * 0.33;
+            self.lo_lvl = mid - half * 0.33;
         }
     }
 }
@@ -412,6 +490,23 @@ mod tests {
     }
 
     #[test]
+    fn finds_the_polarity_by_itself() {
+        // Reversed signal (mark = lower tone in USB), polarity left on auto
+        let a = modulate(&encode(MSG), 2_125.0, 2_295.0, 45.45);
+        let mut r = Rtty::new();
+        for ch in a.chunks(1000) {
+            r.process(ch);
+        }
+        assert_eq!(r.take_text(), MSG);
+        assert_eq!(r.decoding(), Polarity::Reversed);
+        // Forced to the wrong polarity it can't be read (some garbage may frame by chance)
+        let got = decode(&a, |r| {
+            r.set("rev", 0.0);
+        });
+        assert_ne!(got, MSG);
+    }
+
+    #[test]
     fn decodes_usb_rtty() {
         let a = modulate(&encode(MSG), 2_295.0, 2_125.0, 45.45);
         assert_eq!(decode(&a, |_| {}), MSG);
@@ -422,7 +517,7 @@ mod tests {
         // LSB: mark is the lower audio tone; receiver 40 Hz off; noise ~ -6 dB SNR in 3 kHz
         let mut a = modulate(&encode(MSG), 2_125.0 + 40.0, 2_295.0 + 40.0, 45.45);
         add_noise(&mut a, 0.6);
-        let got = decode(&a, |r| r.set_polarity(false));
+        let got = decode(&a, |r| r.set_sideband(false));
         assert_eq!(got, MSG);
     }
 
@@ -481,7 +576,7 @@ mod tests {
             r.set("ita2", 1.0);
             r.set("shift", 450.0);
             r.set("baud", 50.0);
-            r.set_polarity(true);
+            r.set_sideband(true);
         });
         assert_eq!(got, msg);
     }
