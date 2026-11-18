@@ -29,6 +29,8 @@ pub enum SourceCtl {
     Gain(Option<f32>),
     /// RTL-SDR direct sampling for HF on dongles without upconverter: 0 off, 1 I, 2 Q branch
     DirectSampling(u8),
+    /// 4.5 V on the antenna input, for active antennas (loops, LNAs)
+    BiasTee(bool),
     Stop,
 }
 
@@ -39,6 +41,7 @@ pub struct SourceConfig {
     pub center: u64,
     pub gain: Option<f32>,
     pub direct_sampling: u8,
+    pub bias_tee: bool,
 }
 
 pub struct SourceHandle {

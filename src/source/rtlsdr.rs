@@ -26,6 +26,7 @@ extern "C" {
     fn rtlsdr_set_tuner_gain_mode(dev: *mut c_void, manual: c_int) -> c_int;
     fn rtlsdr_set_tuner_gain(dev: *mut c_void, gain: c_int) -> c_int;
     fn rtlsdr_get_tuner_gains(dev: *mut c_void, gains: *mut c_int) -> c_int;
+    fn rtlsdr_set_bias_tee(dev: *mut c_void, on: c_int) -> c_int;
     fn rtlsdr_set_direct_sampling(dev: *mut c_void, on: c_int) -> c_int;
     fn rtlsdr_reset_buffer(dev: *mut c_void) -> c_int;
     fn rtlsdr_read_async(dev: *mut c_void, cb: AsyncCb, ctx: *mut c_void, buf_num: u32, buf_len: u32) -> c_int;
@@ -120,7 +121,11 @@ impl Source for RtlSdr {
                 rtlsdr_set_direct_sampling(dev.0, cfg.direct_sampling as c_int);
             }
             rtlsdr_set_center_freq(dev.0, cfg.center as u32);
+            if cfg.bias_tee {
+                rtlsdr_set_bias_tee(dev.0, 1);
+            }
         }
+        let mut bias_on = cfg.bias_tee;
         dev.set_gain(cfg.gain);
         unsafe { rtlsdr_reset_buffer(dev.0) };
 
@@ -163,6 +168,10 @@ impl Source for RtlSdr {
                     shared.center.store(f, Ordering::Relaxed);
                 }
                 Ok(SourceCtl::Gain(g)) => dev.set_gain(g),
+                Ok(SourceCtl::BiasTee(on)) => {
+                    unsafe { rtlsdr_set_bias_tee(dev.0, on as c_int) };
+                    bias_on = on;
+                }
                 Ok(SourceCtl::DirectSampling(m)) => unsafe {
                     rtlsdr_set_direct_sampling(dev.0, m as c_int);
                     // The tuner is re-enabled / bypassed: the frequency must be set again
@@ -185,6 +194,10 @@ impl Source for RtlSdr {
         }
         unsafe { rtlsdr_cancel_async(dev.0) };
         let _ = reader.join();
+        if bias_on {
+            // The dongle keeps the voltage after close: never leave it on behind us
+            unsafe { rtlsdr_set_bias_tee(dev.0, 0) };
+        }
         unsafe { rtlsdr_close(dev.0) };
         Ok(())
     }

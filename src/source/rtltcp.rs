@@ -50,6 +50,9 @@ impl Source for RtlTcp {
         cmd(&mut s, 0x02, rate).map_err(io)?;
         cmd(&mut s, 0x01, center as u32).map_err(io)?;
         gain(&mut s, cfg.gain).map_err(io)?;
+        if cfg.bias_tee {
+            cmd(&mut s, 0x0e, 1).map_err(io)?;
+        }
         if cfg.direct_sampling > 0 {
             cmd(&mut s, 0x09, cfg.direct_sampling as u32).map_err(io)?;
         }
@@ -71,6 +74,7 @@ impl Source for RtlTcp {
                         cmd(&mut s, 0x01, center as u32).map_err(io)?;
                     }
                     Ok(SourceCtl::Gain(g)) => gain(&mut s, g).map_err(io)?,
+                    Ok(SourceCtl::BiasTee(on)) => cmd(&mut s, 0x0e, on as u32).map_err(io)?,
                     Ok(SourceCtl::DirectSampling(m)) => {
                         cmd(&mut s, 0x09, m as u32).map_err(io)?;
                         cmd(&mut s, 0x01, center as u32).map_err(io)?;

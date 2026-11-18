@@ -1,12 +1,12 @@
 //! Command-line LittleSDR: listen with the engine, change settings live.
 //!
 //!   littlesdr [--usb [N] | --rtltcp HOST:PORT] [--freq 96.5M] [--rate 2.4M]
-//!             [--mode wfm|nfm|am|usb|lsb|cw] [--gain DB|auto] [--ds 0|1|2] [--wav out.wav]
-//!             [--no-audio] [--script "3s rate 1.024M; 6s quit"]
+//!             [--mode wfm|nfm|am|usb|lsb|cw] [--gain DB|auto] [--ds 0|1|2] [--bias-tee]
+//!             [--wav out.wav] [--no-audio] [--script "3s rate 1.024M; 6s quit"]
 //!
 //! Live commands on stdin: freq <f> (or +1k / -500 to step), rate <r>, mode <m>, bw <Hz>,
-//!   pitch <Hz>, gain <dB>|auto, vol <0-2>, ds 0|1|2, stereo on|off, nb on|off [threshold],
-//!   fx <filter> on|off, fx <filter> <param> <value>, status, quit.
+//!   pitch <Hz>, gain <dB>|auto, vol <0-2>, ds 0|1|2, bt on|off (bias-tee), stereo on|off,
+//!   nb on|off [threshold], fx <filter> on|off, fx <filter> <param> <value>, status, quit.
 //!   Filters: hp lp cw notch anotch nr eq agc limit
 
 use littlesdr::audio::{AudioSink, WavSink};
@@ -48,6 +48,18 @@ enum Cmd {
     Line(String),
 }
 
+/// Ctrl+C / kill: set here, turned into a clean "quit" (the source then switches the
+/// bias-tee off and closes the dongle instead of leaving it powered).
+static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_signal(_: i32) {
+    INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+extern "C" {
+    fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut usb: Option<u32> = Some(0);
@@ -57,6 +69,7 @@ fn main() {
     let mut mode = Mode::Wfm;
     let mut gain: Option<f32> = None;
     let mut ds: u8 = 0;
+    let mut bias_tee = false;
     let mut wav: Option<String> = None;
     let mut audio = cfg!(feature = "audio");
     let mut script = String::new();
@@ -71,6 +84,7 @@ fn main() {
             "--rate" => rate = args.next().and_then(|v| parse_hz(&v)).expect("--rate"),
             "--mode" => mode = args.next().and_then(|v| Mode::parse(&v)).expect("--mode wfm|nfm|am|usb|lsb|cw"),
             "--gain" => gain = args.next().and_then(|v| v.parse().ok()),
+            "--bias-tee" => bias_tee = true,
             "--ds" => ds = args.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--wav" => wav = args.next(),
             "--no-audio" => audio = false,
@@ -106,7 +120,7 @@ fn main() {
     };
     let center = plan(freq, rate);
     let (iq_tx, iq_rx) = mpsc::sync_channel(64);
-    let src = source::spawn(src, SourceConfig { rate: rate as u32, center, gain, direct_sampling: ds }, iq_tx);
+    let src = source::spawn(src, SourceConfig { rate: rate as u32, center, gain, direct_sampling: ds, bias_tee }, iq_tx);
 
     // Output
     let sink: Box<dyn AudioSink> = match (&wav, audio) {
@@ -154,6 +168,20 @@ fn main() {
                 if tx.send(Cmd::Line(c.to_string())).is_err() {
                     break;
                 }
+            }
+        });
+    }
+    {
+        unsafe {
+            signal(2, on_signal); // SIGINT
+            signal(15, on_signal); // SIGTERM
+        }
+        let tx = cmd_tx.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(100));
+            if INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = tx.send(Cmd::Line("quit".into()));
+                break;
             }
         });
     }
@@ -233,6 +261,10 @@ fn main() {
                     let _ = eng_tx.send(EngineCtl::CwPitch(p));
                 }
             }
+            "bt" => {
+                let _ = src.ctl.send(SourceCtl::BiasTee(on(v)));
+                eprintln!("[littlesdr] bias-tee {}", if on(v) { "on (4.5 V on the antenna)" } else { "off" });
+            }
             "ds" => {
                 let _ = src.ctl.send(SourceCtl::DirectSampling(v.parse().unwrap_or(0)));
             }
@@ -246,10 +278,11 @@ fn main() {
             }
             "quit" | "q" | "exit" => break,
             "" => {}
-            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | stereo | nb | fx | status | quit  ({other}?)"),
+            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | stereo | nb | fx | status | quit  ({other}?)"),
         }
     }
     let _ = src.ctl.send(SourceCtl::Stop);
     let _ = eng_tx.send(EngineCtl::Stop);
     let _ = eng.join();
+    let _ = src.thread.join(); // dongle released (bias-tee off) before we exit
 }

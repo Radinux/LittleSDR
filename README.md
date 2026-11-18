@@ -16,6 +16,7 @@ stopping the dongle or cutting the sound.
 - Tuning by absolute frequency: inside the captured band only the VFO moves, the dongle is
   retuned only when the channel leaves the clean part of the band or nears the DC spike
 - HF: RTL-SDR Blog V4 upconverter handled by the driver; direct sampling (`--ds 2`) for others
+- Bias-tee for active antennas (`--bias-tee`, `bt on|off`), always switched off on exit (Ctrl+C included)
 - Impulse noise blanker on the raw IQ (ignition, electric fences)
 - Switchable audio filters: high-pass, low-pass, CW peak, manual notch, automatic notch (LMS),
   noise reduction (spectral), equalizer, audio AGC, limiter. Every filter runs all the time and
@@ -30,7 +31,7 @@ stopping the dongle or cutting the sound.
 cargo build --release
 ./target/release/littlesdr --freq 96.5M            # RTL-SDR on USB, WFM
 ./target/release/littlesdr --rtltcp 127.0.0.1:1234 --freq 145.8M --mode nfm
-./target/release/littlesdr --freq 7.1M --mode lsb --gain 40   # 40 m, Blog V4
+./target/release/littlesdr --freq 7.1M --mode lsb --gain 40 --bias-tee   # 40 m, active loop
 ```
 
 Live commands on stdin: `freq 101.1M` (`freq +500` / `freq -1k` to step), `rate 1.024M`,
