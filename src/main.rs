@@ -7,7 +7,7 @@
 //! Live commands on stdin: freq <f> (or +1k / -500 to step), rate <r>, mode <m>, bw <Hz>,
 //!   pitch <Hz>, gain <dB>|auto, vol <0-2>, ds 0|1|2, bt on|off (bias-tee), stereo on|off,
 //!   nb on|off [threshold], fx <filter> on|off, fx <filter> <param> <value>, meter on|off,
-//!   status, quit.
+//!   rtty on|off, rtty shift|baud|center <v>, rtty rev|ita2|sql on|off, status, quit.
 //!   Filters: hp lp cw notch anotch nr eq agc limit
 
 use littlesdr::audio::{AudioSink, WavSink};
@@ -231,6 +231,25 @@ fn main() {
                 },
                 _ => eprintln!("fx <filter> on|off  |  fx <filter> <param> <value>"),
             },
+            "rtty" => match (v, words.get(2)) {
+                ("on" | "off" | "", None) => {
+                    let _ = eng_tx.send(EngineCtl::Rtty(v != "off"));
+                }
+                (key, Some(val)) => {
+                    let x = match *val {
+                        "on" | "yes" => Some(1.0),
+                        "off" | "no" => Some(0.0),
+                        n => n.parse().ok(),
+                    };
+                    match x {
+                        Some(x) => {
+                            let _ = eng_tx.send(EngineCtl::RttyParam(key.to_string(), x));
+                        }
+                        None => eprintln!("rtty {key} <number|on|off>"),
+                    }
+                }
+                _ => eprintln!("rtty on|off  |  rtty shift 170 | baud 45.45 | center 2210 | rev on | ita2 on | sql off"),
+            },
             "meter" | "sm" => {
                 let _ = eng_tx.send(EngineCtl::Meter(v.is_empty() || on(v)));
             }
@@ -295,7 +314,7 @@ fn main() {
             }
             "quit" | "q" | "exit" => break,
             "" => {}
-            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | meter | stereo | nb | fx | status | quit  ({other}?)"),
+            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | meter | rtty | stereo | nb | fx | status | quit  ({other}?)"),
         }
     }
     let _ = src.ctl.send(SourceCtl::Stop);

@@ -18,6 +18,7 @@ use crate::audio_fx::AudioChain;
 use crate::dsp::{lowpass, Deemphasis, DecimFir, FmDemod, Frame, Interp, Nco, NoiseBlanker, C32};
 use crate::linear::{AmDemod, Sideband, SsbDemod, SSB_LOW_CUT};
 use crate::meter::{Meter, Reading};
+use crate::rtty::Rtty;
 use crate::source::IqBlock;
 use crate::stereo::StereoDecoder;
 use std::collections::VecDeque;
@@ -126,6 +127,10 @@ pub enum EngineCtl {
     Param(String, String, f32),
     /// Print the signal meter every second on stderr
     Meter(bool),
+    /// RTTY decoder on the demodulated audio (USB / LSB)
+    Rtty(bool),
+    /// RTTY parameter: shift, baud, center, rev, ita2
+    RttyParam(String, f64),
     /// Print the state on stderr
     Status,
     Stop,
@@ -232,6 +237,8 @@ pub struct Engine {
     pub echo: bool,
     meter: Meter,
     pub meter_echo: bool,
+    pub rtty: Option<Rtty>,
+    rtty_cfg: Vec<(String, f64)>, // kept so the decoder comes back as it was
     delay: VecDeque<Frame>,
     mute: usize,    // audio samples still muted
     fade_in: usize, // ramp position after a mute (0 = none)
@@ -259,6 +266,8 @@ impl Engine {
             echo: false,
             meter: Meter::new(),
             meter_echo: false,
+            rtty: None,
+            rtty_cfg: Vec::new(),
             delay: VecDeque::with_capacity(DELAY * 4),
             mute: 0,
             fade_in: 0,
@@ -295,6 +304,11 @@ impl Engine {
             }
             EngineCtl::CwPitch(_) => format!("CW pitch {:.0} Hz", self.pitch),
             EngineCtl::Meter(on) => format!("meter {}", if *on { "on" } else { "off" }),
+            EngineCtl::Rtty(_) | EngineCtl::RttyParam(..) => match (&self.rtty, c) {
+                (Some(r), _) => format!("{} (decoded text goes to stdout)", r.describe()),
+                (None, EngineCtl::RttyParam(k, v)) => format!("RTTY {k} {v}: kept for when RTTY is on"),
+                (None, _) => "RTTY off".into(),
+            },
             EngineCtl::Stereo(_) => format!("stereo {}", if self.stereo { "on" } else { "off" }),
             EngineCtl::Blanker(..) => match &self.blanker {
                 Some(b) => format!("noise blanker on (x{:.0})", b.threshold),
@@ -326,6 +340,9 @@ impl Engine {
                         self.back = Back::new(*m, self.stereo, self.bandwidth[m.index()], self.pitch);
                         self.soft_switch(5.0);
                     }
+                }
+                if let Some(r) = &mut self.rtty {
+                    r.set_polarity(*m != Mode::Lsb); // mark = higher RF frequency
                 }
                 if let (Some(f), false) = (&self.front, same_front) {
                     self.front = Some(Front::new(f.rate, *m));
@@ -374,6 +391,25 @@ impl Engine {
                 }
             }
             EngineCtl::Meter(on) => self.meter_echo = *on,
+            EngineCtl::Rtty(on) => {
+                self.rtty = on.then(|| {
+                    let mut r = Rtty::new();
+                    for (k, v) in &self.rtty_cfg {
+                        r.set(k, *v);
+                    }
+                    r.set_polarity(self.mode != Mode::Lsb);
+                    r
+                });
+            }
+            EngineCtl::RttyParam(k, v) => {
+                self.rtty_cfg.retain(|(key, _)| key != k);
+                self.rtty_cfg.push((k.clone(), *v));
+                if let Some(r) = &mut self.rtty {
+                    if !r.set(k, *v) {
+                        eprintln!("[engine] unknown RTTY parameter '{k}' (shift, baud, center, rev, ita2, sql)");
+                    }
+                }
+            }
             EngineCtl::Status => eprintln!("{}", self.status()),
             _ => {}
         }
@@ -406,6 +442,9 @@ impl Engine {
         s += &format!(", audio latency {:.1} ms\n", self.fx.latency() as f64 / AUDIO_RATE * 1000.0);
         if let Some(r) = self.reading() {
             s += &format!("[meter] {}\n", Self::format_reading(&r));
+        }
+        if let Some(r) = &self.rtty {
+            s += &format!("[rtty] {}\n", r.describe());
         }
         s + &self.fx.describe()
     }
@@ -473,6 +512,11 @@ impl Engine {
         front.frac.process(&dec, &mut ifs);
         let mut audio = Vec::with_capacity(ifs.len() / 4 + 2);
         self.back.process(&ifs, &mut audio);
+        if let Some(r) = &mut self.rtty {
+            // Decoders take the demodulated sound, before the listening filters
+            let mono: Vec<f32> = audio.iter().map(|f| f.l).collect();
+            r.process(&mono);
+        }
         self.fx.process(&mut audio);
 
         // Volume, mute / fade-in, then the delay line
@@ -494,6 +538,11 @@ impl Engine {
             out.push(self.delay.pop_front().unwrap());
         }
         self.stats.audio_samples += out.len() as u64;
+    }
+
+    /// Text decoded since the last call (RTTY)
+    pub fn take_text(&mut self) -> String {
+        self.rtty.as_mut().map(|r| r.take_text()).unwrap_or_default()
     }
 
     pub fn mode(&self) -> Mode {
@@ -526,6 +575,13 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
                 out.clear();
                 engine.process(b, &mut out);
                 sink.write(&out);
+                let text = engine.take_text();
+                if !text.is_empty() {
+                    use std::io::Write;
+                    let mut so = std::io::stdout().lock();
+                    let _ = so.write_all(text.as_bytes());
+                    let _ = so.flush();
+                }
                 if engine.stats.rebuilds != before && before > 0 {
                     eprintln!("[engine] rate {:.0} S/s: front end rebuilt in {} µs, audio kept running", rate, engine.stats.last_rebuild_us);
                 }

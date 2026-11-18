@@ -16,6 +16,9 @@ stopping the dongle or cutting the sound.
 - Tuning by absolute frequency: inside the captured band only the VFO moves, the dongle is
   retuned only when the channel leaves the clean part of the band or nears the DC spike
 - HF: RTL-SDR Blog V4 upconverter handled by the driver; direct sampling (`--ds 2`) for others
+- RTTY decoder on USB / LSB audio: any baud rate and shift (45.45 Bd / 170 Hz amateur,
+  50 Bd / 450 Hz weather), US or ITA2 figures, follows a mistuned signal, squelch (framing
+  quality + energy on the tones) so noise prints nothing; text on stdout
 - Signal meter: channel power and noise floor (dBFS), SNR, ADC clipping; warns unasked when
   the gain is clearly too high (ADC clipping) or too low (`meter on` prints it every second)
 - Bias-tee for active antennas (`--bias-tee`, `bt on|off`), always switched off on exit (Ctrl+C included)
@@ -39,13 +42,15 @@ cargo build --release
 Live commands on stdin: `freq 101.1M` (`freq +500` / `freq -1k` to step), `rate 1.024M`,
 `mode wfm|nfm|am|usb|lsb|cw`, `bw 2.4k`, `pitch 650`, `gain 30` / `gain auto`, `ds 0|1|2`,
 `vol 1.2`, `stereo on|off`, `nb on|off [threshold]`, `fx nr on`, `fx notch hz 1200`, `status`,
-`meter on|off`, `quit`. `--script "5s rate 1.024M; 10s quit"` runs commands at given times,
+`meter on|off`, `rtty on|off`, `rtty shift 450`, `rtty baud 50`, `rtty ita2 on`, `rtty rev on`,
+`quit`. `--script "5s rate 1.024M; 10s quit"` runs commands at given times,
 `--wav out.wav` records instead of playing.
 
 ## Layout
 
 - `src/dsp.rs` — FIR design, decimator, crossfading filter swap, polyphase upsampler, resampler,
   NCO, FM discriminator, de-emphasis, noise blanker (+ tests)
+- `src/rtty.rs` — RTTY decoder (+ tests, including through the whole engine)
 - `src/meter.rs` — signal meter and ADC overload detection (+ tests)
 - `src/linear.rs` — AM, SSB and CW demodulators, IF AGC (+ tests)
 - `src/stereo.rs` — broadcast FM stereo decoder

@@ -9,5 +9,6 @@ pub mod dsp;
 pub mod engine;
 pub mod linear;
 pub mod meter;
+pub mod rtty;
 pub mod source;
 pub mod stereo;
