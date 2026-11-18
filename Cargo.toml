@@ -22,6 +22,7 @@ audio = ["dep:cpal"]
 
 [dependencies]
 cpal = { version = "0.15", optional = true }
+rustfft = "6"
 
 [profile.dev]
 opt-level = 2 # DSP is unusable unoptimized

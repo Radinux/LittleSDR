@@ -58,10 +58,49 @@ impl Mul<f32> for C32 {
     }
 }
 
-/// What the generic filters work on: real audio or complex IQ.
+/// Stereo audio frame (left, right). Mono modes carry the same value in both.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Frame {
+    pub l: f32,
+    pub r: f32,
+}
+
+impl Frame {
+    pub const fn new(l: f32, r: f32) -> Self {
+        Self { l, r }
+    }
+    pub const fn mono(v: f32) -> Self {
+        Self { l: v, r: v }
+    }
+    pub fn peak(self) -> f32 {
+        self.l.abs().max(self.r.abs())
+    }
+}
+
+impl Add for Frame {
+    type Output = Frame;
+    fn add(self, o: Frame) -> Frame {
+        Frame::new(self.l + o.l, self.r + o.r)
+    }
+}
+impl Sub for Frame {
+    type Output = Frame;
+    fn sub(self, o: Frame) -> Frame {
+        Frame::new(self.l - o.l, self.r - o.r)
+    }
+}
+impl Mul<f32> for Frame {
+    type Output = Frame;
+    fn mul(self, k: f32) -> Frame {
+        Frame::new(self.l * k, self.r * k)
+    }
+}
+
+/// What the generic filters work on: real audio, stereo frames or complex IQ.
 pub trait Sample: Copy + Default + Add<Output = Self> + Sub<Output = Self> + Mul<f32, Output = Self> {}
 impl Sample for f32 {}
 impl Sample for C32 {}
+impl Sample for Frame {}
 
 /// Low-pass FIR taps, Blackman window, unity gain at DC.
 /// `cutoff` and `transition` are normalized to the sample rate (0..0.5).
@@ -241,6 +280,61 @@ impl Deemphasis {
     }
 }
 
+/// Impulse noise blanker on raw IQ (ignition, electric fences, switching supplies): samples
+/// far above the average magnitude are zeroed, with a short guard before and after (the
+/// output is delayed by `GUARD` samples so the guard can start before the spike).
+pub struct NoiseBlanker {
+    pub threshold: f32, // spike = magnitude above threshold x average
+    pub avg: f32,
+    alpha: f32,
+    delay: std::collections::VecDeque<C32>,
+    blank: usize, // samples of the delayed output still to blank
+    pub blanked: u64,
+}
+
+impl NoiseBlanker {
+    const GUARD: usize = 16;
+
+    pub fn new(rate: f64, threshold: f32) -> Self {
+        Self {
+            threshold,
+            avg: 0.0,
+            alpha: (1.0 / (rate * 0.005)) as f32, // ~5 ms average
+            delay: std::iter::repeat(C32::default()).take(Self::GUARD).collect(),
+            blank: 0,
+            blanked: 0,
+        }
+    }
+
+    pub fn set_rate(&mut self, rate: f64) {
+        self.alpha = (1.0 / (rate * 0.005)) as f32;
+    }
+
+    pub fn process(&mut self, buf: &mut [C32]) {
+        for z in buf.iter_mut() {
+            let m = z.norm_sqr().sqrt();
+            if self.avg <= 0.0 {
+                self.avg = m.max(1e-6);
+            }
+            if m > self.threshold * self.avg {
+                // Blank the guard already in the delay line, the spike and as much after it
+                self.blank = Self::GUARD * 2 + 1;
+            }
+            // Spikes only count up to the threshold: they can't drag the average up, but a
+            // real level change is still followed within a few ms
+            self.avg += self.alpha * (m.min(self.threshold * self.avg) - self.avg);
+            self.delay.push_back(*z);
+            let mut out = self.delay.pop_front().unwrap();
+            if self.blank > 0 {
+                self.blank -= 1;
+                out = C32::default();
+                self.blanked += 1;
+            }
+            *z = out;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +400,20 @@ mod tests {
         let mut out = Vec::new();
         d.process(&tone(rate, 37_500.0, 1000), &mut out);
         assert!((out[500] - 0.5).abs() < 1e-3, "{}", out[500]);
+    }
+
+    #[test]
+    fn noise_blanker_removes_spikes_and_keeps_the_signal() {
+        let rate = 1e6;
+        let mut x = tone(rate, 10e3, 20_000);
+        for k in (5_000..20_000).step_by(3_000) {
+            x[k] = C32::new(40.0, 0.0); // ignition-like spikes
+        }
+        let mut nb = NoiseBlanker::new(rate, 5.0);
+        nb.process(&mut x);
+        assert!(x.iter().all(|z| z.norm_sqr() < 1.1), "a spike went through");
+        // A few dozen samples blanked per spike, the rest untouched
+        assert!(nb.blanked < 5 * 40, "{}", nb.blanked);
     }
 
     #[test]

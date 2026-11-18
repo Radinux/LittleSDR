@@ -1,16 +1,19 @@
 //! Demodulation chain with live reconfiguration.
 //!
-//! IQ (any rate) -> NCO (VFO offset) -> decimating FIR -> fractional resampler -> fixed IF rate
-//! -> FM discriminator -> de-emphasis -> audio FIR -> 48 kHz.
+//! IQ (any rate) -> [noise blanker] -> NCO (VFO offset) -> decimating FIR -> fractional
+//! resampler -> fixed IF rate -> FM discriminator -> stereo decoder (WFM) or audio low-pass
+//! (NFM) -> de-emphasis -> switchable audio filters -> 48 kHz stereo frames.
 //!
 //! The IF rate is fixed per mode, so a new hardware sample rate only rebuilds the front end
-//! (NCO step, FIR, resampler ratio). The demodulator, de-emphasis, audio filter and the sound
+//! (NCO step, FIR, resampler ratio). The demodulator, stereo decoder, filters and the sound
 //! output keep their state and keep running: no gap, no click. Data that may be mislabeled
-//! around the switch (rtl_tcp in-flight buffers) is faded out / in over a few ms.
+//! around the switch (in-flight buffers) is faded out / in over a few ms.
 
 use crate::audio::AudioSink;
-use crate::dsp::{lowpass, Deemphasis, DecimFir, FmDemod, Interp, Nco, C32};
+use crate::audio_fx::AudioChain;
+use crate::dsp::{lowpass, Deemphasis, DecimFir, FmDemod, Frame, Interp, Nco, NoiseBlanker, C32};
 use crate::source::IqBlock;
+use crate::stereo::StereoDecoder;
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::time::{Duration, Instant};
@@ -54,12 +57,6 @@ impl Mode {
             Mode::Nfm => 5_000.0,
         }
     }
-    fn audio_cutoff(self) -> f64 {
-        match self {
-            Mode::Wfm => 15_000.0,
-            Mode::Nfm => 3_500.0,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -68,6 +65,16 @@ pub enum EngineCtl {
     Offset(f64),
     Mode(Mode),
     Volume(f32),
+    /// Broadcast FM stereo (falls back to mono without pilot anyway)
+    Stereo(bool),
+    /// Impulse noise blanker on the raw IQ; optional threshold (x average magnitude)
+    Blanker(bool, Option<f32>),
+    /// Audio filter on/off (id from AudioChain)
+    Filter(String, bool),
+    /// Audio filter parameter
+    Param(String, String, f32),
+    /// Print the state on stderr
+    Status,
     Stop,
 }
 
@@ -91,27 +98,53 @@ impl Front {
     }
 }
 
-/// Kept across rate changes
-struct Back {
-    mode: Mode,
-    fm: FmDemod,
-    deemph: Option<Deemphasis>,
-    audio: DecimFir<f32>,
+/// Demodulation, kept across rate changes
+enum Back {
+    Wfm { fm: FmDemod, stereo: StereoDecoder, deemph: [Deemphasis; 2] },
+    Nfm { fm: FmDemod, audio: DecimFir<f32> },
 }
 
 impl Back {
-    fn new(mode: Mode) -> Back {
+    fn new(mode: Mode, stereo: bool) -> Back {
         let ifr = mode.if_rate();
-        let cut = mode.audio_cutoff();
-        let factor = (ifr / AUDIO_RATE).round() as usize;
-        // WFM: the 19 kHz stereo pilot must be gone, so the stop band starts at 18.5 kHz
-        let stop = (cut * 1.25).min(AUDIO_RATE / 2.0 - 500.0);
-        let taps = lowpass((cut + stop) / 2.0 / ifr, (stop - cut) / ifr);
-        Back {
-            mode,
-            fm: FmDemod::new(ifr, mode.deviation()),
-            deemph: (mode == Mode::Wfm).then(|| Deemphasis::new(ifr, 50e-6)),
-            audio: DecimFir::new(taps, factor),
+        match mode {
+            Mode::Wfm => {
+                let mut st = StereoDecoder::new(ifr, (ifr / AUDIO_RATE) as usize);
+                st.enabled = stereo;
+                Back::Wfm {
+                    fm: FmDemod::new(ifr, mode.deviation()),
+                    stereo: st,
+                    deemph: [Deemphasis::new(AUDIO_RATE, 50e-6), Deemphasis::new(AUDIO_RATE, 50e-6)],
+                }
+            }
+            Mode::Nfm => Back::Nfm {
+                fm: FmDemod::new(ifr, mode.deviation()),
+                audio: DecimFir::new(lowpass(3_900.0 / ifr, 900.0 / ifr), 1),
+            },
+        }
+    }
+
+    fn process(&mut self, iq: &[C32], out: &mut Vec<Frame>) {
+        let mut demod = Vec::with_capacity(iq.len());
+        match self {
+            Back::Wfm { fm, stereo, deemph } => {
+                fm.process(iq, &mut demod);
+                let start = out.len();
+                stereo.process(&demod, out);
+                // De-emphasis per channel, after the stereo matrix
+                let (mut l, mut r): (Vec<f32>, Vec<f32>) = out[start..].iter().map(|f| (f.l, f.r)).unzip();
+                deemph[0].process(&mut l);
+                deemph[1].process(&mut r);
+                for (f, (l, r)) in out[start..].iter_mut().zip(l.into_iter().zip(r)) {
+                    *f = Frame::new(l, r);
+                }
+            }
+            Back::Nfm { fm, audio } => {
+                fm.process(iq, &mut demod);
+                let mut a = Vec::with_capacity(demod.len());
+                audio.process(&demod, &mut a);
+                out.extend(a.into_iter().map(Frame::mono));
+            }
         }
     }
 }
@@ -126,10 +159,14 @@ pub struct Engine {
     mode: Mode,
     offset: f64,
     volume: f32,
+    stereo: bool,
     nco: Nco,
+    blanker: Option<NoiseBlanker>,
+    blank_threshold: f32,
     front: Option<Front>,
     back: Back,
-    delay: VecDeque<f32>,
+    pub fx: AudioChain,
+    delay: VecDeque<Frame>,
     mute: usize,    // audio samples still muted
     fade_in: usize, // ramp position after a mute (0 = none)
     pub stats: Stats,
@@ -141,9 +178,13 @@ impl Engine {
             mode,
             offset,
             volume: 0.8,
+            stereo: true,
             nco: Nco::new(),
+            blanker: None,
+            blank_threshold: 6.0,
             front: None,
-            back: Back::new(mode),
+            back: Back::new(mode, true),
+            fx: AudioChain::new(),
             delay: VecDeque::with_capacity(DELAY * 4),
             mute: 0,
             fade_in: 0,
@@ -157,7 +198,7 @@ impl Engine {
         let f = FADE.min(n);
         for k in 0..f {
             let g = 1.0 - (k + 1) as f32 / f as f32;
-            self.delay[n - f + k] *= g;
+            self.delay[n - f + k] = self.delay[n - f + k] * g;
         }
         self.mute = self.mute.max((ms * AUDIO_RATE / 1000.0) as usize);
         self.fade_in = 1;
@@ -169,23 +210,66 @@ impl Engine {
             EngineCtl::Volume(v) => self.volume = v.clamp(0.0, 2.0),
             EngineCtl::Mode(m) if *m != self.mode => {
                 self.mode = *m;
-                self.back = Back::new(*m);
+                self.back = Back::new(*m, self.stereo);
                 if let Some(f) = &self.front {
                     self.front = Some(Front::new(f.rate, *m));
                 }
                 self.soft_switch(5.0);
             }
+            EngineCtl::Stereo(on) => {
+                self.stereo = *on;
+                if let Back::Wfm { stereo, .. } = &mut self.back {
+                    stereo.enabled = *on; // the decoder fades between mono and stereo
+                }
+            }
+            EngineCtl::Blanker(on, thr) => {
+                if let Some(t) = thr {
+                    self.blank_threshold = t.clamp(2.0, 50.0);
+                }
+                self.blanker = on.then(|| NoiseBlanker::new(self.front.as_ref().map_or(2.4e6, |f| f.rate), self.blank_threshold));
+            }
+            EngineCtl::Filter(id, on) => {
+                if !self.fx.enable(id, *on) {
+                    eprintln!("[engine] unknown filter '{id}'");
+                }
+            }
+            EngineCtl::Param(id, key, v) => {
+                if !self.fx.set(id, key, *v) {
+                    eprintln!("[engine] unknown parameter '{id} {key}'");
+                }
+            }
+            EngineCtl::Status => eprintln!("{}", self.status()),
             _ => {}
         }
     }
 
-    /// Processes one IQ block, appends 48 kHz audio to `out`.
-    pub fn process(&mut self, mut block: IqBlock, out: &mut Vec<f32>) {
+    pub fn status(&self) -> String {
+        let mut s = format!("[engine] {:?}", self.mode);
+        if let Back::Wfm { stereo, .. } = &self.back {
+            s += &format!(
+                ", stereo {} (pilot {:.3}, {})",
+                if self.stereo { "on" } else { "off" },
+                stereo.pilot_level(),
+                if stereo.locked() { "locked" } else { "not locked: mono" }
+            );
+        }
+        match &self.blanker {
+            Some(b) => s += &format!(", noise blanker x{:.0} ({} samples blanked, avg {:.4})", b.threshold, b.blanked, b.avg),
+            None => s += ", noise blanker off",
+        }
+        s + &format!(", audio latency {:.1} ms\n", self.fx.latency() as f64 / AUDIO_RATE * 1000.0) + &self.fx.describe()
+    }
+
+    /// Processes one IQ block, appends 48 kHz stereo frames to `out`.
+    pub fn process(&mut self, mut block: IqBlock, out: &mut Vec<Frame>) {
         let rate_changed = self.front.as_ref().map_or(true, |f| f.rate != block.rate);
         if rate_changed {
             let t = Instant::now();
             let first = self.front.is_none();
             self.front = Some(Front::new(block.rate, self.mode));
+            if let Some(b) = &mut self.blanker {
+                b.set_rate(block.rate);
+            }
             self.stats.rebuilds += 1;
             self.stats.last_rebuild_us = t.elapsed().as_micros();
             if !first {
@@ -195,6 +279,9 @@ impl Engine {
         } else if block.settle_ms > 0.0 {
             self.soft_switch(block.settle_ms);
         }
+        if let Some(b) = &mut self.blanker {
+            b.process(&mut block.samples);
+        }
         let front = self.front.as_mut().unwrap();
         self.nco.set(self.offset, block.rate);
         self.nco.mix(&mut block.samples);
@@ -203,16 +290,12 @@ impl Engine {
         front.decim.process(&block.samples, &mut dec);
         let mut ifs = Vec::with_capacity(dec.len() + 4);
         front.frac.process(&dec, &mut ifs);
-        let mut demod = Vec::with_capacity(ifs.len());
-        self.back.fm.process(&ifs, &mut demod);
-        if let Some(d) = &mut self.back.deemph {
-            d.process(&mut demod);
-        }
-        let mut audio = Vec::with_capacity(demod.len() / 4 + 2);
-        self.back.audio.process(&demod, &mut audio);
+        let mut audio = Vec::with_capacity(ifs.len() / 4 + 2);
+        self.back.process(&ifs, &mut audio);
+        self.fx.process(&mut audio);
 
-        // Gain, mute / fade-in, then the delay line
-        for s in audio {
+        // Volume, mute / fade-in, then the delay line
+        for f in audio {
             let mut g = self.volume;
             if self.mute > 0 {
                 self.mute -= 1;
@@ -224,7 +307,7 @@ impl Engine {
                     self.fade_in = 0;
                 }
             }
-            self.delay.push_back(s * g);
+            self.delay.push_back(f * g);
         }
         while self.delay.len() > DELAY {
             out.push(self.delay.pop_front().unwrap());
@@ -233,7 +316,7 @@ impl Engine {
     }
 
     pub fn mode(&self) -> Mode {
-        self.back.mode
+        self.mode
     }
 }
 

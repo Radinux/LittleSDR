@@ -4,6 +4,8 @@
 //! Android (through JNI) and on Linux.
 
 pub mod audio;
+pub mod audio_fx;
 pub mod dsp;
 pub mod engine;
 pub mod source;
+pub mod stereo;

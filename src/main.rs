@@ -3,7 +3,9 @@
 //!   littlesdr [--usb [N] | --rtltcp HOST:PORT] [--freq 96.5M] [--rate 2.4M] [--mode wfm|nfm]
 //!             [--gain DB|auto] [--wav out.wav] [--no-audio] [--script "3s rate 1.024M; 6s quit"]
 //!
-//! Live commands on stdin: freq <f>, rate <r>, mode wfm|nfm, gain <dB>|auto, vol <0-2>, quit
+//! Live commands on stdin: freq <f>, rate <r>, mode wfm|nfm, gain <dB>|auto, vol <0-2>,
+//!   stereo on|off, nb on|off [threshold], fx <filter> on|off, fx <filter> <param> <value>,
+//!   status, quit. Filters: hp lp cw notch anotch nr eq agc limit
 
 use littlesdr::audio::{AudioSink, WavSink};
 use littlesdr::engine::{self, Engine, EngineCtl, Mode};
@@ -61,7 +63,7 @@ fn main() {
             "--no-audio" => audio = false,
             "--script" => script = args.next().unwrap_or_default(),
             "-h" | "--help" => {
-                println!("{}", include_str!("main.rs").lines().take(7).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
+                println!("{}", include_str!("main.rs").lines().take(9).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
                 return;
             }
             other => {
@@ -146,10 +148,32 @@ fn main() {
 
     let mut cur_freq = freq;
     let mut cur_rate = rate;
+    let on = |v: &str| matches!(v, "on" | "1" | "yes");
     for Cmd::Line(line) in cmd_rx {
-        let mut it = line.split_whitespace();
-        let (c, v) = (it.next().unwrap_or(""), it.next().unwrap_or(""));
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let (c, v) = (words.first().copied().unwrap_or(""), words.get(1).copied().unwrap_or(""));
         match c {
+            "stereo" => {
+                let _ = eng_tx.send(EngineCtl::Stereo(on(v)));
+            }
+            "nb" => {
+                let _ = eng_tx.send(EngineCtl::Blanker(on(v), words.get(2).and_then(|t| t.parse().ok())));
+            }
+            "fx" => match (words.get(2), words.get(3)) {
+                (Some(&state), None) => {
+                    let _ = eng_tx.send(EngineCtl::Filter(v.to_string(), on(state)));
+                }
+                (Some(&key), Some(val)) => match val.parse() {
+                    Ok(x) => {
+                        let _ = eng_tx.send(EngineCtl::Param(v.to_string(), key.to_string(), x));
+                    }
+                    Err(_) => eprintln!("fx {v} {key} <number>"),
+                },
+                _ => eprintln!("fx <filter> on|off  |  fx <filter> <param> <value>"),
+            },
+            "status" | "s" => {
+                let _ = eng_tx.send(EngineCtl::Status);
+            }
             "freq" | "f" => {
                 if let Some(f) = parse_hz(v) {
                     cur_freq = f;
@@ -184,7 +208,7 @@ fn main() {
             }
             "quit" | "q" | "exit" => break,
             "" => {}
-            other => eprintln!("commands: freq <f> | rate <r> | mode wfm|nfm | gain <dB>|auto | vol <x> | quit  ({other}?)"),
+            other => eprintln!("commands: freq | rate | mode | gain | vol | stereo | nb | fx | status | quit  ({other}?)"),
         }
     }
     let _ = src.ctl.send(SourceCtl::Stop);
