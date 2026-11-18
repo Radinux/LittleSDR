@@ -12,6 +12,9 @@ import app.littlesdr.data.DisplaySettings
 import app.littlesdr.data.Memory
 import app.littlesdr.engine.AdvancedOptions
 import app.littlesdr.engine.Engine
+import app.littlesdr.data.KiwiDirectory
+import app.littlesdr.data.KiwiServer
+import app.littlesdr.engine.CwState
 import app.littlesdr.engine.Ft8Link
 import app.littlesdr.engine.Ft8Message
 import app.littlesdr.engine.Ft8State
@@ -414,6 +417,54 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun sourceAction(a: SmAction) = viewModelScope.launch { _sourceMenu.value = Engine.sourceMenu(a) }
+
+    // ---- Morse decoder (TinyCW), polled while its tab is shown
+    private val _cw = MutableStateFlow(CwState())
+    val cw: StateFlow<CwState> = _cw.asStateFlow()
+    private var cwPoller: Job? = null
+
+    fun watchCw(open: Boolean) {
+        cwPoller?.cancel()
+        if (!open) return
+        cwPoller = viewModelScope.launch {
+            while (isActive) {
+                if (Engine.ready.value) _cw.value = Engine.cw()
+                delay(if (_cw.value.enabled) 400 else 1500)
+            }
+        }
+    }
+
+    fun setCwEnabled(on: Boolean) = viewModelScope.launch {
+        if (Engine.ready.value) _cw.value = Engine.cwSet("enabled", if (on) 1.0 else 0.0)
+    }
+
+    /** Listen to a decoded signal: CW mode on its frequency. */
+    fun tuneCw(freqHz: Double) {
+        if (state.value.mode != Mode.CW) setMode(Mode.CW)
+        tune(freqHz)
+    }
+
+    // ---- KiwiSDR server picker
+    private val kiwiDirectory = KiwiDirectory(app)
+    private val _kiwiServers = MutableStateFlow<List<KiwiServer>>(emptyList())
+    val kiwiServers: StateFlow<List<KiwiServer>> = _kiwiServers.asStateFlow()
+    private val _kiwiLoading = MutableStateFlow(false)
+    val kiwiLoading: StateFlow<Boolean> = _kiwiLoading.asStateFlow()
+
+    /** Operator position (locator from the settings), to sort receivers by distance. */
+    fun operatorPosition(): GeoPoint? = Maidenhead.toLatLon(_advanced.value.operator.location)
+
+    fun loadKiwiServers(force: Boolean = false) = viewModelScope.launch {
+        _kiwiLoading.value = true
+        _kiwiServers.value = kiwiDirectory.load(force)
+        _kiwiLoading.value = false
+        if (_kiwiServers.value.isEmpty()) _error.value = "Liste des KiwiSDR indisponible (connexion internet ?)"
+    }
+
+    fun setKiwiSite(hostPort: String, name: String) = viewModelScope.launch {
+        Engine.kiwiSetSite(hostPort.trim(), name)
+        _sourceMenu.value = Engine.sourceMenu()
+    }
 
     /** Refresh the settings menu while the sheet is open (status texts, device lists). */
     fun watchSourceMenu(open: Boolean) {

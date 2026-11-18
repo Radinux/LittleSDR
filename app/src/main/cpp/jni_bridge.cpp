@@ -123,6 +123,15 @@ JNIEXPORT jstring JNICALL JNI_FN(ft8Json)(JNIEnv* env, jclass) {
 JNIEXPORT void JNICALL JNI_FN(ft8Set)(JNIEnv* env, jclass, jstring key, jdouble value) {
     engine::ft8Set(str(env, key), value);
 }
+JNIEXPORT void JNICALL JNI_FN(kiwiSetSite)(JNIEnv* env, jclass, jstring hostPort, jstring loc) {
+    engine::kiwiSetSite(str(env, hostPort), str(env, loc));
+}
+JNIEXPORT jstring JNICALL JNI_FN(cwJson)(JNIEnv* env, jclass) {
+    return env->NewStringUTF(engine::cwJson().c_str());
+}
+JNIEXPORT void JNICALL JNI_FN(cwSet)(JNIEnv* env, jclass, jstring key, jdouble value) {
+    engine::cwSet(str(env, key), value);
+}
 JNIEXPORT jdoubleArray JNICALL JNI_FN(ctyLatLon)(JNIEnv* env, jclass, jobjectArray calls) {
     std::vector<std::string> v;
     jsize n = env->GetArrayLength(calls);

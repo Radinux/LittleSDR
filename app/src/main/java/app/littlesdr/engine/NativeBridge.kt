@@ -44,6 +44,9 @@ object NativeBridge {
     @JvmStatic external fun setOptionString(key: String, value: String)
     @JvmStatic external fun ft8Json(): String
     @JvmStatic external fun ft8Set(key: String, value: Double)
+    @JvmStatic external fun kiwiSetSite(hostPort: String, location: String)
+    @JvmStatic external fun cwJson(): String
+    @JvmStatic external fun cwSet(key: String, value: Double)
     @JvmStatic external fun ctyLatLon(calls: Array<String>): DoubleArray
     @JvmStatic external fun rdsJson(): String
 

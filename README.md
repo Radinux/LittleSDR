@@ -37,10 +37,11 @@ LittleSDR est une **refonte de l'interface**, pas un fork : le traitement du sig
 
 **Décodage**
 - **FT8 / FT4** : liste groupée par cycle et **carte** des stations avec les liaisons émetteur → destinataire
+- **Morse (CW)** : tous les signaux de la portion CW d'une bande radioamateur, plus la fréquence accordée (décodeur neuronal TinyCW)
 - Locator automatique d'après la position du téléphone
 
 **Interface**
-- Paysage, panneau à onglets défilants (Récepteur, Radio, Audio, Bandes, Mémoires)
+- Paysage, panneau à onglets défilants (Récepteur, Radio, Audio, Bandes, Mémoires, Morse)
 - Material You (couleurs du fond d'écran) ou couleur d'accent au choix, thème sombre ou clair
 - Écoute écran éteint, écran maintenu allumé pendant la réception
 
@@ -49,9 +50,7 @@ LittleSDR est une **refonte de l'interface**, pas un fork : le traitement du sig
 | Liaison | Récepteurs |
 |---|---|
 | USB (OTG) | RTL-SDR, Airspy, Airspy HF+, HackRF |
-| Réseau | rtl_tcp, SpyServer (`sdr://hôte:port`, débit adapté automatiquement), KiwiSDR* |
-
-<sub>* sélection du serveur KiwiSDR pas encore disponible.</sub>
+| Réseau | rtl_tcp, SpyServer (`sdr://hôte:port`, débit adapté automatiquement), KiwiSDR (annuaire public trié par distance) |
 
 ## 📥 Installation
 
@@ -85,7 +84,7 @@ C++ (NDK)                                app/src/main/cpp
  ├─ headless_backend     API backend de SDR++ sans NativeActivity
  ├─ smgui_json.cpp       menus des pilotes → widgets Compose
  ├─ spectrum_renderer    Vulkan : spectre + waterfall
- └─ modules/             sortie AAudio, extensions radio et FT8
+ └─ modules/             sortie AAudio, extensions des modules (radio, FT8, morse, SpyServer, KiwiSDR)
 
 third_party/sdrpp-brown                  moteur SDR++Brown (sous-module, non modifié)
 kit/build-kit.sh                         dépendances natives, sans Docker
@@ -96,6 +95,7 @@ L'interface ne parle au moteur qu'à travers `Engine` (état et JSON), pour pouv
 ## 🙏 Crédits
 
 - [SDR++Brown](https://github.com/sannysanoff/SDRPlusPlusBrown) et [SDR++](https://github.com/AlexandreRouma/SDRPlusPlus) : traitement du signal, pilotes, décodeurs
+- [KiwiSDR](http://kiwisdr.com/public/) : annuaire public des récepteurs (via rx.linkfanel.net)
 - [EiBi](http://www.eibispace.de/) : horaires des stations ondes courtes (usage non commercial)
 - [Natural Earth](https://www.naturalearthdata.com/) : fond de carte (domaine public)
 - Palettes Viridis, Inferno, Magma : approximations polynomiales de Matt Zucker ; Turbo : Google

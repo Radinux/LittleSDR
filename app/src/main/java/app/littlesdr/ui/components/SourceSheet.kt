@@ -80,6 +80,8 @@ fun SourcePanel(
     onSelect: (String) -> Unit,
     onAction: (SmAction) -> Unit,
     onWatch: (Boolean) -> Unit,
+    /** Extra controls for the selected source (e.g. KiwiSDR server picker), above its menu */
+    extra: @Composable () -> Unit = {},
 ) {
     // Faster refresh of the driver menu while this tab is shown (status texts, device lists)
     DisposableEffect(Unit) {
@@ -141,6 +143,7 @@ fun SourcePanel(
                 }
             }
         }
+        extra()
         if (menu.isNotEmpty()) {
             Column(
                 Modifier

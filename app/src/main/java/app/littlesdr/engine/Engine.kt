@@ -249,6 +249,14 @@ object Engine {
 
     suspend fun rds(): RdsInfo = call { RdsInfo.parse(NativeBridge.rdsJson()) }
 
+    suspend fun kiwiSetSite(hostPort: String, location: String) = call { NativeBridge.kiwiSetSite(hostPort, location) }
+
+    suspend fun cw(): CwState = call { CwState.parse(NativeBridge.cwJson()) }
+    suspend fun cwSet(key: String, value: Double): CwState = call {
+        NativeBridge.cwSet(key, value)
+        CwState.parse(NativeBridge.cwJson())
+    }
+
     suspend fun ft8(): Ft8State = call { Ft8State.parse(NativeBridge.ft8Json()) }
     suspend fun ft8Set(key: String, value: Double): Ft8State = call {
         NativeBridge.ft8Set(key, value)

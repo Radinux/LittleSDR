@@ -64,12 +64,31 @@ set(LITTLESDR_MODULES
     source_modules/airspyhf_source
     source_modules/hackrf_source
     source_modules/rtl_tcp_source
-    source_modules/kiwisdr_source
     decoder_modules/radio)
 foreach (mod ${LITTLESDR_MODULES})
     get_filename_component(modname "${mod}" NAME)
     add_subdirectory("${SDRPP_ROOT}/${mod}" "modules/${modname}")
 endforeach ()
+
+# TinyCW (Morse) decoder: upstream sources, with main.cpp included through modules/tinycw_ext.cpp
+set(TINYCW_DIR "${SDRPP_ROOT}/decoder_modules/tinycw_decoder/src")
+file(GLOB TINYCW_SRC "${TINYCW_DIR}/*.cpp" "${TINYCW_DIR}/*.c")
+list(FILTER TINYCW_SRC EXCLUDE REGEX "/main\\.cpp$")
+add_library(tinycw_decoder SHARED ${TINYCW_SRC} modules/tinycw_ext.cpp)
+set_target_properties(tinycw_decoder PROPERTIES PREFIX "")
+target_include_directories(tinycw_decoder PRIVATE "${TINYCW_DIR}" "${SDRPP_CORE_ROOT}")
+target_compile_definitions(tinycw_decoder PRIVATE TINYCW_MAIN_CPP="${TINYCW_DIR}/main.cpp")
+target_compile_options(tinycw_decoder PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${SDRPP_MODULE_COMPILER_FLAGS}>)
+target_link_libraries(tinycw_decoder PRIVATE sdrpp_core log)
+
+# KiwiSDR: upstream main.cpp included through modules/kiwisdr_ext.cpp (server picked from the app)
+set(KIWI_DIR "${SDRPP_ROOT}/source_modules/kiwisdr_source/src")
+add_library(kiwisdr_source SHARED modules/kiwisdr_ext.cpp)
+set_target_properties(kiwisdr_source PROPERTIES PREFIX "")
+target_include_directories(kiwisdr_source PRIVATE "${KIWI_DIR}" "${SDRPP_CORE_ROOT}")
+target_compile_definitions(kiwisdr_source PRIVATE KIWISDR_MAIN_CPP="${KIWI_DIR}/main.cpp")
+target_compile_options(kiwisdr_source PRIVATE ${SDRPP_MODULE_COMPILER_FLAGS})
+target_link_libraries(kiwisdr_source PRIVATE sdrpp_core log)
 
 # SpyServer: upstream sources, with main.cpp included through modules/spyserver_ext.cpp
 set(SPY_DIR "${SDRPP_ROOT}/source_modules/spyserver_source/src")

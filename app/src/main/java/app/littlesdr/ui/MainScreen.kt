@@ -72,6 +72,8 @@ import app.littlesdr.ui.components.ControlTabBar
 import app.littlesdr.ui.components.RadioTab
 import app.littlesdr.ui.components.FrequencyDisplay
 import app.littlesdr.ui.components.MemoriesPanel
+import app.littlesdr.ui.components.MorseTab
+import app.littlesdr.ui.components.KiwiServerButton
 import app.littlesdr.ui.components.SourcePanel
 import app.littlesdr.ui.components.SpectrumPanel
 import app.littlesdr.ui.components.TuningJoystick
@@ -98,6 +100,9 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val usb by vm.usbDevice.collectAsStateWithLifecycle()
     val menu by vm.sourceMenu.collectAsStateWithLifecycle()
     val gainControls by vm.gainControls.collectAsStateWithLifecycle()
+    val cw by vm.cw.collectAsStateWithLifecycle()
+    val kiwiServers by vm.kiwiServers.collectAsStateWithLifecycle()
+    val kiwiLoading by vm.kiwiLoading.collectAsStateWithLifecycle()
     val rds by vm.rds.collectAsStateWithLifecycle()
     val eibi by vm.eibi.collectAsStateWithLifecycle()
     val advanced by vm.advanced.collectAsStateWithLifecycle()
@@ -197,6 +202,15 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                 ControlTab.Source -> SourcePanel(
                                     sources = sources, selected = selectedSource, playing = playing, usbDevice = usb, menu = menu,
                                     onSelect = { vm.selectSource(it) }, onAction = { vm.sourceAction(it) }, onWatch = vm::watchSourceMenu,
+                                    extra = {
+                                        if (selectedSource == "KiwiSDR") {
+                                            KiwiServerButton(
+                                                servers = kiwiServers, loading = kiwiLoading, position = vm.operatorPosition(),
+                                                onLoad = { vm.loadKiwiServers(it) },
+                                                onPick = { hp, name -> vm.setKiwiSite(hp, name) },
+                                            )
+                                        }
+                                    },
                                 )
                                 ControlTab.Radio -> RadioTab(
                                     mode = controls.mode,
@@ -224,6 +238,10 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                     onLatency = { vm.setOption("audio.latency", it.toDouble()) },
                                 )
                                 ControlTab.Bands -> BandsTab(stateHolder.value.vfoFrequency, vm::applyPreset)
+                                ControlTab.Morse -> MorseTab(
+                                    cw = cw, mode = controls.mode,
+                                    onEnable = { vm.setCwEnabled(it) }, onWatch = vm::watchCw, onTune = vm::tuneCw,
+                                )
                                 ControlTab.Memories -> MemoriesPanel(
                                     memories = data.memories, currentFrequency = stateHolder.value.vfoFrequency,
                                     onSave = vm::saveMemory, onRecall = vm::recall, onRename = { m, n -> vm.renameMemory(m, n) },

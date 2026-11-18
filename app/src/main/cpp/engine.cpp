@@ -63,8 +63,14 @@ namespace engine {
             { "Audio Sink", "audio_sink" },
             { "Radio", "radio" },
             { "FT8/FT4 Decoder", "ft8_decoder" }, // created disabled, enabled from the FT8 screen
+            { "TinyCW Decoder", "tinycw_decoder" }, // created disabled, enabled from the Morse tab
         };
         constexpr const char* FT8_INSTANCE = "FT8/FT4 Decoder";
+        constexpr const char* CW_INSTANCE = "TinyCW Decoder";
+        // Decoders cost CPU during reception: always created off, turned on explicitly
+        bool startsDisabled(const char* instance) {
+            return strcmp(instance, FT8_INSTANCE) == 0 || strcmp(instance, CW_INSTANCE) == 0;
+        }
 
         // ---------------------------------------------------------- FFT callbacks (DSP thread)
         // The FFT mutex is held from acquire to release (same DSP thread), so the buffers
@@ -201,7 +207,7 @@ namespace engine {
             core::configManager.conf["modules"].push_back(std::string(m.module) + ".so");
             core::configManager.conf["moduleInstances"][m.instance]["module"] = m.module;
             core::configManager.conf["moduleInstances"][m.instance]["enabled"] =
-                strcmp(m.instance, FT8_INSTANCE) == 0 ? ft8Enabled : true;
+                startsDisabled(m.instance) ? ft8Enabled : true;
         }
         core::configManager.conf["streams"]["Radio"]["sink"] = "Audio";
         std::string resDir = core::configManager.conf["resourcesDirectory"];
@@ -266,7 +272,7 @@ namespace engine {
             if (rtl) { setServerFlag(true); }
             core::moduleManager.createInstance(m.instance, m.module);
             if (rtl) { setServerFlag(false); }
-            if (strcmp(m.instance, FT8_INSTANCE) == 0 && !ft8Enabled) { core::moduleManager.disableInstance(m.instance); }
+            if (startsDisabled(m.instance)) { core::moduleManager.disableInstance(m.instance); }
         }
         core::moduleManager.doPostInitAll();
 
@@ -910,6 +916,61 @@ namespace engine {
         if (auto fn = (Fn)moduleSymbol("ft8_decoder", "littlesdr_ft8_set")) {
             if (void* inst = ft8Instance()) { fn(inst, key.c_str(), v); }
         }
+    }
+
+    // ------------------------------------------------------------------ Morse (TinyCW)
+    namespace {
+        void* cwInstance() {
+            auto it = core::moduleManager.instances.find(CW_INSTANCE);
+            return it == core::moduleManager.instances.end() ? nullptr : (void*)it->second.instance;
+        }
+
+        // TinyCW follows the tuned frequency only when the main window says "CW": that window is
+        // not used here, so mirror the radio's mode into it
+        void syncMainWindowMode() {
+            int m = mode();
+            const char* name = m == 5 ? "CW" : (m == 0 || m == 1) ? "FM" : (m == 4 || m == 6) ? "SSB" : "AM";
+            if (gui::mainWindow.getCurrentMode() != name) { gui::mainWindow.setCurrentMode(name); }
+        }
+    }
+
+    std::string cwJson() {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        syncMainWindowMode();
+        using Fn = int (*)(void*, char*, int);
+        auto fn = (Fn)moduleSymbol("tinycw_decoder", "littlesdr_cw_json");
+        void* inst = cwInstance();
+        if (!fn || !inst) { return "{}"; }
+        std::vector<char> buf(256 * 1024);
+        fn(inst, buf.data(), (int)buf.size());
+        return std::string(buf.data());
+    }
+
+    void cwSet(const std::string& key, double v) {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        if (key == "enabled") {
+            if (v != 0.0) { syncMainWindowMode(); core::moduleManager.enableInstance(CW_INSTANCE); }
+            else { core::moduleManager.disableInstance(CW_INSTANCE); }
+            return;
+        }
+        using Fn = void (*)(void*, const char*, double);
+        if (auto fn = (Fn)moduleSymbol("tinycw_decoder", "littlesdr_cw_set")) {
+            if (void* inst = cwInstance()) { fn(inst, key.c_str(), v); }
+        }
+    }
+
+    // ------------------------------------------------------------------ KiwiSDR
+    void kiwiSetSite(const std::string& hostPort, const std::string& loc) {
+        std::lock_guard<std::recursive_mutex> lck(g_mtx);
+        using Fn = void (*)(void*, const char*, const char*);
+        auto fn = (Fn)moduleSymbol("kiwisdr_source", "littlesdr_kiwi_set_site");
+        auto it = core::moduleManager.instances.find("KiwiSDR Source");
+        if (!fn || it == core::moduleManager.instances.end()) { return; }
+        // The client reconnects only on start: restart when listening to KiwiSDR
+        bool restart = gui::mainWindow.isPlaying() && sigpath::sourceManager.getSelectedName() == "KiwiSDR";
+        if (restart) { gui::mainWindow.setPlayState(false); }
+        fn(it->second.instance, hostPort.c_str(), loc.c_str());
+        if (restart) { gui::mainWindow.setPlayState(true); }
     }
 
     std::vector<double> ctyLatLon(const std::vector<std::string>& calls) {

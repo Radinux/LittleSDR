@@ -78,6 +78,13 @@ namespace engine {
     std::string ft8Json();
     // "enabled" (decoder module on/off), "ft8"/"ft4" (processing), "clear"
     void ft8Set(const std::string& key, double value);
+
+    // Morse decoder (TinyCW): JSON results, "enabled" / "followVfo" settings
+    std::string cwJson();
+
+    // KiwiSDR: server to use ("host:port"), as picked in the app
+    void kiwiSetSite(const std::string& hostPort, const std::string& loc);
+    void cwSet(const std::string& key, double value);
     // Country position (CTY database) for each callsign: lat, lon pairs (NaN when unknown)
     std::vector<double> ctyLatLon(const std::vector<std::string>& calls);
     // RDS of the current WFM station: {active, ps, rt, pi, callsign, pty}

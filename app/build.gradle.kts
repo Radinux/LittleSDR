@@ -15,8 +15,8 @@ android {
         applicationId = "app.littlesdr"
         minSdk = 28
         targetSdk = 37
-        versionCode = 11
-        versionName = "0.6.0"
+        versionCode = 12
+        versionName = "0.7.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -32,7 +32,7 @@ android {
                 targets += listOf(
                     "littlesdr", "sdrpp_core", "audio_sink", "radio",
                     "rtl_sdr_source", "airspy_source", "airspyhf_source", "hackrf_source",
-                    "rtl_tcp_source", "spyserver_source", "kiwisdr_source", "ft8_decoder",
+                    "rtl_tcp_source", "spyserver_source", "kiwisdr_source", "ft8_decoder", "tinycw_decoder",
                 )
             }
         }
