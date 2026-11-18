@@ -332,6 +332,29 @@ namespace engine {
         SmGui::DrawListElem diff;
         diff.type = (SmGui::DrawListElemType)type;
         diff.b = b; diff.i = i; diff.f = f; diff.str = s;
+
+        // Drivers grey out some settings while the stream runs (sample rate, bandwidth filter,
+        // device...). Changing one while listening: stop, apply it, start again, instead of
+        // asking the user to do that by hand.
+        if (!diffId.empty() && gui::mainWindow.isPlaying()) {
+            SmGui::DrawListElem none;
+            json cur = json::parse(smguijson::renderSourceMenu("", none), nullptr, false);
+            bool lockedWhileRunning = false;
+            if (cur.is_array()) {
+                for (auto& w : cur) {
+                    if (w.value("id", std::string()) == diffId) { lockedWhileRunning = w.value("disabled", false); break; }
+                }
+            }
+            if (lockedWhileRunning) {
+                flog::info("Source setting '{}' changed while playing: restarting the stream", diffId);
+                gui::mainWindow.setPlayState(false);
+                smguijson::renderSourceMenu(diffId, diff);
+                gui::mainWindow.setPlayState(true);
+                syncVfo(); // new sample rate: VFO back where the user left it
+                return smguijson::renderSourceMenu("", none);
+            }
+        }
+
         std::string out = smguijson::renderSourceMenu(diffId, diff);
         if (spyServerAdjust()) {
             SmGui::DrawListElem none;

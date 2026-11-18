@@ -267,6 +267,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                 )
                                 ControlTab.Memories -> MemoriesPanel(
                                     memories = data.memories, currentFrequency = stateHolder.value.vfoFrequency,
+                                    suggestedName = rds.ps.trim(),
                                     onSave = vm::saveMemory, onRecall = vm::recall, onRename = { m, n -> vm.renameMemory(m, n) },
                                     onDelete = { m ->
                                         vm.deleteMemory(m)

@@ -121,7 +121,8 @@ fun SourcePanel(
         }
         if (playing) {
             Text(
-                "Arrête la réception pour changer de récepteur ou modifier certains réglages.",
+                "Arrête la réception pour changer de récepteur. Les réglages du récepteur restent modifiables : " +
+                    "il est relancé automatiquement.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -152,7 +153,7 @@ fun SourcePanel(
                     .background(MaterialTheme.colorScheme.surfaceContainer)
                     .padding(14.dp),
             ) {
-                SmGuiPanel(menu, onAction)
+                SmGuiPanel(menu, onAction, playing)
             }
         }
     }
@@ -162,7 +163,7 @@ private val NETWORK_SOURCES = setOf("RTL-TCP", "SpyServer", "KiwiSDR", "SDR++ Se
 
 /** Material 3 rendering of an SDR++ SmGui menu. Consecutive "same line" widgets share a row. */
 @Composable
-fun SmGuiPanel(widgets: List<SmWidget>, onAction: (SmAction) -> Unit) {
+fun SmGuiPanel(widgets: List<SmWidget>, onAction: (SmAction) -> Unit, playing: Boolean = false) {
     // Host fields are followed by their port field (SpyServer, rtl_tcp): lets "host:port" fill both
     val portFor = HashMap<String, String>()
     widgets.forEachIndexed { i, w ->
@@ -178,10 +179,10 @@ fun SmGuiPanel(widgets: List<SmWidget>, onAction: (SmAction) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         rows.forEach { row ->
             if (row.size == 1) {
-                SmWidgetView(row[0], onAction, Modifier.fillMaxWidth(), portFor)
+                SmWidgetView(row[0], onAction, Modifier.fillMaxWidth(), portFor, playing)
             } else {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    row.forEach { SmWidgetView(it, onAction, portFor = portFor) }
+                    row.forEach { SmWidgetView(it, onAction, portFor = portFor, playing = playing) }
                 }
             }
         }
@@ -194,8 +195,13 @@ private fun SmWidgetView(
     onAction: (SmAction) -> Unit,
     modifier: Modifier = Modifier,
     portFor: Map<String, String> = emptyMap(),
+    playing: Boolean = false,
 ) {
-    val enabled = !w.disabled
+    // Discrete choices the driver locks while the stream runs (sample rate, filter, device…):
+    // still usable, the engine restarts the stream around the change. Text fields and sliders
+    // stay locked (each keystroke / drag step would restart the dongle).
+    val restartable = w is SmWidget.Combo || w is SmWidget.Checkbox || w is SmWidget.Radio
+    val enabled = !w.disabled || (playing && restartable)
     when (w) {
         is SmWidget.Header -> Text(w.value, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = modifier.padding(top = 8.dp))
         is SmWidget.Text -> Text(

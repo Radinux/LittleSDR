@@ -47,6 +47,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.littlesdr.data.Memory
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import app.littlesdr.engine.Mode
 import app.littlesdr.ui.formatFrequency
 import app.littlesdr.ui.formatHz
@@ -57,6 +66,8 @@ import app.littlesdr.ui.theme.ReadoutStyle
 fun MemoriesPanel(
     memories: List<Memory>,
     currentFrequency: Double,
+    /** Name offered when saving (the station's RDS name), editable; empty when unknown */
+    suggestedName: String = "",
     onSave: (String) -> Unit,
     onRecall: (Memory) -> Unit,
     onRename: (Memory, String) -> Unit,
@@ -69,7 +80,11 @@ fun MemoriesPanel(
         FilledTonalButton(onClick = { creating = true }, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.BookmarkAdd, null)
             Spacer(Modifier.padding(4.dp))
-            Text("Enregistrer ${formatFrequency(currentFrequency)} MHz")
+            Text(
+                if (suggestedName.isNotBlank()) "Enregistrer $suggestedName · ${formatFrequency(currentFrequency)} MHz"
+                else "Enregistrer ${formatFrequency(currentFrequency)} MHz",
+                maxLines = 1,
+            )
         }
         if (memories.isEmpty()) {
             Column(Modifier.fillMaxWidth().padding(vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -118,7 +133,7 @@ fun MemoriesPanel(
     }
 
     if (creating) {
-        NameDialog(title = "Enregistrer la fréquence", initial = "", onDone = { onSave(it); creating = false }, onCancel = { creating = false })
+        NameDialog(title = "Enregistrer la fréquence", initial = suggestedName, onDone = { onSave(it); creating = false }, onCancel = { creating = false })
     }
     naming?.let { m ->
         NameDialog(title = "Renommer", initial = m.name, onDone = { onRename(m, it); naming = null }, onCancel = { naming = null })
@@ -127,14 +142,22 @@ fun MemoriesPanel(
 
 @Composable
 private fun NameDialog(title: String, initial: String, onDone: (String) -> Unit, onCancel: () -> Unit) {
-    var text by remember { mutableStateOf(initial) }
+    // Pre-filled name selected: typing replaces it, a tap places the cursor to edit it
+    var text by remember { mutableStateOf(TextFieldValue(initial, selection = TextRange(0, initial.length))) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text(title) },
         text = {
-            OutlinedTextField(value = text, onValueChange = { text = it }, label = { Text("Nom") }, singleLine = true)
+            OutlinedTextField(
+                value = text, onValueChange = { text = it }, label = { Text("Nom") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onDone(text.text.trim()) }),
+                modifier = Modifier.focusRequester(focus),
+            )
         },
-        confirmButton = { TextButton(onClick = { onDone(text.trim()) }) { Text("OK") } },
+        confirmButton = { TextButton(onClick = { onDone(text.text.trim()) }) { Text("OK") } },
         dismissButton = { TextButton(onClick = onCancel) { Text("Annuler") } },
     )
 }
