@@ -2,7 +2,7 @@
 //!
 //!   littlesdr [--usb [N] | --rtltcp HOST:PORT] [--freq 96.5M] [--rate 2.4M]
 //!             [--mode wfm|nfm|am|usb|lsb|cw] [--gain DB|auto] [--ds 0|1|2] [--bias-tee]
-//!             [--wav out.wav] [--no-audio] [--script "3s rate 1.024M; 6s quit"]
+//!             [--wav out.wav] [--no-audio] [--verbose] [--script "3s rate 1.024M; 6s quit"]
 //!
 //! Live commands on stdin: freq <f> (or +1k / -500 to step), rate <r>, mode <m>, bw <Hz>,
 //!   pitch <Hz>, gain <dB>|auto, vol <0-2>, ds 0|1|2, bt on|off (bias-tee), stereo on|off,
@@ -73,6 +73,7 @@ fn main() {
     let mut wav: Option<String> = None;
     let mut audio = cfg!(feature = "audio");
     let mut script = String::new();
+    let mut verbose = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--usb" => usb = Some(args.next().and_then(|v| v.parse().ok()).unwrap_or(0)),
@@ -88,6 +89,7 @@ fn main() {
             "--ds" => ds = args.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--wav" => wav = args.next(),
             "--no-audio" => audio = false,
+            "--verbose" | "-v" => verbose = true,
             "--script" => script = args.next().unwrap_or_default(),
             "-h" | "--help" => {
                 println!("{}", include_str!("main.rs").lines().take(10).map(|l| l.trim_start_matches("//!")).collect::<Vec<_>>().join("\n"));
@@ -139,7 +141,11 @@ fn main() {
     let (eng_tx, eng_rx) = mpsc::channel();
     let eng = std::thread::Builder::new()
         .name("engine".into())
-        .spawn(move || engine::run(iq_rx, eng_rx, sink, Engine::new(mode, freq), true))
+        .spawn(move || {
+            let mut e = Engine::new(mode, freq);
+            e.echo = true;
+            engine::run(iq_rx, eng_rx, sink, e, verbose)
+        })
         .unwrap();
     eprintln!("[littlesdr] {:.3} MHz {:?}, {:.0} S/s", freq / 1e6, mode, rate);
 
@@ -266,10 +272,17 @@ fn main() {
                 eprintln!("[littlesdr] bias-tee {}", if on(v) { "on (4.5 V on the antenna)" } else { "off" });
             }
             "ds" => {
-                let _ = src.ctl.send(SourceCtl::DirectSampling(v.parse().unwrap_or(0)));
+                let m: u8 = v.parse().unwrap_or(0);
+                let _ = src.ctl.send(SourceCtl::DirectSampling(m));
+                eprintln!("[littlesdr] direct sampling {}", ["off", "I branch", "Q branch"].get(m as usize).unwrap_or(&"?"));
             }
             "gain" | "g" => {
-                let _ = src.ctl.send(SourceCtl::Gain(v.parse().ok()));
+                let g: Option<f32> = v.parse().ok();
+                let _ = src.ctl.send(SourceCtl::Gain(g));
+                match g {
+                    Some(db) => eprintln!("[littlesdr] gain {db} dB (nearest step of the tuner)"),
+                    None => eprintln!("[littlesdr] gain auto"),
+                }
             }
             "vol" => {
                 if let Ok(x) = v.parse() {

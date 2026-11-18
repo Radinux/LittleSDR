@@ -188,7 +188,10 @@ impl Source for RtlSdr {
             if t.elapsed() > Duration::from_secs(5) && started.elapsed() > Duration::from_secs(2) {
                 let now = shared.samples.load(Ordering::Relaxed);
                 let expected = shared.rate.load(Ordering::Relaxed) as f64 * t.elapsed().as_secs_f64();
-                eprintln!("[source] delivered {:.2} % of the nominal rate", (now - n) as f64 / expected * 100.0);
+                let pct = (now - n) as f64 / expected * 100.0;
+                if pct < 99.5 {
+                    eprintln!("[source] samples lost: only {pct:.2} % of the nominal rate delivered");
+                }
                 last_check = (Instant::now(), now);
             }
         }

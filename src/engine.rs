@@ -225,6 +225,8 @@ pub struct Engine {
     front: Option<Front>,
     back: Back,
     pub fx: AudioChain,
+    /// Confirm every command on stderr (command-line use)
+    pub echo: bool,
     delay: VecDeque<Frame>,
     mute: usize,    // audio samples still muted
     fade_in: usize, // ramp position after a mute (0 = none)
@@ -249,6 +251,7 @@ impl Engine {
             front: None,
             back: Back::new(mode, true, bandwidth[mode.index()], pitch),
             fx: AudioChain::new(),
+            echo: false,
             delay: VecDeque::with_capacity(DELAY * 4),
             mute: 0,
             fade_in: 0,
@@ -268,7 +271,37 @@ impl Engine {
         self.fade_in = 1;
     }
 
+    /// Applies a command and confirms it on stderr (`echo`), with the value actually used
     pub fn control(&mut self, c: &EngineCtl) {
+        self.apply(c);
+        if !self.echo {
+            return;
+        }
+        let msg = match c {
+            EngineCtl::Volume(_) => format!("volume {:.2}", self.volume),
+            EngineCtl::Mode(_) => match self.mode.default_bandwidth() {
+                Some(_) => format!("mode {:?}, bandwidth {:.0} Hz", self.mode, self.bandwidth[self.mode.index()]),
+                None => format!("mode {:?}", self.mode),
+            },
+            EngineCtl::Bandwidth(_) if self.mode.default_bandwidth().is_some() => {
+                format!("bandwidth {:.0} Hz", self.bandwidth[self.mode.index()])
+            }
+            EngineCtl::CwPitch(_) => format!("CW pitch {:.0} Hz", self.pitch),
+            EngineCtl::Stereo(_) => format!("stereo {}", if self.stereo { "on" } else { "off" }),
+            EngineCtl::Blanker(..) => match &self.blanker {
+                Some(b) => format!("noise blanker on (x{:.0})", b.threshold),
+                None => "noise blanker off".into(),
+            },
+            EngineCtl::Filter(id, _) | EngineCtl::Param(id, ..) => match self.fx.stages.iter().find(|s| s.id == id) {
+                Some(s) => format!("{} {}  {}", s.label, if s.enabled { "ON" } else { "off" }, s.describe()),
+                None => return,
+            },
+            _ => return,
+        };
+        eprintln!("[engine] {msg}");
+    }
+
+    fn apply(&mut self, c: &EngineCtl) {
         match c {
             EngineCtl::Tune(f) => self.freq = *f,
             EngineCtl::Volume(v) => self.volume = v.clamp(0.0, 2.0),
