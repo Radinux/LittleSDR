@@ -244,7 +244,18 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         if (sr <= 0) return
         val bw = bandwidth.coerceIn(minOf(2_000.0, sr), sr)
         val maxOff = (sr - bw) / 2
-        val v = ViewState(bw, offset.coerceIn(-maxOff, maxOff))
+        var off = offset.coerceIn(-maxOff, maxOff)
+        // Keep the VFO on screen whatever the zoom/pan: shift the view just enough (5 % margin)
+        val vfo = state.value.vfoOffset
+        if (vfo >= -sr / 2 && vfo <= sr / 2) {
+            val margin = bw * 0.05
+            val lo = off - bw / 2 + margin
+            val hi = off + bw / 2 - margin
+            if (vfo < lo) off -= lo - vfo
+            if (vfo > hi) off += vfo - hi
+            off = off.coerceIn(-maxOff, maxOff)
+        }
+        val v = ViewState(bw, off)
         if (v != _view.value) {
             _view.value = v
             Engine.setView(v.bandwidth, v.offset)

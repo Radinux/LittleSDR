@@ -218,10 +218,19 @@ fun SpectrumPanel(
                     Mode.LSB -> tuned - vbw to tuned
                     else -> tuned - vbw / 2 to tuned + vbw / 2
                 }
-                val x0 = xOf(lo)
-                val x1 = xOf(hi).coerceAtLeast(x0 + 2f)
-                drawRect(primary.copy(alpha = 0.18f), Offset(x0, 0f), Size(x1 - x0, specH))
-                drawRect(primary.copy(alpha = 0.07f), Offset(x0, specH), Size(x1 - x0, h - specH))
+                // Passband clipped to the view. When it covers most of the view (narrow sources
+                // like KiwiSDR with a wide mode), don't fill it: that would wash out the whole display.
+                val x0 = xOf(lo).coerceIn(0f, w)
+                val x1 = xOf(hi).coerceIn(0f, w).coerceAtLeast(x0 + 2f)
+                if (x1 - x0 < w * 0.85f) {
+                    drawRect(primary.copy(alpha = 0.18f), Offset(x0, 0f), Size(x1 - x0, specH))
+                    drawRect(primary.copy(alpha = 0.07f), Offset(x0, specH), Size(x1 - x0, h - specH))
+                } else {
+                    // Edge ticks only
+                    val tick = 10.dp.toPx()
+                    drawLine(primary.copy(alpha = 0.6f), Offset(x0 + 1f, 0f), Offset(x0 + 1f, tick), 2.dp.toPx())
+                    drawLine(primary.copy(alpha = 0.6f), Offset(x1 - 1f, 0f), Offset(x1 - 1f, tick), 2.dp.toPx())
+                }
                 val xt = xOf(tuned)
                 drawLine(primary, Offset(xt, 0f), Offset(xt, specH), 1.5.dp.toPx())
                 drawLine(primary.copy(alpha = 0.45f), Offset(xt, specH), Offset(xt, h), 1.dp.toPx())

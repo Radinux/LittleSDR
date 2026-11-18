@@ -46,6 +46,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.delay
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -157,6 +160,13 @@ private val NETWORK_SOURCES = setOf("RTL-TCP", "SpyServer", "KiwiSDR", "SDR++ Se
 /** Material 3 rendering of an SDR++ SmGui menu. Consecutive "same line" widgets share a row. */
 @Composable
 fun SmGuiPanel(widgets: List<SmWidget>, onAction: (SmAction) -> Unit) {
+    // Host fields are followed by their port field (SpyServer, rtl_tcp): lets "host:port" fill both
+    val portFor = HashMap<String, String>()
+    widgets.forEachIndexed { i, w ->
+        if (w is SmWidget.InputText) {
+            (widgets.getOrNull(i + 1) as? SmWidget.InputInt)?.let { portFor[w.id] = it.id }
+        }
+    }
     // Group into rows
     val rows = mutableListOf<MutableList<SmWidget>>()
     widgets.forEach { w ->
@@ -165,10 +175,10 @@ fun SmGuiPanel(widgets: List<SmWidget>, onAction: (SmAction) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         rows.forEach { row ->
             if (row.size == 1) {
-                SmWidgetView(row[0], onAction, Modifier.fillMaxWidth())
+                SmWidgetView(row[0], onAction, Modifier.fillMaxWidth(), portFor)
             } else {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    row.forEach { SmWidgetView(it, onAction) }
+                    row.forEach { SmWidgetView(it, onAction, portFor = portFor) }
                 }
             }
         }
@@ -176,7 +186,12 @@ fun SmGuiPanel(widgets: List<SmWidget>, onAction: (SmAction) -> Unit) {
 }
 
 @Composable
-private fun SmWidgetView(w: SmWidget, onAction: (SmAction) -> Unit, modifier: Modifier = Modifier) {
+private fun SmWidgetView(
+    w: SmWidget,
+    onAction: (SmAction) -> Unit,
+    modifier: Modifier = Modifier,
+    portFor: Map<String, String> = emptyMap(),
+) {
     val enabled = !w.disabled
     when (w) {
         is SmWidget.Header -> Text(w.value, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = modifier.padding(top = 8.dp))
@@ -229,7 +244,28 @@ private fun SmWidgetView(w: SmWidget, onAction: (SmAction) -> Unit, modifier: Mo
             FilledTonalIconButton(onClick = { onAction(SmGui.int(w.id, w.value + w.step.coerceAtLeast(1))) }, enabled = enabled) { Icon(Icons.Default.Add, "+") }
         }
         is SmWidget.InputText -> {
-            var text by remember(w.id, w.value) { mutableStateOf(w.value) }
+            var text by remember(w.id) { mutableStateOf(w.value) }
+            var focused by remember { mutableStateOf(false) }
+            // Follow the module's value unless the user is typing
+            LaunchedEffect(w.value) { if (!focused) text = w.value }
+            fun commit(t: String) {
+                val hp = HOST_PORT.matchEntire(t.trim())
+                val portId = portFor[w.id]
+                if (hp != null && portId != null) {
+                    // "sdr://1.2.3.4:5555" or "host:port": split into the host and port fields
+                    val host = hp.groupValues[1]
+                    text = host
+                    onAction(SmGui.text(w.id, host))
+                    hp.groupValues[2].toIntOrNull()?.let { onAction(SmGui.int(portId, it)) }
+                } else if (t != w.value) {
+                    onAction(SmGui.text(w.id, t))
+                }
+            }
+            // Send while typing (after a short pause): no need to press OK before "Connect"
+            LaunchedEffect(text) {
+                delay(400)
+                if (text != w.value) commit(text)
+            }
             TextField(
                 value = text,
                 onValueChange = { if (it.length <= w.maxLen.coerceAtLeast(1)) text = it },
@@ -237,10 +273,13 @@ private fun SmWidgetView(w: SmWidget, onAction: (SmAction) -> Unit, modifier: Mo
                 singleLine = true,
                 enabled = enabled,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, keyboardType = KeyboardType.Uri),
-                keyboardActions = KeyboardActions(onDone = { onAction(SmGui.text(w.id, text)) }),
+                keyboardActions = KeyboardActions(onDone = { commit(text) }),
                 shape = RoundedCornerShape(16.dp),
                 colors = roundedFieldColors(),
-                modifier = modifier,
+                modifier = modifier.onFocusChanged { f ->
+                    if (focused && !f.isFocused) commit(text)
+                    focused = f.isFocused
+                },
             )
         }
     }
@@ -315,3 +354,7 @@ private fun roundedFieldColors() = TextFieldDefaults.colors(
     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
     disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
 )
+
+
+/** "sdr://host:port", "rtl_tcp://host:port" or "host:port" */
+private val HOST_PORT = Regex("^(?:[a-zA-Z][a-zA-Z0-9+.-]*://)?([^\\s:/]+):(\\d{1,5})/?$")
