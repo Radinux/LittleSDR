@@ -126,7 +126,12 @@ impl WebSocket {
             match op {
                 8 => {
                     let _ = self.send_frame(8, &[]);
-                    return Err("connection closed by the server".into());
+                    let why = if data.len() >= 2 {
+                        format!(" (code {}{})", u16::from_be_bytes([data[0], data[1]]), String::from_utf8_lossy(&data[2..]).trim().chars().take(80).map(|c| c.to_string()).collect::<String>().split_whitespace().next().map_or(String::new(), |_| format!(": {}", String::from_utf8_lossy(&data[2..]).trim())))
+                    } else {
+                        String::new()
+                    };
+                    return Err(format!("connection closed by the server{why}"));
                 }
                 9 => {
                     self.send_frame(10, &data)?;

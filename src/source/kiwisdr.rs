@@ -5,6 +5,10 @@
 //! packets: 3 bytes "SND", flags (0x08 = IQ), sequence (4), S-meter (2), GPS header (10), then
 //! 512 IQ pairs in 16-bit big-endian. "MSG" packets carry the state (sample rate, too busy,
 //! password needed ...).
+//!
+//! Some servers accept only their own web page: their admin allows no channel to other
+//! applications ("ext_api_nchans" = 0), and the server sends "too_busy=0" then closes about
+//! 10 s in. That is the admin's choice; such servers are reported as refusing applications.
 
 use super::ws::{Message, WebSocket};
 use super::{IqBlock, Source, SourceConfig, SourceCtl};
@@ -68,7 +72,8 @@ impl Source for KiwiSdr {
             "SET AR OK in=12000 out=48000".to_string(),
             "SERVER DE CLIENT LittleSDR SND".to_string(),
             "SET compression=0".to_string(),
-            "SET agc=0 hang=0 thresh=-100 slope=6 decay=1000 manGain=50".to_string(),
+            // The server's AGC, as its web page does (a fixed gain overloads on strong stations)
+            "SET agc=1 hang=0 thresh=-100 slope=6 decay=1000 manGain=50".to_string(),
             "SET squelch=0 max=0".to_string(),
             tune_cmd(center),
         ] {
@@ -125,9 +130,18 @@ impl Source for KiwiSdr {
                         rate = r;
                         st.lock().unwrap().rate = r;
                     }
-                    if msg_value(&text, "too_busy").is_some_and(|v| v != "0") {
-                        set_msg("server full (too busy)");
-                        return Err("KiwiSDR full: all its channels are in use".into());
+                    match msg_value(&text, "too_busy") {
+                        // Number of channels its admin allows to applications: 0 = its own web
+                        // page only (the server cuts other clients after ~10 s)
+                        Some("0") => {
+                            set_msg("refuses applications");
+                            return Err("this KiwiSDR only accepts its own web page, not applications: pick another one".into());
+                        }
+                        Some(_) => {
+                            set_msg("server full (too busy)");
+                            return Err("KiwiSDR full: all its channels are in use".into());
+                        }
+                        None => {}
                     }
                     if msg_value(&text, "badp").is_some_and(|v| v == "1") {
                         set_msg("password needed");
