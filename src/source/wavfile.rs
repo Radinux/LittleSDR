@@ -97,7 +97,8 @@ fn from_name(name: &str) -> (Option<f64>, Option<f64>) {
     (center, local.map(|t| (t - local_offset()) as f64))
 }
 
-pub fn probe(path: &str) -> Result<WavInfo, String> {
+/// `center`: the centre frequency when the file does not say it (or says it wrong)
+pub fn probe(path: &str, center: Option<f64>) -> Result<WavInfo, String> {
     let mut f = File::open(path).map_err(|e| format!("{path}: {e}"))?;
     let mut head = [0u8; 12];
     f.read_exact(&mut head).map_err(|e| e.to_string())?;
@@ -167,7 +168,7 @@ pub fn probe(path: &str) -> Result<WavInfo, String> {
     }
     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let (name_center, name_time) = from_name(&name);
-    let center = auxi_center.or(name_center).ok_or("centre frequency unknown (not in the name nor an auxi chunk)")?;
+    let center = center.or(auxi_center).or(name_center).ok_or("centre frequency unknown (not in the name nor an auxi chunk): give it")?;
     let frames = data_len / (2 * bits as u64 / 8);
     Ok(WavInfo { rate: rate as f64, center, bits, float, data_offset, data_len, start_utc: auxi_time.or(name_time), frames })
 }
@@ -189,8 +190,8 @@ pub struct WavFile {
 }
 
 impl WavFile {
-    pub fn open(path: &str) -> Result<WavFile, String> {
-        let info = probe(path)?;
+    pub fn open(path: &str, center: Option<f64>) -> Result<WavFile, String> {
+        let info = probe(path, center)?;
         Ok(WavFile { path: path.to_string(), info, state: Arc::default() })
     }
 }
@@ -327,7 +328,7 @@ mod tests {
             d.extend_from_slice(&(-(i as i16)).to_le_bytes());
         }
         std::fs::write(&path, d).unwrap();
-        let w = WavFile::open(path.to_str().unwrap()).unwrap();
+        let w = WavFile::open(path.to_str().unwrap(), None).unwrap();
         assert_eq!((w.info.rate, w.info.center, w.info.frames), (48_000.0, 7_074_000.0, 4800));
         let (tx, rx) = std::sync::mpsc::sync_channel(64);
         let cfg = SourceConfig { rate: 0, center: 0, gain: None, direct_sampling: 0, bias_tee: false };

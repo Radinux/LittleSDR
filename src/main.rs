@@ -1,6 +1,6 @@
 //! Command-line LittleSDR: listen with the engine, change settings live.
 //!
-//!   littlesdr [--usb [N] | --rtltcp HOST:PORT | --file IQ.wav [--loop]] [--freq 96.5M] [--rate 2.4M]
+//!   littlesdr [--usb [N] | --rtltcp HOST:PORT | --file IQ.wav [--loop] [--center HZ]] [--freq 96.5M] [--rate 2.4M]
 //!             [--mode wfm|nfm|am|usb|lsb|cw|lrpt|dab] [--service NAME] [--gain DB|auto] [--ds 0|1|2] [--bias-tee]
 //!             [--wav out.wav] [--no-audio] [--verbose] [--script "3s rate 1.024M; 6s quit"]
 //!
@@ -95,6 +95,7 @@ fn main() {
     let mut service: Option<String> = None;
     let mut file: Option<String> = None;
     let mut looping = false;
+    let mut file_center: Option<f64> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--usb" => usb = Some(args.next().and_then(|v| v.parse().ok()).unwrap_or(0)),
@@ -111,6 +112,7 @@ fn main() {
             "--wav" => wav = args.next(),
             "--file" => file = args.next(),
             "--loop" => looping = true,
+            "--center" => file_center = args.next().and_then(|v| parse_hz(&v)),
             "--no-audio" => audio = false,
             "--verbose" | "-v" => verbose = true,
             "--service" => service = args.next(),
@@ -129,7 +131,7 @@ fn main() {
     // Source
     let mut file_info = None;
     if let Some(p) = &file {
-        match source::wavfile::WavFile::open(p) {
+        match source::wavfile::WavFile::open(p, file_center) {
             Ok(w) => {
                 let i = &w.info;
                 eprintln!(
