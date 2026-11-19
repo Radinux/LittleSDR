@@ -295,6 +295,8 @@ pub struct Engine {
     pub sstv: crate::sstv::Decoder,
     /// Sound or baseband IQ to WAV
     pub rec: crate::recorder::Recorder,
+    /// Where pictures (LRPT, SSTV, DAB slides) are written
+    pub out_dir: std::path::PathBuf,
     /// FT8 / FT4 on the standard dial frequencies in view
     pub ft8: crate::ft8::Ft8Receiver,
     /// DAB service asked for before DAB mode was on
@@ -331,6 +333,7 @@ impl Engine {
             cw: crate::cw::CwSkimmer::new(),
             sstv: crate::sstv::Decoder::new(),
             rec: crate::recorder::Recorder::new(),
+            out_dir: std::path::PathBuf::from("."),
             ft8: crate::ft8::Ft8Receiver::new(),
             pending_service: None,
             rtty_cfg: Vec::new(),
@@ -803,6 +806,8 @@ impl Engine {
             return Vec::new();
         }
         let prefix = prefix.map(str::to_string).unwrap_or_else(|| format!("meteor-{}", utc_stamp()));
+        let _ = std::fs::create_dir_all(&self.out_dir);
+        let prefix = self.out_dir.join(prefix).display().to_string(); // an absolute prefix stays as is
         match dec.save(&prefix) {
             Ok(files) => {
                 eprintln!("[lrpt] saved {}", files.join(", "));
@@ -885,7 +890,8 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
                 if let Some(sl) = slide {
                     let safe: String = service.trim().chars().map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
                     let ext = if sl.mime == "image/png" { "png" } else { "jpg" };
-                    let path = format!("dab-{}.{ext}", if safe.is_empty() { "slide".into() } else { safe });
+                    let _ = std::fs::create_dir_all(&engine.out_dir);
+                    let path = engine.out_dir.join(format!("dab-{}.{ext}", if safe.is_empty() { "slide".into() } else { safe })).display().to_string();
                     match std::fs::write(&path, &sl.data) {
                         Ok(()) => eprintln!("[dab] picture \"{}\" ({} bytes) -> {path}", sl.name, sl.data.len()),
                         Err(e) => eprintln!("[dab] cannot write {path}: {e}"),
@@ -910,7 +916,8 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
                 let st = engine.sstv.status();
                 if st.finished != sstv_saved {
                     sstv_saved = st.finished;
-                    let path = format!("sstv-{}-{}.png", utc_stamp(), st.finished_mode.replace(' ', "").to_lowercase());
+                    let _ = std::fs::create_dir_all(&engine.out_dir);
+                    let path = engine.out_dir.join(format!("sstv-{}-{}.png", utc_stamp(), st.finished_mode.replace(' ', "").to_lowercase())).display().to_string();
                     if let Some(png) = engine.sstv.png(1) {
                         match std::fs::write(&path, png) {
                             Ok(()) => eprintln!(

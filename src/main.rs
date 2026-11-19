@@ -2,7 +2,7 @@
 //!
 //!   littlesdr [--usb [N] | --rtltcp HOST:PORT | --file IQ.wav [--loop] [--center HZ]] [--freq 96.5M] [--rate 2.4M]
 //!             [--mode wfm|nfm|am|usb|lsb|cw|lrpt|dab] [--service NAME] [--gain DB|auto] [--ds 0|1|2] [--bias-tee]
-//!             [--wav out.wav] [--no-audio] [--verbose] [--script "3s rate 1.024M; 6s quit"]
+//!             [--wav out.wav] [--out DIR (pictures and recordings; default ~/Images/LittleSDR, ~/Musique/LittleSDR)] [--no-audio] [--verbose] [--script "3s rate 1.024M; 6s quit"]
 //!
 //! Live commands on stdin: freq <f> (or +1k / -500 to step), rate <r>, mode <m>, bw <Hz>,
 //!   pitch <Hz>, gain <dB>|auto, vol <0-2>, ds 0|1|2, bt on|off (bias-tee), stereo on|off,
@@ -28,6 +28,22 @@ const DAB_CHANNELS: [(&str, u32); 41] = [
 ];
 
 /// "96.5M", "2.4M", "1024k", "145.8e6" -> Hz; DAB channel names ("11D") too
+/// A user folder from ~/.config/user-dirs.dirs (localized names: ~/Images, ~/Musique ...)
+fn xdg_dir(key: &str, fallback: &str) -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let conf = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{home}/.config"));
+    std::fs::read_to_string(format!("{conf}/user-dirs.dirs"))
+        .ok()
+        .and_then(|t| {
+            t.lines().find_map(|l| {
+                let v = l.strip_prefix(key)?.trim_start().strip_prefix('=')?.trim().trim_matches('"');
+                Some(v.replace("$HOME", &home))
+            })
+        })
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(format!("{home}/{fallback}")))
+}
+
 fn parse_hz(s: &str) -> Option<f64> {
     let s = s.trim();
     if let Some(&(_, khz)) = DAB_CHANNELS.iter().find(|(n, _)| n.eq_ignore_ascii_case(s)) {
@@ -96,6 +112,7 @@ fn main() {
     let mut file: Option<String> = None;
     let mut looping = false;
     let mut file_center: Option<f64> = None;
+    let mut out: Option<String> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--usb" => usb = Some(args.next().and_then(|v| v.parse().ok()).unwrap_or(0)),
@@ -113,6 +130,7 @@ fn main() {
             "--file" => file = args.next(),
             "--loop" => looping = true,
             "--center" => file_center = args.next().and_then(|v| parse_hz(&v)),
+            "--out" => out = args.next(),
             "--no-audio" => audio = false,
             "--verbose" | "-v" => verbose = true,
             "--service" => service = args.next(),
@@ -200,6 +218,13 @@ fn main() {
         .spawn(move || {
             let mut e = Engine::new(mode, freq);
             e.echo = true;
+            let (pics, recs) = match &out {
+                Some(d) => (std::path::PathBuf::from(d), std::path::PathBuf::from(d)),
+                None => (xdg_dir("XDG_PICTURES_DIR", "Pictures").join("LittleSDR"), xdg_dir("XDG_MUSIC_DIR", "Music").join("LittleSDR")),
+            };
+            eprintln!("[littlesdr] pictures -> {}, recordings -> {}", pics.display(), recs.display());
+            e.out_dir = pics;
+            e.rec.set_path(&recs.display().to_string());
             if let Some(sv) = service {
                 e.control(&EngineCtl::DabSelect(sv));
             }
