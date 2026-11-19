@@ -4,9 +4,10 @@
 //!   frequency (48 kHz for SSB/CW/AM/NFM, 240 kHz for broadcast FM, ...), enough to
 //!   demodulate the recording again later;
 //! - "full": the whole band the source delivers, to find other signals in it later;
-//! - "custom": a slice of `bbMax` Hz around the tuned frequency. The disk is written by a thread of its
-//! own, so a slow card never holds the radio up; the header is kept valid as the file grows,
-//! so a recording cut by a crash still opens.
+//! - "custom": a slice of `bbMax` Hz around the tuned frequency.
+//!
+//! The disk is written by a thread of its own, so a slow card never holds the radio up; the
+//! header is kept valid as the file grows, so a recording cut by a crash still opens.
 //! State and settings match the app's recJson / recSet.
 
 use crate::dsp::{lowpass, DecimFir, Frame, Nco, C32};
