@@ -280,20 +280,23 @@ fn main() {
                     let _ = eng_tx.send(EngineCtl::RecPath(d.to_string()));
                 }
                 ("width", Some(w)) => match w {
-                    "full" | "0" => {
-                        let _ = eng_tx.send(EngineCtl::Rec("bbMax".into(), 0.0));
+                    "full" => {
+                        let _ = eng_tx.send(EngineCtl::Rec("bbWidth".into(), 0.0));
+                    }
+                    "focus" => {
+                        let _ = eng_tx.send(EngineCtl::Rec("bbWidth".into(), 1.0));
                     }
                     w => match parse_hz(w) {
                         Some(hz) => {
                             let _ = eng_tx.send(EngineCtl::Rec("bbMax".into(), hz));
                         }
-                        None => eprintln!("rec width full | 500k"),
+                        None => eprintln!("rec width focus | full | 500k"),
                     },
                 },
                 ("", None) => {
                     let _ = eng_tx.send(EngineCtl::Rec("status".into(), 0.0));
                 }
-                _ => eprintln!("rec audio | rec iq (whole band) | rec width 500k (narrower IQ around the tuned frequency) | full | rec stop | rec mono|stereo | rec dir PATH"),
+                _ => eprintln!("rec audio | rec iq | rec width focus (what the mode demodulates, light) | full (whole band) | 500k | rec stop | rec mono|stereo | rec dir PATH"),
             },
             "ft8" | "ft4" => match (v, words.get(2).copied()) {
                 ("on" | "off", None) if words[0] == "ft8" => {

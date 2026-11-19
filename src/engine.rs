@@ -67,7 +67,7 @@ impl Mode {
         Mode::ALL.iter().position(|m| *m == self).unwrap()
     }
     /// Intermediate rate, a multiple of 48 kHz
-    fn if_rate(self) -> f64 {
+    pub fn if_rate(self) -> f64 {
         match self {
             Mode::Wfm => 240_000.0,
             Mode::Lrpt => 192_000.0, // 2.67 samples per 72 ksym/s symbol
@@ -381,7 +381,7 @@ impl Engine {
                 } else if self.rec.recording() {
                     format!("recording -> {}", self.rec.file())
                 } else {
-                    format!("not recording ({} mode, folder {})", if self.rec.mode == crate::recorder::RecMode::Audio { "audio" } else { "baseband" }, self.rec.path.display())
+                    format!("not recording ({} mode, IQ width {:?}, folder {})", if self.rec.mode == crate::recorder::RecMode::Audio { "audio" } else { "baseband" }, self.rec.bb_width, self.rec.path.display())
                 }
             }
             EngineCtl::Ft8(..) => {
@@ -712,7 +712,7 @@ impl Engine {
         // The skimmer looks at the whole band, before the tuned channel is cut out
         self.cw.feed_iq(&block.samples, block.rate, block.center, self.freq);
         self.ft8.feed_iq(&block.samples, block.rate, block.center, self.freq, self.mode == Mode::Usb);
-        self.rec.feed_iq(&block.samples, block.rate, block.center, self.freq);
+        self.rec.feed_iq(&block.samples, block.rate, block.center, self.freq, self.mode.if_rate());
         let front = self.front.as_mut().unwrap();
         self.nco.set(self.offset, block.rate);
         self.nco.mix(&mut block.samples);
