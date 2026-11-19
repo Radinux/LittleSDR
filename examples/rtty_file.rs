@@ -19,7 +19,7 @@ fn main() {
     for chunk in raw.chunks(16384) {
         let mut s = Vec::new();
         u8_to_iq(chunk, &mut s);
-        e.process(IqBlock { samples: s, rate, center, settle_ms: 0.0 }, &mut out);
+        e.process(IqBlock { samples: s, rate, center, settle_ms: 0.0, time: None }, &mut out);
         out.clear();
         text += &e.take_text();
     }

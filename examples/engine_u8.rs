@@ -18,7 +18,7 @@ fn main() {
         let mut s = Vec::new();
         u8_to_iq(ch, &mut s);
         out.clear();
-        e.process(IqBlock { samples: s, rate, center, settle_ms: 0.0 }, &mut out);
+        e.process(IqBlock { samples: s, rate, center, settle_ms: 0.0, time: None }, &mut out);
         wav.write(&out);
     }
     wav.finish();

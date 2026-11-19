@@ -1,6 +1,6 @@
 //! Command-line LittleSDR: listen with the engine, change settings live.
 //!
-//!   littlesdr [--usb [N] | --rtltcp HOST:PORT] [--freq 96.5M] [--rate 2.4M]
+//!   littlesdr [--usb [N] | --rtltcp HOST:PORT | --file IQ.wav [--loop]] [--freq 96.5M] [--rate 2.4M]
 //!             [--mode wfm|nfm|am|usb|lsb|cw|lrpt|dab] [--service NAME] [--gain DB|auto] [--ds 0|1|2] [--bias-tee]
 //!             [--wav out.wav] [--no-audio] [--verbose] [--script "3s rate 1.024M; 6s quit"]
 //!
@@ -93,6 +93,8 @@ fn main() {
     let mut script = String::new();
     let mut verbose = false;
     let mut service: Option<String> = None;
+    let mut file: Option<String> = None;
+    let mut looping = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--usb" => usb = Some(args.next().and_then(|v| v.parse().ok()).unwrap_or(0)),
@@ -107,6 +109,8 @@ fn main() {
             "--bias-tee" => bias_tee = true,
             "--ds" => ds = args.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--wav" => wav = args.next(),
+            "--file" => file = args.next(),
+            "--loop" => looping = true,
             "--no-audio" => audio = false,
             "--verbose" | "-v" => verbose = true,
             "--service" => service = args.next(),
@@ -123,7 +127,34 @@ fn main() {
     }
 
     // Source
+    let mut file_info = None;
+    if let Some(p) = &file {
+        match source::wavfile::WavFile::open(p) {
+            Ok(w) => {
+                let i = &w.info;
+                eprintln!(
+                    "[source] {p}: {:.1} s of IQ at {:.0} S/s around {:.4} MHz{}",
+                    i.duration(),
+                    i.rate,
+                    i.center / 1e6,
+                    i.start_utc.map_or(String::new(), |t| format!(", recorded at {:.0} UTC s", t))
+                );
+                // Tune inside the recorded band: the requested frequency if it is there, else its centre
+                if (freq - i.center).abs() > 0.45 * i.rate {
+                    freq = i.center;
+                }
+                rate = i.rate;
+                w.state.looping.store(looping, std::sync::atomic::Ordering::Relaxed);
+                file_info = Some(w);
+            }
+            Err(e) => {
+                eprintln!("[source] {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     let src: Box<dyn Source> = match (&tcp, usb) {
+        _ if file_info.is_some() => Box::new(file_info.take().unwrap()),
         (Some(addr), _) => Box::new(source::rtltcp::RtlTcp { addr: addr.clone() }),
         #[cfg(feature = "rtlsdr")]
         (None, Some(i)) => {

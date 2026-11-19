@@ -79,6 +79,7 @@ impl Source for RtlTcp {
                         cmd(&mut s, 0x09, m as u32).map_err(io)?;
                         cmd(&mut s, 0x01, center as u32).map_err(io)?;
                     }
+                    Ok(SourceCtl::Seek(_) | SourceCtl::Pause(_) | SourceCtl::Loop(_)) => {}
                     Ok(SourceCtl::Stop) | Err(TryRecvError::Disconnected) => return Ok(()),
                     Err(TryRecvError::Empty) => break,
                 }
@@ -97,7 +98,7 @@ impl Source for RtlTcp {
             }
             let mut samples = Vec::with_capacity(bytes.len() / 2);
             u8_to_iq(&bytes, &mut samples);
-            let block = IqBlock { samples, rate: rate as f64, center: center as f64, settle_ms };
+            let block = IqBlock { samples, rate: rate as f64, center: center as f64, settle_ms, time: None };
             settle_ms = 0.0;
             if out.send(block).is_err() {
                 return Ok(());

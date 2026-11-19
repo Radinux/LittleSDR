@@ -98,6 +98,7 @@ extern "C" fn on_samples(buf: *mut u8, len: u32, ctx: *mut c_void) {
         rate: sh.rate.load(Ordering::Acquire) as f64,
         center: sh.center.load(Ordering::Relaxed) as f64,
         settle_ms: f32::from_bits(sh.settle.swap(0, Ordering::AcqRel)) as f64,
+        time: None,
     };
     if sh.out.send(block).is_err() {
         unsafe { rtlsdr_cancel_async(sh.dev.0) }; // engine gone
@@ -177,6 +178,7 @@ impl Source for RtlSdr {
                     // The tuner is re-enabled / bypassed: the frequency must be set again
                     rtlsdr_set_center_freq(dev.0, shared.center.load(Ordering::Relaxed) as u32);
                 },
+                Ok(SourceCtl::Seek(_) | SourceCtl::Pause(_) | SourceCtl::Loop(_)) => {}
                 Ok(SourceCtl::Stop) | Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => {}
             }

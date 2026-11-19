@@ -203,32 +203,7 @@ impl Default for Recorder {
 /// "2026-11-19_22-49-45" in local time (UTC if the C library can't tell)
 fn local_stamp() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
-    let mut off = 0i64;
-    #[cfg(unix)]
-    {
-        #[repr(C)]
-        struct Tm {
-            sec: i32,
-            min: i32,
-            hour: i32,
-            mday: i32,
-            mon: i32,
-            year: i32,
-            wday: i32,
-            yday: i32,
-            isdst: i32,
-            gmtoff: std::ffi::c_long,
-            zone: *const std::ffi::c_char,
-        }
-        extern "C" {
-            fn localtime_r(t: *const i64, tm: *mut Tm) -> *mut Tm;
-        }
-        let mut tm = Tm { sec: 0, min: 0, hour: 0, mday: 0, mon: 0, year: 0, wday: 0, yday: 0, isdst: 0, gmtoff: 0, zone: std::ptr::null() };
-        // SAFETY: plain C call with valid pointers to stack values
-        if !unsafe { localtime_r(&secs, &mut tm) }.is_null() {
-            off = tm.gmtoff as i64;
-        }
-    }
+    let off = crate::source::wavfile::local_offset();
     let t = secs + off;
     let (days, rem) = (t.div_euclid(86_400), t.rem_euclid(86_400));
     let z = days + 719_468;

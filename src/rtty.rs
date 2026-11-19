@@ -557,7 +557,7 @@ mod tests {
             let mut out = Vec::new();
             let mut text = String::new();
             for ch in iq.chunks(8192) {
-                e.process(IqBlock { samples: ch.to_vec(), rate, center, settle_ms: 0.0 }, &mut out);
+                e.process(IqBlock { samples: ch.to_vec(), rate, center, settle_ms: 0.0, time: None }, &mut out);
                 text += &e.take_text();
             }
             text

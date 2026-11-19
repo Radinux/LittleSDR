@@ -6,6 +6,7 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::thread::JoinHandle;
 
 pub mod rtltcp;
+pub mod wavfile;
 #[cfg(feature = "rtlsdr")]
 pub mod rtlsdr;
 
@@ -19,6 +20,9 @@ pub struct IqBlock {
     /// Set on the first block after a sample-rate change: how long (ms of signal) the samples
     /// may still be mislabeled (data that was in flight when the rate changed), to be muted.
     pub settle_ms: f64,
+    /// UTC time of the first sample (s since the epoch) when the source knows it better than
+    /// the arrival time: a recording played back
+    pub time: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -31,6 +35,12 @@ pub enum SourceCtl {
     DirectSampling(u8),
     /// 4.5 V on the antenna input, for active antennas (loops, LNAs)
     BiasTee(bool),
+    /// Files: go to this many seconds from the start
+    Seek(f64),
+    /// Files: pause / resume
+    Pause(bool),
+    /// Files: start again at the end
+    Loop(bool),
     Stop,
 }
 

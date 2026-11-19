@@ -711,7 +711,14 @@ impl Engine {
         }
         // The skimmer looks at the whole band, before the tuned channel is cut out
         self.cw.feed_iq(&block.samples, block.rate, block.center, self.freq);
-        self.ft8.feed_iq(&block.samples, block.rate, block.center, self.freq, self.mode == Mode::Usb);
+        match block.time {
+            // A recording: its own clock, so the FT8 slots fall on the recorded UTC seconds
+            Some(t) => {
+                let end = t + block.samples.len() as f64 / block.rate;
+                self.ft8.feed_iq_at(&block.samples, block.rate, block.center, self.freq, self.mode == Mode::Usb, end);
+            }
+            None => self.ft8.feed_iq(&block.samples, block.rate, block.center, self.freq, self.mode == Mode::Usb),
+        }
         self.rec.feed_iq(&block.samples, block.rate, block.center, self.freq, self.mode.if_rate());
         let front = self.front.as_mut().unwrap();
         self.nco.set(self.offset, block.rate);

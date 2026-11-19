@@ -13,7 +13,7 @@ fn main() {
         }
         let mut s = Vec::new();
         u8_to_iq(chunk, &mut s);
-        e.process(IqBlock { samples: s, rate: 2.4e6, center: 96.25e6, settle_ms: 0.0 }, &mut out);
+        e.process(IqBlock { samples: s, rate: 2.4e6, center: 96.25e6, settle_ms: 0.0, time: None }, &mut out);
     }
     println!("{}", e.status().lines().next().unwrap());
 }

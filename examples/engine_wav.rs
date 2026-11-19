@@ -54,7 +54,7 @@ fn main() {
         have -= n;
         n_in += s.len();
         out.clear();
-        e.process(IqBlock { samples: s, rate: rate as f64, center, settle_ms: 0.0 }, &mut out);
+        e.process(IqBlock { samples: s, rate: rate as f64, center, settle_ms: 0.0, time: None }, &mut out);
         if n_in >= next {
             next += rate as usize * 60;
             if let Some(st) = e.lrpt_status() {
