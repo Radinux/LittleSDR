@@ -210,7 +210,7 @@ pub fn unpack(b: &[u8], hashes: &mut CallHashes) -> Option<Message> {
                     hashes.add(c);
                 }
             }
-            let from = if c1.starts_with("CQ") || c1 == "QRZ" || c1 == "DE" { c2.clone() } else { c2.clone() };
+            let from = c2.clone(); // the sender is the second call (also after CQ / QRZ / DE)
             Some(Message { text, from: from.trim_matches(|c| c == '<' || c == '>').to_string(), grid })
         }
         (4, _) => {

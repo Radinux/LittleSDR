@@ -72,7 +72,7 @@ impl Channel {
         let mut factors = Vec::new();
         let mut left = total;
         for f in [5, 4, 2, 3] {
-            while left % f == 0 && left > 1 {
+            while left.is_multiple_of(f) && left > 1 {
                 factors.push(f);
                 left /= f;
             }
