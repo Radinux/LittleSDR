@@ -23,8 +23,10 @@ stopping the dongle or cutting the sound.
 - Meteor-M LRPT weather pictures: QPSK / OQPSK demodulator (carrier from the 4th power of
   the signal, Costas loop, symbol clock), frame sync under any phase, Viterbi, CCSDS
   descrambling, Reed-Solomon, packets, MSU-MR JPEG decompression, PNG per channel + colour
-  composite. Checked on a real Meteor-M2-4 pass (OQPSK + differential coding): 96 % of the
-  frames, 11 min 44 s decoded in 18 s (`cargo run --release --example lrpt_file -- pass.wav`)
+  composite. Checked on a real Meteor-M2-4 pass (OQPSK + differential coding): 98 % of the
+  frames, 11 min 44 s decoded in 19 s (`cargo run --release --example lrpt_file -- pass.wav`).
+  Live: `--mode lrpt --freq 137.9M`; progress every 10 s, pictures saved on `lrpt save`, on
+  quit and when leaving the mode (`meteor-YYYYMMDD-HHMM_*.png`)
 - Signal meter: channel power and noise floor (dBFS), SNR, ADC clipping; warns unasked when
   the gain is clearly too high (ADC clipping) or too low (`meter on` prints it every second)
 - Bias-tee for active antennas (`--bias-tee`, `bt on|off`), always switched off on exit (Ctrl+C included)
@@ -46,7 +48,7 @@ cargo build --release
 ```
 
 Live commands on stdin: `freq 101.1M` (`freq +500` / `freq -1k` to step), `rate 1.024M`,
-`mode wfm|nfm|am|usb|lsb|cw`, `bw 2.4k`, `pitch 650`, `gain 30` / `gain auto`, `ds 0|1|2`,
+`mode wfm|nfm|am|usb|lsb|cw|lrpt`, `bw 2.4k`, `pitch 650`, `gain 30` / `gain auto`, `ds 0|1|2`,
 `vol 1.2`, `stereo on|off`, `nb on|off [threshold]`, `fx nr on`, `fx notch hz 1200`, `status`,
 `meter on|off`, `rtty on|off`, `rtty shift 450`, `rtty baud 50`, `rtty ita2 on`, `rtty rev on|off|auto`,
 `quit`. `--script "5s rate 1.024M; 10s quit"` runs commands at given times,

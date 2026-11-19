@@ -1,13 +1,13 @@
 //! Command-line LittleSDR: listen with the engine, change settings live.
 //!
 //!   littlesdr [--usb [N] | --rtltcp HOST:PORT] [--freq 96.5M] [--rate 2.4M]
-//!             [--mode wfm|nfm|am|usb|lsb|cw] [--gain DB|auto] [--ds 0|1|2] [--bias-tee]
+//!             [--mode wfm|nfm|am|usb|lsb|cw|lrpt] [--gain DB|auto] [--ds 0|1|2] [--bias-tee]
 //!             [--wav out.wav] [--no-audio] [--verbose] [--script "3s rate 1.024M; 6s quit"]
 //!
 //! Live commands on stdin: freq <f> (or +1k / -500 to step), rate <r>, mode <m>, bw <Hz>,
 //!   pitch <Hz>, gain <dB>|auto, vol <0-2>, ds 0|1|2, bt on|off (bias-tee), stereo on|off,
 //!   nb on|off [threshold], fx <filter> on|off, fx <filter> <param> <value>, meter on|off,
-//!   rtty on|off, rtty shift|baud|center <v>, rtty rev on|off|auto, rtty ita2|sql on|off, status, quit.
+//!   lrpt save [prefix], lrpt qpsk|oqpsk, rtty on|off, rtty shift|baud|center <v>, rtty rev on|off|auto, rtty ita2|sql on|off, status, quit.
 //!   Filters: hp lp cw notch anotch nr eq agc limit
 
 use littlesdr::audio::{AudioSink, WavSink};
@@ -84,7 +84,7 @@ fn main() {
             }
             "--freq" => freq = args.next().and_then(|v| parse_hz(&v)).expect("--freq"),
             "--rate" => rate = args.next().and_then(|v| parse_hz(&v)).expect("--rate"),
-            "--mode" => mode = args.next().and_then(|v| Mode::parse(&v)).expect("--mode wfm|nfm|am|usb|lsb|cw"),
+            "--mode" => mode = args.next().and_then(|v| Mode::parse(&v)).expect("--mode wfm|nfm|am|usb|lsb|cw|lrpt"),
             "--gain" => gain = args.next().and_then(|v| v.parse().ok()),
             "--bias-tee" => bias_tee = true,
             "--ds" => ds = args.next().and_then(|v| v.parse().ok()).unwrap_or(0),
@@ -231,6 +231,15 @@ fn main() {
                 },
                 _ => eprintln!("fx <filter> on|off  |  fx <filter> <param> <value>"),
             },
+            "lrpt" => match v {
+                "save" => {
+                    let _ = eng_tx.send(EngineCtl::LrptSave(words.get(2).map(|p| p.to_string())));
+                }
+                "qpsk" | "oqpsk" => {
+                    let _ = eng_tx.send(EngineCtl::LrptOqpsk(v == "oqpsk"));
+                }
+                _ => eprintln!("lrpt save [prefix]  |  lrpt qpsk|oqpsk   (mode lrpt to receive)"),
+            },
             "rtty" => match (v, words.get(2)) {
                 ("on" | "off" | "", None) => {
                     let _ = eng_tx.send(EngineCtl::Rtty(v != "off"));
@@ -315,7 +324,7 @@ fn main() {
             }
             "quit" | "q" | "exit" => break,
             "" => {}
-            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | meter | rtty | stereo | nb | fx | status | quit  ({other}?)"),
+            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | meter | rtty | lrpt | stereo | nb | fx | status | quit  ({other}?)"),
         }
     }
     let _ = src.ctl.send(SourceCtl::Stop);

@@ -17,6 +17,7 @@ use crate::audio::AudioSink;
 use crate::audio_fx::AudioChain;
 use crate::dsp::{lowpass, Deemphasis, DecimFir, FmDemod, Frame, Interp, Nco, NoiseBlanker, C32};
 use crate::linear::{AmDemod, Sideband, SsbDemod, SSB_LOW_CUT};
+use crate::lrpt::LrptDecoder;
 use crate::meter::{Meter, Reading};
 use crate::rtty::Rtty;
 use crate::source::IqBlock;
@@ -38,10 +39,12 @@ pub enum Mode {
     Usb,
     Lsb,
     Cw,
+    /// Meteor-M weather satellite pictures (no sound)
+    Lrpt,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 6] = [Mode::Wfm, Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Cw];
+    pub const ALL: [Mode; 7] = [Mode::Wfm, Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Cw, Mode::Lrpt];
 
     pub fn parse(s: &str) -> Option<Mode> {
         match s.to_ascii_lowercase().as_str() {
@@ -51,6 +54,7 @@ impl Mode {
             "usb" => Some(Mode::Usb),
             "lsb" => Some(Mode::Lsb),
             "cw" => Some(Mode::Cw),
+            "lrpt" | "meteor" => Some(Mode::Lrpt),
             _ => None,
         }
     }
@@ -61,6 +65,7 @@ impl Mode {
     fn if_rate(self) -> f64 {
         match self {
             Mode::Wfm => 240_000.0,
+            Mode::Lrpt => 192_000.0, // 2.67 samples per 72 ksym/s symbol
             _ => 48_000.0,
         }
     }
@@ -71,6 +76,8 @@ impl Mode {
             Mode::Nfm => 8_000.0,
             Mode::Am => 10_000.0,
             Mode::Usb | Mode::Lsb | Mode::Cw => 5_000.0,
+            // 72 ksym/s, roll-off 0.6: +-57.6 kHz, plus Doppler (+-3.5 kHz)
+            Mode::Lrpt => 64_000.0,
         }
     }
     fn deviation(self) -> f64 {
@@ -82,7 +89,7 @@ impl Mode {
     /// Default channel bandwidth (Hz), None when it is fixed (FM)
     pub fn default_bandwidth(self) -> Option<f64> {
         match self {
-            Mode::Wfm | Mode::Nfm => None,
+            Mode::Wfm | Mode::Nfm | Mode::Lrpt => None,
             Mode::Am => Some(9_000.0),
             Mode::Usb | Mode::Lsb => Some(2_700.0),
             Mode::Cw => Some(500.0),
@@ -131,6 +138,10 @@ pub enum EngineCtl {
     Rtty(bool),
     /// RTTY parameter: shift, baud, center, rev, ita2
     RttyParam(String, f64),
+    /// LRPT: write the pictures so far (file prefix, or a dated name)
+    LrptSave(Option<String>),
+    /// LRPT: OQPSK (Meteor-M N2-3 / N2-4) or QPSK
+    LrptOqpsk(bool),
     /// Print the state on stderr
     Status,
     Stop,
@@ -150,8 +161,9 @@ impl Front {
         let mid = rate / d as f64;
         // Pass up to the channel edge, stop where the IF would alias into the channel
         let pass = mode.half_band();
-        let stop = (ifr - pass).max(pass * 1.2);
-        let taps = lowpass((pass + stop) / 2.0 / rate, (stop - pass) / rate);
+        let stop = (ifr - pass).max(pass * 1.2).min(rate / 2.0);
+        // Input already narrower than the IF (e.g. a recording): nothing to filter
+        let taps = if stop <= pass * 1.05 { vec![1.0] } else { lowpass((pass + stop) / 2.0 / rate, (stop - pass) / rate) };
         Front { rate, decim: DecimFir::new(taps, d), frac: Interp::new(mid, ifr) }
     }
 }
@@ -162,6 +174,8 @@ enum Back {
     Nfm { fm: FmDemod, audio: DecimFir<f32> },
     Am(AmDemod),
     Ssb(SsbDemod),
+    /// Silent: `rem` carries the IF samples not yet turned into (silent) audio frames
+    Lrpt { dec: Box<LrptDecoder>, rem: usize },
 }
 
 impl Back {
@@ -183,6 +197,7 @@ impl Back {
             },
             Mode::Am => Back::Am(AmDemod::new(bw)),
             Mode::Usb | Mode::Lsb | Mode::Cw => Back::Ssb(SsbDemod::new(mode.sideband().unwrap(), bw, pitch)),
+            Mode::Lrpt => Back::Lrpt { dec: Box::new(LrptDecoder::new(ifr, true)), rem: 0 },
         }
     }
 
@@ -209,6 +224,14 @@ impl Back {
             }
             Back::Am(d) => d.process(iq, out),
             Back::Ssb(d) => d.process(iq, out),
+            Back::Lrpt { dec, rem } => {
+                dec.process(iq);
+                // Keep the sound output running (silence) at exactly 48 kHz
+                let per = (Mode::Lrpt.if_rate() / AUDIO_RATE) as usize;
+                *rem += iq.len();
+                out.extend(std::iter::repeat(Frame::default()).take(*rem / per));
+                *rem %= per;
+            }
         }
     }
 }
@@ -223,7 +246,7 @@ pub struct Engine {
     mode: Mode,
     freq: f64,
     offset: f64,
-    bandwidth: [f64; 6], // per mode, remembered across mode changes
+    bandwidth: [f64; 7], // per mode, remembered across mode changes
     pitch: f64,
     volume: f32,
     stereo: bool,
@@ -328,6 +351,9 @@ impl Engine {
             EngineCtl::Tune(f) => self.freq = *f,
             EngineCtl::Volume(v) => self.volume = v.clamp(0.0, 2.0),
             EngineCtl::Mode(m) if *m != self.mode => {
+                if self.mode == Mode::Lrpt {
+                    self.save_lrpt(None); // the pictures would be lost with the decoder
+                }
                 let same_front = m.if_rate() == self.mode.if_rate() && m.half_band() == self.mode.half_band();
                 self.mode = *m;
                 match (&mut self.back, m.sideband()) {
@@ -410,6 +436,15 @@ impl Engine {
                     }
                 }
             }
+            EngineCtl::LrptSave(prefix) => {
+                self.save_lrpt(prefix.as_deref());
+            }
+            EngineCtl::LrptOqpsk(oq) => {
+                if let Back::Lrpt { dec, .. } = &mut self.back {
+                    dec.demod = crate::lrpt::demod::Demod::new(Mode::Lrpt.if_rate(), *oq);
+                    eprintln!("[lrpt] {}", if *oq { "OQPSK" } else { "QPSK" });
+                }
+            }
             EngineCtl::Status => eprintln!("{}", self.status()),
             _ => {}
         }
@@ -426,6 +461,9 @@ impl Engine {
                 }
             }
             _ => {}
+        }
+        if let Back::Lrpt { dec, .. } = &self.back {
+            s += &format!("\n[lrpt] {}\n", dec.describe());
         }
         if let Back::Wfm { stereo, .. } = &self.back {
             s += &format!(
@@ -458,6 +496,7 @@ impl Engine {
             Mode::Am | Mode::Cw => (-bw / 2.0, bw / 2.0),
             Mode::Usb => (SSB_LOW_CUT, SSB_LOW_CUT + bw),
             Mode::Lsb => (-SSB_LOW_CUT - bw, -SSB_LOW_CUT),
+            Mode::Lrpt => (-57_600.0, 57_600.0),
         }
     }
 
@@ -540,6 +579,34 @@ impl Engine {
         self.stats.audio_samples += out.len() as u64;
     }
 
+    /// LRPT progress line, when in LRPT mode
+    pub fn lrpt_status(&self) -> Option<String> {
+        match &self.back {
+            Back::Lrpt { dec, .. } => Some(dec.describe()),
+            _ => None,
+        }
+    }
+
+    /// Writes the LRPT pictures decoded so far; the files written
+    pub fn save_lrpt(&self, prefix: Option<&str>) -> Vec<String> {
+        let Back::Lrpt { dec, .. } = &self.back else { return Vec::new() };
+        if dec.imager.decoded == 0 {
+            eprintln!("[lrpt] no picture to save yet");
+            return Vec::new();
+        }
+        let prefix = prefix.map(str::to_string).unwrap_or_else(|| format!("meteor-{}", utc_stamp()));
+        match dec.save(&prefix) {
+            Ok(files) => {
+                eprintln!("[lrpt] saved {}", files.join(", "));
+                files
+            }
+            Err(e) => {
+                eprintln!("[lrpt] cannot save the pictures: {e}");
+                Vec::new()
+            }
+        }
+    }
+
     /// Text decoded since the last call (RTTY)
     pub fn take_text(&mut self) -> String {
         self.rtty.as_mut().map(|r| r.take_text()).unwrap_or_default()
@@ -556,11 +623,13 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
     let mut last_report = Instant::now();
     let mut last_meter = Instant::now();
     let mut last_advice: Option<Instant> = None;
+    let mut last_lrpt = Instant::now();
     let start = Instant::now();
     loop {
         loop {
             match ctl.try_recv() {
                 Ok(EngineCtl::Stop) | Err(TryRecvError::Disconnected) => {
+                    engine.save_lrpt(None);
                     sink.finish();
                     return;
                 }
@@ -588,6 +657,7 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
+                engine.save_lrpt(None);
                 sink.finish();
                 return;
             }
@@ -606,10 +676,33 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
                 }
             }
         }
+        if last_lrpt.elapsed() >= Duration::from_secs(10) {
+            last_lrpt = Instant::now();
+            if let Some(st) = engine.lrpt_status() {
+                eprintln!("[lrpt] {st}");
+            }
+        }
         if verbose && last_report.elapsed() > Duration::from_secs(5) {
             last_report = Instant::now();
             let produced = engine.stats.audio_samples as f64 / AUDIO_RATE;
             eprintln!("[engine] {:?}, {:.1} s of audio in {:.1} s, {}", engine.mode(), produced, start.elapsed().as_secs_f64(), sink.status());
         }
     }
+}
+
+/// "20261119-0132" in UTC, for file names (no date library)
+fn utc_stamp() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil date from days since 1970-01-01 (H. Hinnant's algorithm)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + (m <= 2) as i64;
+    format!("{y:04}{m:02}{d:02}-{:02}{:02}", rem / 3600, rem % 3600 / 60)
 }

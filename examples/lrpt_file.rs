@@ -37,12 +37,14 @@ fn main() {
     let mut buf = vec![0u8; bytes_per * 65536];
     let (mut done, mut next_report) = (0usize, 0usize);
     let t0 = std::time::Instant::now();
+    let mut have = 0usize; // bytes in buf, a partial sample may stay for the next read
     loop {
-        let n = f.read(&mut buf).unwrap();
-        if n < bytes_per {
+        let n = f.read(&mut buf[have..]).unwrap();
+        if n == 0 {
             break;
         }
-        let n = n - n % bytes_per;
+        have += n;
+        let n = have - have % bytes_per;
         let iq: Vec<C32> = buf[..n]
             .chunks_exact(bytes_per)
             .map(|c| match bits {
@@ -51,6 +53,8 @@ fn main() {
                 _ => C32::new((c[0] as f32 - 127.5) / 127.5, (c[1] as f32 - 127.5) / 127.5),
             })
             .collect();
+        buf.copy_within(n..have, 0);
+        have -= n;
         dec.process(&iq);
         done += iq.len();
         if done >= next_report {
