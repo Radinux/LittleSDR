@@ -22,6 +22,9 @@ pub struct DabReceiver {
     frames: Vec<OfdmFrame>,
     pcm: Vec<f32>,
     resampler: Option<(u32, Interp<Frame>)>,
+    /// Frames in a row without a single good FIB while synced (false lock detection)
+    bad_frames: u32,
+    pub false_locks: u32,
 }
 
 impl Default for DabReceiver {
@@ -32,7 +35,7 @@ impl Default for DabReceiver {
 
 impl DabReceiver {
     pub fn new() -> DabReceiver {
-        DabReceiver { ofdm: Ofdm::new(), fic: Fic::new(), want: None, playing: None, frames: Vec::new(), pcm: Vec::new(), resampler: None }
+        DabReceiver { ofdm: Ofdm::new(), fic: Fic::new(), want: None, playing: None, frames: Vec::new(), pcm: Vec::new(), resampler: None, bad_frames: 0, false_locks: 0 }
     }
 
     pub fn services(&self) -> Vec<Service> {
@@ -71,7 +74,20 @@ impl DabReceiver {
         self.ofdm.process(iq, &mut self.frames);
         let frames = std::mem::take(&mut self.frames);
         for f in &frames {
+            let good_before = self.fic.stats.fibs - self.fic.stats.crc_errors;
             self.fic.process(&f.fic);
+            if self.fic.stats.fibs - self.fic.stats.crc_errors == good_before {
+                self.bad_frames += 1;
+                if self.bad_frames >= 10 {
+                    // ~1 s synced without one readable FIB: wrong timing or frequency
+                    self.bad_frames = 0;
+                    self.false_locks += 1;
+                    self.ofdm.reset();
+                    break;
+                }
+            } else {
+                self.bad_frames = 0;
+            }
             if self.playing.is_none() {
                 if let Some(s) = self.wanted() {
                     let sub = s.subch.and_then(|i| self.fic.ensemble.subchannels.get(&i)).cloned();
@@ -116,10 +132,11 @@ impl DabReceiver {
         let o = &self.ofdm.stats;
         let e = &self.fic.ensemble;
         let mut s = format!(
-            "DAB: {}, offset {:+.0} Hz, SNR {:.1} dB | ensemble \"{}\", {} services, FIC {} / {} ok",
+            "DAB: {}, offset {:+.0} Hz, SNR {:.1} dB, resyncs {} | ensemble \"{}\", {} services, FIC {} / {} ok",
             if self.ofdm.locked() { "synced" } else { "searching" },
             o.freq_hz,
             o.snr_db,
+            o.resyncs,
             e.label,
             e.services.len(),
             self.fic.stats.fibs - self.fic.stats.crc_errors,

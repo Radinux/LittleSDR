@@ -23,6 +23,8 @@ pub const SYMBOLS: usize = 76; // PRS + 75 data symbols
 pub const TF: usize = TNULL + SYMBOLS * TS; // 196608
 pub const K: usize = 1536;
 pub const BITS_PER_SYMBOL: usize = 2 * K;
+/// Largest frequency correction believed (Hz): ~150 ppm at 240 MHz
+const MAX_OFFSET: f64 = 35_000.0;
 /// The FFT window starts this many samples into the guard interval (echoes arrive late)
 const EARLY: isize = 24;
 
@@ -137,8 +139,10 @@ impl Ofdm {
 
     /// Integer carrier offset from the PRS spectrum (differential correlation: insensitive
     /// to timing), searched within +-`range` carriers
+    /// Returns (offset, how much the best peak stands out: best / mean of the others)
     fn coarse_offset(&self, x: &[Complex32], range: i32) -> (i32, f32) {
         let mut best = (0, 0.0f32);
+        let mut all = Vec::with_capacity(2 * range as usize + 1);
         for m in -range..=range {
             let mut acc = Complex32::default();
             let mut k = -768;
@@ -152,11 +156,22 @@ impl Ofdm {
                 k += 1;
             }
             let v = acc.norm();
+            all.push(v);
             if v > best.1 {
                 best = (m, v);
             }
         }
-        best
+        let others = (all.iter().sum::<f32>() - best.1) / (all.len() - 1) as f32;
+        (best.0, best.1 / others.max(1e-20))
+    }
+
+    /// Back to searching from scratch (no frequency correction)
+    pub fn reset(&mut self) {
+        self.next = None;
+        self.freq = 0.0;
+        self.phase = 0.0;
+        self.buf.clear();
+        self.stats.resyncs += 1;
     }
 
     /// Channel impulse response from the PRS: (peak position, signed, in samples; peak to
@@ -231,10 +246,17 @@ impl Ofdm {
             return;
         }
         let x = self.spectrum(prs);
-        let (m, _) = self.coarse_offset(&x, 40);
+        let (m, standout) = self.coarse_offset(&x, 40);
+        if standout < 4.0 {
+            // No clear phase reference where the null suggested: noise, or a wrong dip
+            self.buf.drain(..TF);
+            return;
+        }
         if m != 0 {
-            // Correct the carrier offset; the buffer is already mixed: restart from here
-            self.freq += m as f64 * 1000.0;
+            // Correct the carrier offset; the buffer is already mixed: restart from here.
+            // An RTL-SDR is within ~100 ppm: beyond +-MAX_OFFSET it is a false peak.
+            let f = self.freq + m as f64 * 1000.0;
+            self.freq = if f.abs() <= MAX_OFFSET { f } else { 0.0 };
             self.buf.clear();
             self.phase = 0.0;
             return;
