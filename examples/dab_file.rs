@@ -7,6 +7,7 @@ fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let raw = std::fs::read(&a[0]).unwrap();
     let mut rx = DabReceiver::new();
+    rx.ofdm.coherent = std::env::var_os("DAB_COHERENT").is_some();
     if let Some(s) = a.get(1) {
         rx.select(s);
     }

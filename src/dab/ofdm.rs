@@ -23,6 +23,35 @@ pub const SYMBOLS: usize = 76; // PRS + 75 data symbols
 pub const TF: usize = TNULL + SYMBOLS * TS; // 196608
 pub const K: usize = 1536;
 pub const BITS_PER_SYMBOL: usize = 2 * K;
+/// How far before the strongest path an earlier one is looked for (samples, 1 = 0.49 us)
+const PRE_ECHO: usize = 300;
+/// Coherent detection: weight of the newest symbol in the channel estimate, and smoothing
+/// across carriers (each side). Measured on a weak SFN multiplex (8B), more averaging only
+/// made things worse, and plain differential detection stayed best: coherent is off by
+/// default.
+const CHAN_ALPHA: f32 = 0.5;
+const CHAN_SPAN: i32 = 2;
+
+/// Averages the channel estimate over neighbouring carriers (DC carrier excluded)
+fn smooth(h: &[Complex32]) -> Vec<Complex32> {
+    let mut out = vec![Complex32::default(); TU];
+    for k in -768i32..=768 {
+        if k == 0 {
+            continue;
+        }
+        let mut acc = Complex32::default();
+        let mut n = 0.0;
+        for j in (k - CHAN_SPAN)..=(k + CHAN_SPAN) {
+            if j != 0 && (-768..=768).contains(&j) {
+                acc += h[bin(j)];
+                n += 1.0;
+            }
+        }
+        out[bin(k)] = acc / n;
+    }
+    out
+}
+
 /// Largest frequency correction believed (Hz): ~150 ppm at 240 MHz
 const MAX_OFFSET: f64 = 35_000.0;
 /// The FFT window starts this many samples into the guard interval (echoes arrive late)
@@ -95,6 +124,11 @@ pub struct Ofdm {
     phase: f64,
     pub stats: OfdmStats,
     scratch: Vec<Complex32>,
+    /// Coherent detection against a smoothed channel estimate (else plain differential,
+    /// the default: better on the signals tried)
+    pub coherent: bool,
+    /// Print the impulse response of the next frames (diagnostics)
+    pub debug_cir: bool,
 }
 
 impl Default for Ofdm {
@@ -124,6 +158,8 @@ impl Ofdm {
             phase: 0.0,
             stats: OfdmStats::default(),
             scratch: vec![Complex32::default(); TU],
+            coherent: false,
+            debug_cir: false,
         }
     }
 
@@ -180,10 +216,34 @@ impl Ofdm {
         let mut h: Vec<Complex32> = x.iter().zip(&self.prs).map(|(a, r)| a * r.conj()).collect();
         self.ifft.process_with_scratch(&mut h, &mut self.scratch);
         let mags: Vec<f32> = h.iter().map(|c| c.norm_sqr()).collect();
+        if self.debug_cir {
+            // Taps within 30 dB of the peak, position in samples (1 sample = 0.49 us)
+            let mx = mags.iter().cloned().fold(0.0f32, f32::max);
+            let mut taps: Vec<(isize, f32)> = mags
+                .iter()
+                .enumerate()
+                .filter(|(_, &m)| m > mx * 0.063)
+                .map(|(i, &m)| (if i > TU / 2 { i as isize - TU as isize } else { i as isize }, 10.0 * (m / mx).log10()))
+                .collect();
+            taps.sort_by_key(|t| t.0);
+            let floor = 10.0 * (mags.iter().sum::<f32>() / mags.len() as f32 / mx).log10();
+            eprintln!("CIR (floor {floor:.0} dB): {:?}", taps.iter().map(|(p, d)| format!("{p}:{d:.0}")).collect::<Vec<_>>());
+        }
         let (pk, &mx) = mags.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap();
         let mean = mags.iter().sum::<f32>() / mags.len() as f32;
-        let pos = if pk > TU / 2 { pk as isize - TU as isize } else { pk as isize };
-        (pos, mx / mean.max(1e-20))
+        let signed = |i: usize| if i > TU / 2 { i as isize - TU as isize } else { i as isize };
+        // Time the window on the EARLIEST strong path, not the strongest: in a single
+        // frequency network, transmitters nearly as strong as the main one can arrive
+        // earlier; timed on the strongest, they would spill into the next symbol
+        let peak = signed(pk);
+        let mut first = peak;
+        for back in 1..=PRE_ECHO {
+            let i = (pk as isize - back as isize).rem_euclid(TU as isize) as usize;
+            if mags[i] >= mx * 0.1 {
+                first = peak - back as isize;
+            }
+        }
+        (first, mx / mean.max(1e-20))
     }
 
     pub fn process(&mut self, input: &[C32], out: &mut Vec<OfdmFrame>) {
@@ -304,9 +364,50 @@ impl Ofdm {
         let mut msc = Vec::with_capacity(72 * BITS_PER_SYMBOL);
         let mut sig = 0.0f32;
         let mut noise = 0.0f32;
+        // Channel estimate per FFT bin, from the PRS, then followed with the decisions:
+        // comparing each symbol with this smoothed reference instead of the (as noisy)
+        // previous symbol saves up to 3 dB on weak signals
+        let mut chan: Vec<Complex32> = vec![Complex32::default(); TU];
+        let mut tx: Vec<Complex32> = self.prs.clone(); // transmitted phasor of the last symbol
+        if self.coherent {
+            for k in -768i32..=768 {
+                if k != 0 {
+                    chan[bin(k)] = prev[bin(k)] * self.prs[bin(k)].conj();
+                }
+            }
+            chan = smooth(&chan);
+        }
         for l in 1..SYMBOLS {
             let cur = self.spectrum(at + l * TS);
-            let d: Vec<Complex32> = self.perm.iter().map(|&k| cur[bin(k)] * prev[bin(k)].conj()).collect();
+            let d: Vec<Complex32> = if self.coherent {
+                let mut d: Vec<Complex32> = self.perm.iter().map(|&k| cur[bin(k)] * (chan[bin(k)] * tx[bin(k)]).conj()).collect();
+                // Common phase error (oscillator phase noise turns every carrier alike):
+                // the 4th power strips the pi/4-DQPSK data, the mean angle is the error
+                let mut acc = Complex32::default();
+                for z in &d {
+                    let z2 = z * z;
+                    acc += z2 * z2;
+                }
+                let cpe = (-acc).arg() / 4.0;
+                let rot = Complex32::new(cpe.cos(), -cpe.sin());
+                d.iter_mut().for_each(|z| *z *= rot);
+                // The reference turns with it
+                chan.iter_mut().for_each(|h| *h *= rot.conj());
+                // Decisions -> transmitted phasors -> refreshed channel estimate
+                let r = std::f32::consts::FRAC_1_SQRT_2;
+                let mut raw = chan.clone();
+                for (&k, z) in self.perm.iter().zip(&d) {
+                    let b = bin(k);
+                    let dec = Complex32::new(r * z.re.signum(), r * z.im.signum());
+                    tx[b] *= dec;
+                    let h = cur[b] * tx[b].conj();
+                    raw[b] = chan[b] * (1.0 - CHAN_ALPHA) + h * CHAN_ALPHA;
+                }
+                chan = smooth(&raw);
+                d
+            } else {
+                self.perm.iter().map(|&k| cur[bin(k)] * prev[bin(k)].conj()).collect()
+            };
             let mean = d.iter().map(|c| c.re.abs() + c.im.abs()).sum::<f32>() / (2 * K) as f32;
             let scale = 40.0 / mean.max(1e-20);
             let dst = if l <= 3 { &mut fic } else { &mut msc };
