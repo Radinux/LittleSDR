@@ -417,7 +417,7 @@ fn main() {
             }
             "quit" | "q" | "exit" => break,
             "" => {}
-            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | meter | rtty | lrpt | dab | stereo | nb | fx | status | quit  ({other}?)"),
+            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | meter | rtty | cw | sstv | ft8 | ft4 | lrpt | dab | stereo | nb | fx | status | quit  ({other}?)"),
         }
     }
     let _ = src.ctl.send(SourceCtl::Stop);
