@@ -20,6 +20,11 @@ stopping the dongle or cutting the sound.
   50 Bd / 450 Hz weather), polarity found automatically (or forced), US or ITA2 figures,
   follows a mistuned signal, squelch (framing
   quality + energy on the tones) so noise prints nothing; text on stdout
+- Meteor-M LRPT weather pictures: QPSK / OQPSK demodulator (carrier from the 4th power of
+  the signal, Costas loop, symbol clock), frame sync under any phase, Viterbi, CCSDS
+  descrambling, Reed-Solomon, packets, MSU-MR JPEG decompression, PNG per channel + colour
+  composite. Checked on a real Meteor-M2-4 pass (OQPSK + differential coding): 96 % of the
+  frames, 11 min 44 s decoded in 18 s (`cargo run --release --example lrpt_file -- pass.wav`)
 - Signal meter: channel power and noise floor (dBFS), SNR, ADC clipping; warns unasked when
   the gain is clearly too high (ADC clipping) or too low (`meter on` prints it every second)
 - Bias-tee for active antennas (`--bias-tee`, `bt on|off`), always switched off on exit (Ctrl+C included)
@@ -52,6 +57,7 @@ Live commands on stdin: `freq 101.1M` (`freq +500` / `freq -1k` to step), `rate 
 - `src/dsp.rs` — FIR design, decimator, crossfading filter swap, polyphase upsampler, resampler,
   NCO, FM discriminator, de-emphasis, noise blanker (+ tests)
 - `src/rtty.rs` — RTTY decoder (+ tests, including through the whole engine)
+- `src/lrpt/` — Meteor LRPT: demodulator, FEC (Viterbi, Reed-Solomon), frames, images (+ tests)
 - `src/meter.rs` — signal meter and ADC overload detection (+ tests)
 - `src/linear.rs` — AM, SSB and CW demodulators, IF AGC (+ tests)
 - `src/stereo.rs` — broadcast FM stereo decoder
