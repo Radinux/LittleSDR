@@ -42,7 +42,8 @@ impl DabReceiver {
         self.fic.ensemble.services.values().cloned().collect()
     }
 
-    /// Selects a service by SId (hex) or label prefix; it starts once the FIC has described it
+    /// Selects a service by SId (hex) or name: exact, then start of the name, then anywhere in
+    /// it. It starts once the FIC has described it.
     pub fn select(&mut self, what: &str) {
         self.want = Some(what.to_string());
         self.playing = None;
@@ -60,7 +61,11 @@ impl DabReceiver {
         if let Some(s) = services.iter().find(|s| s.label.to_lowercase() == wl) {
             return Some(s.clone()); // exact name first: "nostalgie" is not "NOSTALGIE 60/70"
         }
-        services.into_iter().find(|s| !s.label.is_empty() && s.label.to_lowercase().starts_with(&wl))
+        if let Some(s) = services.iter().find(|s| !s.label.is_empty() && s.label.to_lowercase().starts_with(&wl)) {
+            return Some(s.clone());
+        }
+        // Last resort: anywhere in the name ("classique" -> "RADIO CLASSIQUE")
+        services.into_iter().find(|s| s.label.to_lowercase().contains(&wl))
     }
 
     pub fn playing(&self) -> Option<&Service> {
