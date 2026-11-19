@@ -12,11 +12,16 @@ fn decodes_the_11d_capture() {
     let mut rx = DabReceiver::new();
     rx.select("radio classique");
     let mut out = Vec::new();
+    let mut label = None;
     for ch in raw.chunks(65536) {
         let mut s = Vec::new();
         u8_to_iq(ch, &mut s);
         rx.process(&s, &mut out);
+        label = rx.take_label().or(label);
     }
+    // The programme text comes with the audio (PAD)
+    let label = label.expect("no programme text");
+    assert!(label.len() > 10, "{label}");
     assert_eq!(rx.fic.ensemble.label, "Métropolitain 1");
     assert_eq!(rx.fic.ensemble.services.len(), 13);
     assert_eq!(rx.fic.stats.crc_errors, 0);

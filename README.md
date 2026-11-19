@@ -25,7 +25,10 @@ stopping the dongle or cutting the sound.
   DAB+ superframes with Reed-Solomon, HE-AAC v1/v2 through FAAD2 (system libfaad, GPL-2+).
   Checked on a real capture (Paris, 11D "Métropolitain 1", 13 services): no FIC error, no
   audio error. `--mode dab --freq 11D --service "radio classique"`, then `dab list`,
-  `dab play nrj`; channel names (5A..13F) work as frequencies
+  `dab play nrj`; channel names (5A..13F) work as frequencies. Programme text (Dynamic
+  Label: title, artist) printed as it changes; slideshow pictures (MOT: logos, covers)
+  saved as `dab-<service>.jpg`. Single frequency networks: the FFT window is timed on the
+  earliest strong path
 - Meteor-M LRPT weather pictures: QPSK / OQPSK demodulator (carrier from the 4th power of
   the signal, Costas loop, symbol clock), frame sync under any phase, Viterbi, CCSDS
   descrambling, Reed-Solomon, packets, MSU-MR JPEG decompression, PNG per channel + colour
@@ -65,7 +68,7 @@ Live commands on stdin: `freq 101.1M` (`freq +500` / `freq -1k` to step), `rate 
 - `src/dsp.rs` — FIR design, decimator, crossfading filter swap, polyphase upsampler, resampler,
   NCO, FM discriminator, de-emphasis, noise blanker (+ tests)
 - `src/rtty.rs` — RTTY decoder (+ tests, including through the whole engine)
-- `src/dab/` — DAB+: OFDM, FEC, FIC, MSC, superframes (+ tests, `tests/dab_capture.rs` on real data)
+- `src/dab/` — DAB+: OFDM, FEC, FIC, MSC, superframes, PAD (text, slideshow) (+ tests, `tests/dab_capture.rs` on real data)
 - `src/aac.rs` — FAAD2 binding (AAC, HE-AAC v1/v2)
 - `src/rs.rs` — Reed-Solomon, any GF(256) code (LRPT, DAB+)
 - `src/lrpt/` — Meteor LRPT: demodulator, FEC (Viterbi, Reed-Solomon), frames, images (+ tests)

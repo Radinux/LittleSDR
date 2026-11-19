@@ -650,6 +650,17 @@ impl Engine {
         }
     }
 
+    /// DAB: new programme text and new slideshow picture since the last call
+    pub fn take_dab_news(&mut self) -> (Option<String>, Option<crate::dab::pad::Slide>, String) {
+        match &mut self.back {
+            Back::Dab(rx) => {
+                let name = rx.playing().map(|s| s.label.clone()).unwrap_or_default();
+                (rx.take_label(), rx.take_slide(), name)
+            }
+            _ => (None, None, String::new()),
+        }
+    }
+
     /// Writes the LRPT pictures decoded so far; the files written
     pub fn save_lrpt(&self, prefix: Option<&str>) -> Vec<String> {
         let Back::Lrpt { dec, .. } = &self.back else { return Vec::new() };
@@ -707,6 +718,19 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
                 out.clear();
                 engine.process(b, &mut out);
                 sink.write(&out);
+                let (label, slide, service) = engine.take_dab_news();
+                if let Some(l) = label {
+                    eprintln!("[dab] ♪ {l}");
+                }
+                if let Some(sl) = slide {
+                    let safe: String = service.trim().chars().map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
+                    let ext = if sl.mime == "image/png" { "png" } else { "jpg" };
+                    let path = format!("dab-{}.{ext}", if safe.is_empty() { "slide".into() } else { safe });
+                    match std::fs::write(&path, &sl.data) {
+                        Ok(()) => eprintln!("[dab] picture \"{}\" ({} bytes) -> {path}", sl.name, sl.data.len()),
+                        Err(e) => eprintln!("[dab] cannot write {path}: {e}"),
+                    }
+                }
                 let text = engine.take_text();
                 if !text.is_empty() {
                     use std::io::Write;

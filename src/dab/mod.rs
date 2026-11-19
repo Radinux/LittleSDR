@@ -6,6 +6,7 @@ pub mod fec;
 pub mod fic;
 pub mod msc;
 pub mod ofdm;
+pub mod pad;
 
 use crate::dsp::{Frame, Interp, C32};
 use dabplus::DabPlus;
@@ -131,6 +132,26 @@ impl DabReceiver {
             *rs = Some((rate, Interp::new(rate as f64, 48_000.0)));
         }
         rs.as_mut().unwrap().1.process(&frames, out);
+    }
+
+    /// New programme text since the last call (title, artist...)
+    pub fn take_label(&mut self) -> Option<String> {
+        let pad = &mut self.playing.as_mut()?.2.pad;
+        if !pad.label_new {
+            return None;
+        }
+        pad.label_new = false;
+        pad.label.clone()
+    }
+
+    /// New slideshow picture since the last call (cover art...)
+    pub fn take_slide(&mut self) -> Option<pad::Slide> {
+        let pad = &mut self.playing.as_mut()?.2.pad;
+        if !pad.slide_new {
+            return None;
+        }
+        pad.slide_new = false;
+        pad.slide.clone()
     }
 
     pub fn describe(&self) -> String {

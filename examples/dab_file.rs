@@ -20,6 +20,15 @@ fn main() {
         out.clear();
         rx.process(&s, &mut out);
         total += out.len();
+        if let Some(l) = rx.take_label() {
+            println!("[{:5.1} s] text: {l}", total as f64 / 48_000.0);
+        }
+        if let Some(sl) = rx.take_slide() {
+            let ext = if sl.mime == "image/png" { "png" } else { "jpg" };
+            let path = format!("{}_slide{}.{ext}", a.get(2).map_or("dab", |p| p.trim_end_matches(".wav")), total);
+            std::fs::write(&path, &sl.data).unwrap();
+            println!("[{:5.1} s] slide: {} ({}, {} bytes) -> {path}", total as f64 / 48_000.0, sl.name, sl.mime, sl.data.len());
+        }
         if let Some(w) = &mut wav {
             w.write(&out);
         }

@@ -3,6 +3,7 @@
 //! access units, each with a CRC, decoded by FAAD2.
 
 use super::fec::{crc16_ok, firecode};
+use super::pad::PadDecoder;
 use crate::aac::AacDecoder;
 use crate::rs::ReedSolomon;
 
@@ -68,6 +69,8 @@ pub struct DabPlus {
     pub format: Option<AudioFormat>,
     aac: Option<AacDecoder>,
     pub stats: DabPlusStats,
+    /// Text and slideshow carried with the audio
+    pub pad: PadDecoder,
 }
 
 impl Default for DabPlus {
@@ -78,7 +81,7 @@ impl Default for DabPlus {
 
 impl DabPlus {
     pub fn new() -> DabPlus {
-        DabPlus { rs: ReedSolomon::new(0x11D, 0, 1, 10), frames: Vec::new(), format: None, aac: None, stats: DabPlusStats::default() }
+        DabPlus { rs: ReedSolomon::new(0x11D, 0, 1, 10), frames: Vec::new(), format: None, aac: None, stats: DabPlusStats::default(), pad: PadDecoder::new() }
     }
 
     /// One CIF's bytes of the sub-channel; decoded audio (interleaved float) is appended
@@ -168,6 +171,7 @@ impl DabPlus {
                 continue;
             }
             self.stats.au_ok += 1;
+            self.pad.process_au(&au[..au.len() - 2]);
             if let Some(dec) = &mut self.aac {
                 match dec.decode(&au[..au.len() - 2], pcm) {
                     Some(r) => result = Some(r),
