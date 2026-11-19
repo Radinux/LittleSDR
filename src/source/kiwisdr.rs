@@ -161,3 +161,127 @@ impl Source for KiwiSdr {
         }
     }
 }
+
+/// One waterfall line from the server: power (dBm) of `bins.len()` bins from `start` Hz,
+/// each `bin_hz` wide
+#[derive(Clone, Debug)]
+pub struct WfRow {
+    pub start: f64,
+    pub bin_hz: f64,
+    pub dbm: Vec<f32>,
+}
+
+/// The server's own waterfall: the whole 0-30 MHz band or any zoom on it, independent of the
+/// 12 kHz that are listened to (SDR++ only shows those 12 kHz)
+pub struct KiwiWaterfall {
+    rows: Arc<Mutex<std::collections::VecDeque<WfRow>>>,
+    view: Arc<Mutex<Option<(f64, f64)>>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    pub status: Arc<Mutex<String>>,
+}
+
+pub const KIWI_SPAN: f64 = 30e6;
+const WF_BINS: f64 = 1024.0;
+const ZOOM_MAX: u32 = 14;
+
+/// Zoom level for a wanted span (each level halves the 30 MHz)
+pub fn zoom_for(span: f64) -> u32 {
+    let mut z = 0;
+    while z < ZOOM_MAX && KIWI_SPAN / 2f64.powi(z as i32 + 1) >= span * 0.999 {
+        z += 1;
+    }
+    z
+}
+
+impl KiwiWaterfall {
+    /// Starts the waterfall connection (a second WebSocket, next to the sound)
+    pub fn start(site: &str) -> KiwiWaterfall {
+        let site = site.trim().trim_start_matches("http://").trim_end_matches('/').to_string();
+        let w = KiwiWaterfall { rows: Arc::default(), view: Arc::new(Mutex::new(Some((15e6, 30e6)))), stop: Arc::default(), status: Arc::default() };
+        let (rows, view, stop, status) = (w.rows.clone(), w.view.clone(), w.stop.clone(), w.status.clone());
+        std::thread::Builder::new()
+            .name("kiwi waterfall".into())
+            .spawn(move || {
+                if let Err(e) = wf_loop(&site, &rows, &view, &stop) {
+                    *status.lock().unwrap() = e;
+                }
+            })
+            .expect("spawn waterfall thread");
+        w
+    }
+
+    /// What to show: centre and width (Hz). The server snaps the width to 30 MHz / 2^n.
+    pub fn set_view(&self, center: f64, span: f64) {
+        *self.view.lock().unwrap() = Some((center, span));
+    }
+
+    /// Lines received since the last call
+    pub fn take_rows(&self) -> Vec<WfRow> {
+        self.rows.lock().unwrap().drain(..).collect()
+    }
+}
+
+impl Drop for KiwiWaterfall {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn wf_loop(
+    site: &str,
+    rows: &Mutex<std::collections::VecDeque<WfRow>>,
+    view: &Mutex<Option<(f64, f64)>>,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    let (host, port) = match site.rsplit_once(':') {
+        Some((h, p)) => (h.to_string(), p.parse().map_err(|_| format!("bad port in {site}"))?),
+        None => (site.to_string(), 8073u16),
+    };
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    let mut ws = WebSocket::connect(&host, port, &format!("/kiwi/{ms}/W/F"), Duration::from_secs(8))?;
+    for c in ["SET auth t=kiwi p=#", "SERVER DE CLIENT LittleSDR W/F", "SET send_dB=1", "SET maxdb=0 mindb=-100", "SET wf_speed=4", "SET wf_comp=0"] {
+        ws.send_text(c)?;
+    }
+    let mut cal = -13.0f32;
+    let mut last_keepalive = Instant::now();
+    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Some((center, span)) = view.lock().unwrap().take() {
+            let z = zoom_for(span);
+            let width = KIWI_SPAN / 2f64.powi(z as i32);
+            let cf = center.clamp(width / 2.0, KIWI_SPAN - width / 2.0);
+            ws.send_text(&format!("SET zoom={z} cf={:.3}", cf / 1000.0))?;
+        }
+        if last_keepalive.elapsed() > Duration::from_secs(4) {
+            ws.send_text("SET keepalive")?;
+            last_keepalive = Instant::now();
+        }
+        let Message::Binary(b) = ws.recv()? else { continue };
+        if b.len() < 3 {
+            continue;
+        }
+        match &b[..3] {
+            b"MSG" => {
+                let text = String::from_utf8_lossy(&b[4.min(b.len())..]).into_owned();
+                if let Some(c) = msg_value(&text, "wf_cal").and_then(|v| v.parse().ok()) {
+                    cal = c;
+                }
+            }
+            b"W/F" if b.len() > 16 => {
+                // "W/F", 1 byte, start bin at the deepest zoom (u32), zoom + flags (u32), sequence
+                let x_bin = u32::from_le_bytes(b[4..8].try_into().unwrap()) as f64;
+                let zoom = (u32::from_le_bytes(b[8..12].try_into().unwrap()) & 0xFFFF).min(ZOOM_MAX);
+                let data = &b[16..];
+                let span = KIWI_SPAN / 2f64.powi(zoom as i32);
+                let start = x_bin * KIWI_SPAN / (WF_BINS * 2f64.powi(ZOOM_MAX as i32));
+                let dbm = data.iter().map(|&v| v as f32 - 255.0 + cal).collect();
+                let mut r = rows.lock().unwrap();
+                r.push_back(WfRow { start, bin_hz: span / data.len() as f64, dbm });
+                while r.len() > 100 {
+                    r.pop_front(); // nobody reading: keep only recent lines
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
