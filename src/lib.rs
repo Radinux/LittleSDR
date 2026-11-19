@@ -6,6 +6,7 @@
 pub mod aac;
 pub mod audio;
 pub mod audio_fx;
+pub mod cw;
 pub mod dab;
 pub mod dsp;
 pub mod engine;

@@ -145,6 +145,10 @@ pub enum EngineCtl {
     Rtty(bool),
     /// RTTY parameter: shift, baud, center, rev, ita2
     RttyParam(String, f64),
+    /// CW skimmer setting: "enabled" (whole band), "followVfo" (tuned frequency in CW mode)
+    Cw(String, f64),
+    /// Print the CW skimmer's decoded lines
+    CwList,
     /// LRPT: write the pictures so far (file prefix, or a dated name)
     LrptSave(Option<String>),
     /// LRPT: OQPSK (Meteor-M N2-3 / N2-4) or QPSK
@@ -277,6 +281,8 @@ pub struct Engine {
     meter: Meter,
     pub meter_echo: bool,
     pub rtty: Option<Rtty>,
+    /// Morse skimmer (whole CW segment + the tuned frequency)
+    pub cw: crate::cw::CwSkimmer,
     /// DAB service asked for before DAB mode was on
     pending_service: Option<String>,
     rtty_cfg: Vec<(String, f64)>, // kept so the decoder comes back as it was
@@ -308,6 +314,7 @@ impl Engine {
             meter: Meter::new(),
             meter_echo: false,
             rtty: None,
+            cw: crate::cw::CwSkimmer::new(),
             pending_service: None,
             rtty_cfg: Vec::new(),
             delay: VecDeque::with_capacity(DELAY * 4),
@@ -345,6 +352,12 @@ impl Engine {
                 format!("bandwidth {:.0} Hz", self.bandwidth[self.mode.index()])
             }
             EngineCtl::CwPitch(_) => format!("CW pitch {:.0} Hz", self.pitch),
+            EngineCtl::Cw(..) => format!(
+                "CW skimmer {}, tuned frequency {}",
+                if self.cw.enabled { "on (whole CW segment of the band in view)" } else { "off" },
+                if self.cw.follow_vfo { "decoded in CW mode (text to stdout)" } else { "not decoded" }
+            ),
+            EngineCtl::CwList => self.cw_lines(),
             EngineCtl::Meter(on) => format!("meter {}", if *on { "on" } else { "off" }),
             EngineCtl::Rtty(_) | EngineCtl::RttyParam(..) => match (&self.rtty, c) {
                 (Some(r), _) => format!("{} (decoded text goes to stdout)", r.describe()),
@@ -455,6 +468,12 @@ impl Engine {
                 }
             }
             EngineCtl::Meter(on) => self.meter_echo = *on,
+            EngineCtl::Cw(key, v) => {
+                if !self.cw.set(key, *v) {
+                    eprintln!("[cw] unknown setting {key} (enabled, followVfo)");
+                }
+            }
+            EngineCtl::CwList => {}
             EngineCtl::Rtty(on) => {
                 self.rtty = on.then(|| {
                     let mut r = Rtty::new();
@@ -627,6 +646,8 @@ impl Engine {
         if let Some(b) = &mut self.blanker {
             b.process(&mut block.samples);
         }
+        // The skimmer looks at the whole band, before the tuned channel is cut out
+        self.cw.feed_iq(&block.samples, block.rate, block.center, self.freq);
         let front = self.front.as_mut().unwrap();
         self.nco.set(self.offset, block.rate);
         self.nco.mix(&mut block.samples);
@@ -641,6 +662,10 @@ impl Engine {
             // Decoders take the demodulated sound, before the listening filters
             let mono: Vec<f32> = audio.iter().map(|f| f.l).collect();
             r.process(&mono);
+        }
+        if self.cw_focus_active() {
+            let mono: Vec<f32> = audio.iter().map(|f| f.l).collect();
+            self.cw.feed_focus(&mono, self.pitch);
         }
         self.fx.process(&mut audio);
 
@@ -715,7 +740,32 @@ impl Engine {
 
     /// Text decoded since the last call (RTTY)
     pub fn take_text(&mut self) -> String {
-        self.rtty.as_mut().map(|r| r.take_text()).unwrap_or_default()
+        let mut t = self.rtty.as_mut().map(|r| r.take_text()).unwrap_or_default();
+        t.push_str(&self.cw.take_text());
+        t
+    }
+
+    /// The tuned frequency is decoded (CW mode, skimmer on, follow VFO)
+    pub fn cw_focus_active(&self) -> bool {
+        self.mode == Mode::Cw && self.cw.enabled && self.cw.follow_vfo
+    }
+
+    /// CW skimmer state, in the app's cwJson format
+    pub fn cw_json(&self) -> String {
+        self.cw.json(self.cw_focus_active())
+    }
+
+    fn cw_lines(&self) -> String {
+        let lines = self.cw.lines();
+        if !self.cw.enabled {
+            return "CW skimmer off (cw on)".into();
+        }
+        let mut s = format!("CW skimmer: {} channels, {} lines", self.cw.live_channels(), lines.len());
+        for (f, t, _) in lines {
+            let tail: String = t.chars().rev().take(70).collect::<Vec<_>>().into_iter().rev().collect();
+            s += &format!("\n  {:>10.2} kHz  {tail}", f / 1e3);
+        }
+        s
     }
 
     pub fn mode(&self) -> Mode {

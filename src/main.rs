@@ -7,7 +7,7 @@
 //! Live commands on stdin: freq <f> (or +1k / -500 to step), rate <r>, mode <m>, bw <Hz>,
 //!   pitch <Hz>, gain <dB>|auto, vol <0-2>, ds 0|1|2, bt on|off (bias-tee), stereo on|off,
 //!   nb on|off [threshold], fx <filter> on|off, fx <filter> <param> <value>, meter on|off,
-//!   dab list, dab play <name>, lrpt save [prefix], lrpt qpsk|oqpsk, rtty on|off, rtty shift|baud|center <v>, rtty rev on|off|auto, rtty ita2|sql on|off, status, quit.
+//!   dab list, dab play <name>, lrpt save [prefix], lrpt qpsk|oqpsk, rtty on|off, cw on|off, cw vfo on|off, cw (decoded lines), rtty shift|baud|center <v>, rtty rev on|off|auto, rtty ita2|sql on|off, status, quit.
 //!   Filters: hp lp cw notch anotch nr eq agc limit
 
 use littlesdr::audio::{AudioSink, WavSink};
@@ -264,6 +264,18 @@ fn main() {
                     let _ = eng_tx.send(EngineCtl::LrptOqpsk(v == "oqpsk"));
                 }
                 _ => eprintln!("lrpt save [prefix]  |  lrpt qpsk|oqpsk   (mode lrpt to receive)"),
+            },
+            "cw" => match (v, words.get(2).copied()) {
+                ("on" | "off", None) => {
+                    let _ = eng_tx.send(EngineCtl::Cw("enabled".into(), if v == "on" { 1.0 } else { 0.0 }));
+                }
+                ("vfo", Some(x @ ("on" | "off"))) => {
+                    let _ = eng_tx.send(EngineCtl::Cw("followVfo".into(), if x == "on" { 1.0 } else { 0.0 }));
+                }
+                ("", None) | ("list", None) => {
+                    let _ = eng_tx.send(EngineCtl::CwList);
+                }
+                _ => eprintln!("cw on|off  |  cw vfo on|off  |  cw   (lines decoded across the band)"),
             },
             "rtty" => match (v, words.get(2)) {
                 ("on" | "off" | "", None) => {
