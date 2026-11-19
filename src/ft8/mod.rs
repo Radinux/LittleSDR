@@ -7,7 +7,7 @@ pub mod ldpc;
 pub mod message;
 mod tables;
 
-use crate::dsp::{lowpass, DecimFir, Nco, C32};
+use crate::dsp::{lowpass, DecimFir, Interp, Nco, C32};
 use decode::{Protocol, RATE};
 use message::CallHashes;
 use std::collections::VecDeque;
@@ -54,6 +54,7 @@ struct Channel {
     rate: f64,
     nco: Nco,
     stages: Vec<DecimFir<C32>>,
+    interp: Option<Interp<C32>>,
     up: Nco,
     /// Audio and the UTC time (s) of its first sample
     audio: VecDeque<f32>,
@@ -62,13 +63,12 @@ struct Channel {
 
 impl Channel {
     fn new(dial: f64, rate: f64) -> Option<Channel> {
-        // Complex baseband centred on dial + 1500 Hz, +-1500 Hz, down to 12 kHz, then
-        // shifted back up so the real part is the USB audio (0..3 kHz)
-        let total = rate / RATE;
-        if (total - total.round()).abs() > 1e-6 || total < 1.0 {
-            return None; // needs an integer ratio (2.4 MS/s, 2.048, 1.024, 240k, 48k ...)
+        // Complex baseband centred on dial + 1500 Hz, +-1500 Hz, decimated to 24..48 kHz,
+        // resampled to 12 kHz, then shifted back up so the real part is the USB audio
+        if rate < RATE {
+            return None;
         }
-        let total = total.round() as usize;
+        let total = ((rate / (2.0 * RATE)).floor() as usize).max(1);
         let mut factors = Vec::new();
         let mut left = total;
         for f in [5, 4, 2, 3] {
@@ -82,14 +82,18 @@ impl Channel {
         }
         let mut stages = Vec::new();
         let mut r = rate;
-        for f in factors {
+        let n = factors.len();
+        for (i, f) in factors.into_iter().enumerate() {
             let out = r / f as f64;
-            let last = (out - RATE).abs() < 1.0;
-            let (cut, tw) = if last { (1_550.0, 800.0) } else { (1_600.0, out - 3_200.0) };
+            let (cut, tw) = if i + 1 == n { (1_550.0, (out / 2.0 - 1_550.0).min(1_000.0)) } else { (1_600.0, out - 3_200.0) };
             stages.push(DecimFir::new(lowpass(cut / r, (tw / r).max(0.002)), f));
             r = out;
         }
-        Some(Channel { dial, rate, nco: Nco::new(), stages, up: Nco::new(), audio: VecDeque::new(), t0: 0.0 })
+        if n == 0 {
+            stages.push(DecimFir::new(lowpass(1_550.0 / r, 900.0 / r), 1));
+        }
+        let interp = ((r - RATE).abs() > 0.5).then(|| Interp::new(r, RATE));
+        Some(Channel { dial, rate, nco: Nco::new(), stages, interp, up: Nco::new(), audio: VecDeque::new(), t0: 0.0 })
     }
 
     fn feed(&mut self, iq: &[C32], center: f64, now: f64) {
@@ -99,6 +103,11 @@ impl Channel {
         for st in &mut self.stages {
             let mut out = Vec::with_capacity(buf.len() / st.factor() + 2);
             st.process(&buf, &mut out);
+            buf = out;
+        }
+        if let Some(it) = &mut self.interp {
+            let mut out = Vec::with_capacity(buf.len() + 4);
+            it.process(&buf, &mut out);
             buf = out;
         }
         self.up.set(-1_500.0, RATE);
@@ -184,10 +193,14 @@ impl Ft8Receiver {
 
     /// Wideband IQ; `vfo` = tuned frequency (to pick the band and report onFrequency)
     pub fn feed_iq(&mut self, iq: &[C32], rate: f64, center: f64, vfo: f64, usb: bool) {
+        self.feed_iq_at(iq, rate, center, vfo, usb, now_s());
+    }
+
+    /// Same, for a recording: `now` = UTC time (s) at the end of this block
+    pub fn feed_iq_at(&mut self, iq: &[C32], rate: f64, center: f64, vfo: f64, usb: bool, now: f64) {
         if !self.enabled || iq.is_empty() {
             return;
         }
-        let now = now_s();
         let half = 0.45 * rate;
         for p in 0..2 {
             let dials: &[(&str, f64)] = if p == 0 { &FT8_DIALS } else { &FT4_DIALS };
@@ -206,7 +219,7 @@ impl Ft8Receiver {
             if self.ch[p].as_ref().is_none_or(|c| c.dial != dial || c.rate != rate) {
                 self.ch[p] = Channel::new(dial, rate);
                 if self.ch[p].is_none() {
-                    st.error = format!("sample rate {rate} is not a multiple of 12 kHz");
+                    st.error = format!("sample rate {rate} too low");
                     continue;
                 }
                 st.error.clear();
@@ -219,7 +232,7 @@ impl Ft8Receiver {
 
     /// 12 kHz audio whose first sample is at UTC time `t0` (files, tests)
     pub fn feed_audio(&mut self, p: usize, audio: &[f32], t0: f64, dial: f64) {
-        let ch = self.ch[p].get_or_insert_with(|| Channel { dial, rate: RATE, nco: Nco::new(), stages: Vec::new(), up: Nco::new(), audio: VecDeque::new(), t0 });
+        let ch = self.ch[p].get_or_insert_with(|| Channel { dial, rate: RATE, nco: Nco::new(), stages: Vec::new(), interp: None, up: Nco::new(), audio: VecDeque::new(), t0 });
         if ch.audio.is_empty() {
             ch.t0 = t0;
         }
@@ -306,6 +319,11 @@ impl Ft8Receiver {
         });
     }
 
+    /// A slot is being decoded
+    pub fn busy(&self) -> bool {
+        self.busy.lock().unwrap().iter().any(|&b| b)
+    }
+
     /// Decodes finished since the last call
     pub fn take_news(&mut self) -> Vec<Ft8Result> {
         std::mem::take(&mut *self.news.lock().unwrap())
@@ -357,5 +375,66 @@ impl Ft8Receiver {
             })
             .collect();
         format!("{{\"enabled\":{},\"ft8\":{},\"ft4\":{},\"results\":[{}]}}", self.enabled, dec(0), dec(1), res.join(","))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// IQ of an FT8 transmission on a 20 m channel, through the whole receiver
+    fn run(rate: f64) -> Vec<Ft8Result> {
+        let center = 14_100_000.0;
+        let dial = 14_074_000.0;
+        let msg = message::pack("CQ YO3RAD KN34").unwrap();
+        let tn = decode::tones(Protocol::Ft8, &msg);
+        let slot = 1_800_000_000.0; // a UTC slot start (multiple of 15 s)
+        let t_begin = slot - 2.0;
+        let f_audio = 1_234.0;
+        let n_total = (19.0 * rate) as usize;
+        let mut rx = Ft8Receiver::new();
+        rx.set("enabled", 1.0);
+        let mut seed = 1u32;
+        let mut ph = 0.0f64;
+        let block = 8192;
+        let mut n = 0;
+        while n < n_total {
+            let mut buf = Vec::with_capacity(block);
+            for k in 0..block {
+                let t = t_begin + (n + k) as f64 / rate;
+                let ts = t - slot - 0.5; // signal starts 0.5 s into the slot
+                let mut z = C32::default();
+                if ts >= 0.0 && ts < 79.0 * 0.16 {
+                    let f = dial + f_audio + tn[(ts / 0.16) as usize] as f64 * 6.25 - center;
+                    ph += 2.0 * std::f64::consts::PI * f / rate;
+                    z = C32::new(0.01 * ph.cos() as f32, 0.01 * ph.sin() as f32);
+                }
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                z.re += 0.02 * ((seed as f32 / u32::MAX as f32) - 0.5);
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                z.im += 0.02 * ((seed as f32 / u32::MAX as f32) - 0.5);
+                buf.push(z);
+            }
+            n += block;
+            rx.feed_iq_at(&buf, rate, center, dial, true, t_begin + n as f64 / rate);
+        }
+        while rx.busy() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        rx.take_news()
+    }
+
+    #[test]
+    fn whole_chain_at_several_rates() {
+        for rate in [1_024_000.0, 240_000.0] {
+            let r = run(rate);
+            let x = r.iter().find(|r| r.message == "CQ YO3RAD KN34").unwrap_or_else(|| panic!("{rate}: {r:?}"));
+            assert_eq!((x.band.as_str(), x.call.as_str(), x.time), ("14.074", "YO3RAD", 1_800_000_015_000));
+            assert!((x.audio_hz - 1234.0).abs() < 3.0 && x.dt.abs() < 0.1, "{rate}: {x:?}");
+        }
     }
 }
