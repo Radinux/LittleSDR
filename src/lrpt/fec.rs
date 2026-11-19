@@ -147,19 +147,9 @@ pub fn pn_sequence() -> [u8; 255] {
 
 // ---------------------------------------------------------------- Reed-Solomon
 
-/// RS(255,223) over GF(256), CCSDS conventional representation: field polynomial 0x187,
-/// generator roots alpha^(11 * (112 + i)), i = 0..31. The first byte of a block is the
-/// highest-degree coefficient. (The generator is palindromic, so the reverse convention
-/// decodes too.)
-pub struct ReedSolomon {
-    exp: [u8; 512],
-    log: [u8; 256],
-    genpoly: [u8; 33],
-}
-
-const NROOTS: usize = 32;
-const FCR: usize = 112;
-const PRIM: usize = 11;
+/// RS(255,223), CCSDS conventional representation (field 0x187, roots alpha^(11*(112+i))),
+/// interleaved by 4 in LRPT frames
+pub struct ReedSolomon(crate::rs::ReedSolomon);
 
 impl Default for ReedSolomon {
     fn default() -> Self {
@@ -169,186 +159,15 @@ impl Default for ReedSolomon {
 
 impl ReedSolomon {
     pub fn new() -> ReedSolomon {
-        let mut exp = [0u8; 512];
-        let mut log = [0u8; 256];
-        let mut x: u16 = 1;
-        for i in 0..255 {
-            exp[i] = x as u8;
-            log[x as usize] = i as u8;
-            x <<= 1;
-            if x & 0x100 != 0 {
-                x ^= 0x187;
-            }
-        }
-        for i in 255..512 {
-            exp[i] = exp[i - 255];
-        }
-        let mut rs = ReedSolomon { exp, log, genpoly: [0; 33] };
-        // genpoly = prod (x - alpha^(PRIM*(FCR+i)))
-        let mut g = vec![1u8];
-        for i in 0..NROOTS {
-            let root = rs.pow_alpha(PRIM * (FCR + i));
-            let mut ng = vec![0u8; g.len() + 1];
-            for (j, &c) in g.iter().enumerate() {
-                ng[j] ^= c; // x * g (highest degree first)
-                ng[j + 1] ^= rs.mul(c, root);
-            }
-            g = ng;
-        }
-        rs.genpoly.copy_from_slice(&g);
-        rs
+        ReedSolomon(crate::rs::ReedSolomon::new(0x187, 112, 11, 32))
     }
 
-    fn pow_alpha(&self, e: usize) -> u8 {
-        self.exp[e % 255]
-    }
-    fn mul(&self, a: u8, b: u8) -> u8 {
-        if a == 0 || b == 0 {
-            0
-        } else {
-            self.exp[self.log[a as usize] as usize + self.log[b as usize] as usize]
-        }
-    }
-    fn div(&self, a: u8, b: u8) -> u8 {
-        if a == 0 {
-            0
-        } else {
-            self.exp[(self.log[a as usize] as usize + 255 - self.log[b as usize] as usize) % 255]
-        }
-    }
-
-    /// Parity of a 223-byte message (for tests and encoders)
     pub fn encode(&self, msg: &[u8; 223]) -> [u8; 32] {
-        let mut rem = [0u8; 32];
-        for &m in msg {
-            let fb = m ^ rem[0];
-            rem.rotate_left(1);
-            rem[31] = 0;
-            if fb != 0 {
-                for j in 0..32 {
-                    rem[j] ^= self.mul(fb, self.genpoly[j + 1]);
-                }
-            }
-        }
-        rem
+        self.0.encode(msg).try_into().unwrap()
     }
 
-    /// Corrects a 255-byte block in place; the number of corrected bytes, None if beyond repair
     pub fn decode(&self, block: &mut [u8]) -> Option<usize> {
-        debug_assert_eq!(block.len(), 255);
-        // Syndromes S_i = c(alpha^(PRIM*(FCR+i))), c(x) with block[0] the highest degree
-        let mut s = [0u8; NROOTS];
-        let mut any = false;
-        for (i, si) in s.iter_mut().enumerate() {
-            let x = self.pow_alpha(PRIM * (FCR + i));
-            let mut acc = 0u8;
-            for &b in block.iter() {
-                acc = self.mul(acc, x) ^ b;
-            }
-            *si = acc;
-            any |= acc != 0;
-        }
-        if !any {
-            return Some(0);
-        }
-        // Berlekamp-Massey: error locator lambda(x), lowest degree first
-        let mut lambda = [0u8; NROOTS + 1];
-        let mut b = [0u8; NROOTS + 1];
-        lambda[0] = 1;
-        b[0] = 1;
-        let mut l = 0usize;
-        let mut m = 1usize;
-        let mut bb = 1u8;
-        for n in 0..NROOTS {
-            let mut d = s[n];
-            for i in 1..=l {
-                d ^= self.mul(lambda[i], s[n - i]);
-            }
-            if d == 0 {
-                m += 1;
-            } else if 2 * l <= n {
-                let t = lambda;
-                let coef = self.div(d, bb);
-                for i in m..=NROOTS {
-                    lambda[i] ^= self.mul(coef, b[i - m]);
-                }
-                l = n + 1 - l;
-                b = t;
-                bb = d;
-                m = 1;
-            } else {
-                let coef = self.div(d, bb);
-                for i in m..=NROOTS {
-                    lambda[i] ^= self.mul(coef, b[i - m]);
-                }
-                m += 1;
-            }
-        }
-        if l > NROOTS / 2 {
-            return None;
-        }
-        // Chien search. Position p (index in block) has locator X = alpha^(PRIM*(254-p))
-        // because the code uses alpha^PRIM as its primitive element.
-        let mut positions = Vec::with_capacity(l);
-        let mut xinv = Vec::with_capacity(l);
-        for p in 0..255usize {
-            let e = (PRIM * (254 - p)) % 255;
-            let xi = self.pow_alpha((255 - e) % 255); // X^-1
-            let mut acc = 0u8;
-            let mut pw = 1u8;
-            for &c in lambda.iter().take(l + 1) {
-                acc ^= self.mul(c, pw);
-                pw = self.mul(pw, xi);
-            }
-            if acc == 0 {
-                positions.push(p);
-                xinv.push(xi);
-            }
-        }
-        if positions.len() != l {
-            return None;
-        }
-        // Forney: omega(x) = S(x) lambda(x) mod x^NROOTS
-        let mut omega = [0u8; NROOTS];
-        for i in 0..NROOTS {
-            let mut acc = 0u8;
-            for j in 0..=i.min(l) {
-                acc ^= self.mul(lambda[j], s[i - j]);
-            }
-            omega[i] = acc;
-        }
-        for (&p, &xi) in positions.iter().zip(&xinv) {
-            // omega(X^-1)
-            let mut num = 0u8;
-            let mut pw = 1u8;
-            for &c in omega.iter() {
-                num ^= self.mul(c, pw);
-                pw = self.mul(pw, xi);
-            }
-            // lambda'(X^-1): odd terms
-            let mut den = 0u8;
-            let mut pw = 1u8; // xi^(i-1) for i odd
-            let xi2 = self.mul(xi, xi);
-            let mut i = 1;
-            while i <= l {
-                den ^= self.mul(lambda[i], pw);
-                pw = self.mul(pw, xi2);
-                i += 2;
-            }
-            if den == 0 {
-                return None;
-            }
-            // e = X^(1-FCR) * omega(X^-1) / lambda'(X^-1), with X expressed via alpha^PRIM
-            let x = self.div(1, xi);
-            let mut xpow = 1u8; // X^(FCR-1) inverse
-            for _ in 0..(FCR - 1) {
-                xpow = self.mul(xpow, xi);
-            }
-            let _ = x;
-            let mag = self.mul(self.div(num, den), xpow);
-            block[p] ^= mag;
-        }
-        Some(l)
+        self.0.decode(block)
     }
 
     /// Corrects a frame of 4 interleaved codewords (1020 bytes: byte j*4+i belongs to codeword
@@ -361,7 +180,7 @@ impl ReedSolomon {
             for j in 0..255 {
                 block[j] = frame[j * 4 + i];
             }
-            match self.decode(&mut block) {
+            match self.0.decode(&mut block) {
                 Some(n) => total += n,
                 None => ok = false,
             }

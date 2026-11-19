@@ -17,6 +17,7 @@ use crate::audio::AudioSink;
 use crate::audio_fx::AudioChain;
 use crate::dsp::{lowpass, Deemphasis, DecimFir, FmDemod, Frame, Interp, Nco, NoiseBlanker, C32};
 use crate::linear::{AmDemod, Sideband, SsbDemod, SSB_LOW_CUT};
+use crate::dab::DabReceiver;
 use crate::lrpt::LrptDecoder;
 use crate::meter::{Meter, Reading};
 use crate::rtty::Rtty;
@@ -41,10 +42,12 @@ pub enum Mode {
     Cw,
     /// Meteor-M weather satellite pictures (no sound)
     Lrpt,
+    /// DAB+ digital radio (Band III, 2.048 MS/s)
+    Dab,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 7] = [Mode::Wfm, Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Cw, Mode::Lrpt];
+    pub const ALL: [Mode; 8] = [Mode::Wfm, Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Cw, Mode::Lrpt, Mode::Dab];
 
     pub fn parse(s: &str) -> Option<Mode> {
         match s.to_ascii_lowercase().as_str() {
@@ -55,6 +58,7 @@ impl Mode {
             "lsb" => Some(Mode::Lsb),
             "cw" => Some(Mode::Cw),
             "lrpt" | "meteor" => Some(Mode::Lrpt),
+            "dab" | "dab+" => Some(Mode::Dab),
             _ => None,
         }
     }
@@ -66,6 +70,7 @@ impl Mode {
         match self {
             Mode::Wfm => 240_000.0,
             Mode::Lrpt => 192_000.0, // 2.67 samples per 72 ksym/s symbol
+            Mode::Dab => crate::dab::ofdm::RATE,
             _ => 48_000.0,
         }
     }
@@ -78,6 +83,7 @@ impl Mode {
             Mode::Usb | Mode::Lsb | Mode::Cw => 5_000.0,
             // 72 ksym/s, roll-off 0.6: +-57.6 kHz, plus Doppler (+-3.5 kHz)
             Mode::Lrpt => 64_000.0,
+            Mode::Dab => 780_000.0,
         }
     }
     fn deviation(self) -> f64 {
@@ -89,7 +95,7 @@ impl Mode {
     /// Default channel bandwidth (Hz), None when it is fixed (FM)
     pub fn default_bandwidth(self) -> Option<f64> {
         match self {
-            Mode::Wfm | Mode::Nfm | Mode::Lrpt => None,
+            Mode::Wfm | Mode::Nfm | Mode::Lrpt | Mode::Dab => None,
             Mode::Am => Some(9_000.0),
             Mode::Usb | Mode::Lsb => Some(2_700.0),
             Mode::Cw => Some(500.0),
@@ -142,6 +148,10 @@ pub enum EngineCtl {
     LrptSave(Option<String>),
     /// LRPT: OQPSK (Meteor-M N2-3 / N2-4) or QPSK
     LrptOqpsk(bool),
+    /// DAB: play a service (SId in hex or the start of its name)
+    DabSelect(String),
+    /// DAB: print the services of the ensemble
+    DabList,
     /// Print the state on stderr
     Status,
     Stop,
@@ -163,7 +173,7 @@ impl Front {
         let pass = mode.half_band();
         let stop = (ifr - pass).max(pass * 1.2).min(rate / 2.0);
         // Input already narrower than the IF (e.g. a recording): nothing to filter
-        let taps = if stop <= pass * 1.05 { vec![1.0] } else { lowpass((pass + stop) / 2.0 / rate, (stop - pass) / rate) };
+        let taps = if stop <= pass * 1.05 || rate <= ifr * 1.001 { vec![1.0] } else { lowpass((pass + stop) / 2.0 / rate, (stop - pass) / rate) };
         Front { rate, decim: DecimFir::new(taps, d), frac: Interp::new(mid, ifr) }
     }
 }
@@ -176,6 +186,7 @@ enum Back {
     Ssb(SsbDemod),
     /// Silent: `rem` carries the IF samples not yet turned into (silent) audio frames
     Lrpt { dec: Box<LrptDecoder>, rem: usize },
+    Dab(Box<DabReceiver>),
 }
 
 impl Back {
@@ -198,6 +209,7 @@ impl Back {
             Mode::Am => Back::Am(AmDemod::new(bw)),
             Mode::Usb | Mode::Lsb | Mode::Cw => Back::Ssb(SsbDemod::new(mode.sideband().unwrap(), bw, pitch)),
             Mode::Lrpt => Back::Lrpt { dec: Box::new(LrptDecoder::new(ifr, true)), rem: 0 },
+            Mode::Dab => Back::Dab(Box::new(DabReceiver::new())),
         }
     }
 
@@ -224,6 +236,7 @@ impl Back {
             }
             Back::Am(d) => d.process(iq, out),
             Back::Ssb(d) => d.process(iq, out),
+            Back::Dab(rx) => rx.process(iq, out),
             Back::Lrpt { dec, rem } => {
                 dec.process(iq);
                 // Keep the sound output running (silence) at exactly 48 kHz
@@ -246,7 +259,7 @@ pub struct Engine {
     mode: Mode,
     freq: f64,
     offset: f64,
-    bandwidth: [f64; 7], // per mode, remembered across mode changes
+    bandwidth: [f64; 8], // per mode, remembered across mode changes
     pitch: f64,
     volume: f32,
     stereo: bool,
@@ -261,6 +274,8 @@ pub struct Engine {
     meter: Meter,
     pub meter_echo: bool,
     pub rtty: Option<Rtty>,
+    /// DAB service asked for before DAB mode was on
+    pending_service: Option<String>,
     rtty_cfg: Vec<(String, f64)>, // kept so the decoder comes back as it was
     delay: VecDeque<Frame>,
     mute: usize,    // audio samples still muted
@@ -290,6 +305,7 @@ impl Engine {
             meter: Meter::new(),
             meter_echo: false,
             rtty: None,
+            pending_service: None,
             rtty_cfg: Vec::new(),
             delay: VecDeque::with_capacity(DELAY * 4),
             mute: 0,
@@ -350,6 +366,18 @@ impl Engine {
         match c {
             EngineCtl::Tune(f) => self.freq = *f,
             EngineCtl::Volume(v) => self.volume = v.clamp(0.0, 2.0),
+            EngineCtl::Mode(m) if *m != self.mode && *m == Mode::Dab => {
+                self.mode = *m;
+                let mut rx = DabReceiver::new();
+                if let Some(w) = self.pending_service.take() {
+                    rx.select(&w);
+                }
+                self.back = Back::Dab(Box::new(rx));
+                if let Some(f) = &self.front {
+                    self.front = Some(Front::new(f.rate, *m));
+                }
+                self.soft_switch(5.0);
+            }
             EngineCtl::Mode(m) if *m != self.mode => {
                 if self.mode == Mode::Lrpt {
                     self.save_lrpt(None); // the pictures would be lost with the decoder
@@ -445,6 +473,36 @@ impl Engine {
                     eprintln!("[lrpt] {}", if *oq { "OQPSK" } else { "QPSK" });
                 }
             }
+            EngineCtl::DabSelect(what) => match &mut self.back {
+                Back::Dab(rx) => {
+                    rx.select(what);
+                    self.pending_service = None;
+                }
+                _ => self.pending_service = Some(what.clone()),
+            },
+            EngineCtl::DabList => match &self.back {
+                Back::Dab(rx) => {
+                    let list = rx.services();
+                    if list.is_empty() {
+                        eprintln!("[dab] no ensemble yet");
+                    }
+                    for (i, sv) in list.iter().enumerate() {
+                        let sub = sv.subch.and_then(|c| rx.fic.ensemble.subchannels.get(&c));
+                        eprintln!(
+                            "[dab] {:2}  {:04X}  {:16}  {}",
+                            i + 1,
+                            sv.sid,
+                            sv.label,
+                            match (sv.ascty, sub.and_then(|c| c.bitrate())) {
+                                (63, Some(b)) => format!("DAB+ {b} kbit/s"),
+                                (0, _) => "DAB (MP2, not supported)".into(),
+                                _ => "data".into(),
+                            }
+                        );
+                    }
+                }
+                _ => eprintln!("[dab] not in DAB mode (mode dab)"),
+            },
             EngineCtl::Status => eprintln!("{}", self.status()),
             _ => {}
         }
@@ -464,6 +522,9 @@ impl Engine {
         }
         if let Back::Lrpt { dec, .. } = &self.back {
             s += &format!("\n[lrpt] {}\n", dec.describe());
+        }
+        if let Back::Dab(rx) = &self.back {
+            s += &format!("\n[dab] {}\n", rx.describe());
         }
         if let Back::Wfm { stereo, .. } = &self.back {
             s += &format!(
@@ -497,6 +558,7 @@ impl Engine {
             Mode::Usb => (SSB_LOW_CUT, SSB_LOW_CUT + bw),
             Mode::Lsb => (-SSB_LOW_CUT - bw, -SSB_LOW_CUT),
             Mode::Lrpt => (-57_600.0, 57_600.0),
+            Mode::Dab => (-768_000.0, 768_000.0),
         }
     }
 
@@ -579,10 +641,11 @@ impl Engine {
         self.stats.audio_samples += out.len() as u64;
     }
 
-    /// LRPT progress line, when in LRPT mode
+    /// LRPT / DAB progress line, when in those modes
     pub fn lrpt_status(&self) -> Option<String> {
         match &self.back {
             Back::Lrpt { dec, .. } => Some(dec.describe()),
+            Back::Dab(rx) => Some(rx.describe()),
             _ => None,
         }
     }
@@ -679,7 +742,7 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
         if last_lrpt.elapsed() >= Duration::from_secs(10) {
             last_lrpt = Instant::now();
             if let Some(st) = engine.lrpt_status() {
-                eprintln!("[lrpt] {st}");
+                eprintln!("[{}] {st}", if engine.mode() == Mode::Dab { "dab" } else { "lrpt" });
             }
         }
         if verbose && last_report.elapsed() > Duration::from_secs(5) {
