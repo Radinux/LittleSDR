@@ -7,7 +7,7 @@
 //! Live commands on stdin: freq <f> (or +1k / -500 to step), rate <r>, mode <m>, bw <Hz>,
 //!   pitch <Hz>, gain <dB>|auto, vol <0-2>, ds 0|1|2, bt on|off (bias-tee), stereo on|off,
 //!   nb on|off [threshold], fx <filter> on|off, fx <filter> <param> <value>, meter on|off,
-//!   dab list, dab play <name>, lrpt save [prefix], lrpt qpsk|oqpsk, rtty on|off, cw on|off, cw vfo on|off, cw (decoded lines), rtty shift|baud|center <v>, rtty rev on|off|auto, rtty ita2|sql on|off, status, quit.
+//!   dab list, dab play <name>, lrpt save [prefix], lrpt qpsk|oqpsk, rtty on|off, cw on|off, cw vfo on|off, cw (decoded lines), sstv on|off|start <mode>|stop, rtty shift|baud|center <v>, rtty rev on|off|auto, rtty ita2|sql on|off, status, quit.
 //!   Filters: hp lp cw notch anotch nr eq agc limit
 
 use littlesdr::audio::{AudioSink, WavSink};
@@ -264,6 +264,28 @@ fn main() {
                     let _ = eng_tx.send(EngineCtl::LrptOqpsk(v == "oqpsk"));
                 }
                 _ => eprintln!("lrpt save [prefix]  |  lrpt qpsk|oqpsk   (mode lrpt to receive)"),
+            },
+            "sstv" => match (v, words.get(2).copied()) {
+                ("on" | "off", None) => {
+                    let _ = eng_tx.send(EngineCtl::Sstv("enabled".into(), if v == "on" { 1.0 } else { 0.0 }));
+                }
+                ("stop", None) => {
+                    let _ = eng_tx.send(EngineCtl::Sstv("stop".into(), 0.0));
+                }
+                ("start", Some(name)) => {
+                    let want = name.to_ascii_lowercase().replace(' ', "");
+                    let i = littlesdr::sstv::modes().iter().position(|m| m.name.to_ascii_lowercase().replace(' ', "") == want);
+                    match i {
+                        Some(i) => {
+                            let _ = eng_tx.send(EngineCtl::Sstv("start".into(), i as f64));
+                        }
+                        None => eprintln!("modes: {}", littlesdr::sstv::modes().iter().map(|m| m.name.replace(' ', "")).collect::<Vec<_>>().join(" ")),
+                    }
+                }
+                ("", None) => {
+                    let _ = eng_tx.send(EngineCtl::Sstv("status".into(), 0.0));
+                }
+                _ => eprintln!("sstv on|off  |  sstv start pd120 (missed header)  |  sstv stop"),
             },
             "cw" => match (v, words.get(2).copied()) {
                 ("on" | "off", None) => {

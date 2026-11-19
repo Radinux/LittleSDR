@@ -149,6 +149,8 @@ pub enum EngineCtl {
     Cw(String, f64),
     /// Print the CW skimmer's decoded lines
     CwList,
+    /// SSTV setting: "enabled", "start" (mode index, for a missed VIS), "stop"
+    Sstv(String, f64),
     /// LRPT: write the pictures so far (file prefix, or a dated name)
     LrptSave(Option<String>),
     /// LRPT: OQPSK (Meteor-M N2-3 / N2-4) or QPSK
@@ -283,6 +285,8 @@ pub struct Engine {
     pub rtty: Option<Rtty>,
     /// Morse skimmer (whole CW segment + the tuned frequency)
     pub cw: crate::cw::CwSkimmer,
+    /// Analog SSTV pictures from the demodulated sound
+    pub sstv: crate::sstv::Decoder,
     /// DAB service asked for before DAB mode was on
     pending_service: Option<String>,
     rtty_cfg: Vec<(String, f64)>, // kept so the decoder comes back as it was
@@ -315,6 +319,7 @@ impl Engine {
             meter_echo: false,
             rtty: None,
             cw: crate::cw::CwSkimmer::new(),
+            sstv: crate::sstv::Decoder::new(),
             pending_service: None,
             rtty_cfg: Vec::new(),
             delay: VecDeque::with_capacity(DELAY * 4),
@@ -358,6 +363,16 @@ impl Engine {
                 if self.cw.follow_vfo { "decoded in CW mode (text to stdout)" } else { "not decoded" }
             ),
             EngineCtl::CwList => self.cw_lines(),
+            EngineCtl::Sstv(..) => {
+                let st = self.sstv.status();
+                if !self.sstv.enabled {
+                    "SSTV off".into()
+                } else if st.receiving {
+                    format!("SSTV: receiving {} ({} rows)", st.mode, st.line)
+                } else {
+                    "SSTV on, waiting for a VIS header (pictures saved as sstv-*.png)".into()
+                }
+            }
             EngineCtl::Meter(on) => format!("meter {}", if *on { "on" } else { "off" }),
             EngineCtl::Rtty(_) | EngineCtl::RttyParam(..) => match (&self.rtty, c) {
                 (Some(r), _) => format!("{} (decoded text goes to stdout)", r.describe()),
@@ -474,6 +489,11 @@ impl Engine {
                 }
             }
             EngineCtl::CwList => {}
+            EngineCtl::Sstv(key, v) => {
+                if !self.sstv.set(key, *v) {
+                    eprintln!("[sstv] unknown setting {key} (enabled, start, stop)");
+                }
+            }
             EngineCtl::Rtty(on) => {
                 self.rtty = on.then(|| {
                     let mut r = Rtty::new();
@@ -663,6 +683,10 @@ impl Engine {
             let mono: Vec<f32> = audio.iter().map(|f| f.l).collect();
             r.process(&mono);
         }
+        if self.sstv.enabled {
+            let mono: Vec<f32> = audio.iter().map(|f| 0.5 * (f.l + f.r)).collect();
+            self.sstv.feed(&mono, AUDIO_RATE);
+        }
         if self.cw_focus_active() {
             let mono: Vec<f32> = audio.iter().map(|f| f.l).collect();
             self.cw.feed_focus(&mono, self.pitch);
@@ -781,6 +805,7 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
     let mut last_advice: Option<Instant> = None;
     let mut last_lrpt = Instant::now();
     let start = Instant::now();
+    let (mut sstv_saved, mut sstv_announced) = (0u64, 0u64);
     loop {
         loop {
             match ctl.try_recv() {
@@ -812,6 +837,25 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
                         Ok(()) => eprintln!("[dab] picture \"{}\" ({} bytes) -> {path}", sl.name, sl.data.len()),
                         Err(e) => eprintln!("[dab] cannot write {path}: {e}"),
                     }
+                }
+                let st = engine.sstv.status();
+                if st.finished != sstv_saved {
+                    sstv_saved = st.finished;
+                    let path = format!("sstv-{}-{}.png", utc_stamp(), st.finished_mode.replace(' ', "").to_lowercase());
+                    if let Some(png) = engine.sstv.png(1) {
+                        match std::fs::write(&path, png) {
+                            Ok(()) => eprintln!(
+                                "[sstv] {} picture {} -> {path}",
+                                st.finished_mode,
+                                if st.last_complete { "complete".to_string() } else { format!("cut after {} rows", st.finished_rows) }
+                            ),
+                            Err(e) => eprintln!("[sstv] cannot write {path}: {e}"),
+                        }
+                    }
+                }
+                if st.receiving && st.line == 0 && st.version != sstv_announced {
+                    sstv_announced = st.version;
+                    eprintln!("[sstv] receiving {}", st.mode);
                 }
                 let text = engine.take_text();
                 if !text.is_empty() {

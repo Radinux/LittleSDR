@@ -17,4 +17,5 @@ pub mod rds;
 pub mod rs;
 pub mod rtty;
 pub mod source;
+pub mod sstv;
 pub mod stereo;
