@@ -5,8 +5,10 @@ use crate::dsp::C32;
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::thread::JoinHandle;
 
+pub mod kiwisdr;
 pub mod rtltcp;
 pub mod wavfile;
+pub mod ws;
 #[cfg(feature = "rtlsdr")]
 pub mod rtlsdr;
 
