@@ -1,6 +1,7 @@
 //! FT8 / FT4 decodes of a baseband IQ recording, e.g. SDR++'s
 //! "baseband_7074000Hz_22-49-45_19-11-2026.wav" (local time in the name).
-//!   cargo run --release --example ft8_file -- file.wav [--utc-offset 1] [--center 7074000] [--start "2026-11-19 21:49:45"]
+//!   cargo run --release --example ft8_file -- file.wav [--utc-offset 1] [--center 7074000] [--grid KN34]
+//! Also reads the engine's own "2026-11-19_22-49-45_baseband_7060000Hz_1920kHz.wav".
 
 use littlesdr::dsp::C32;
 use littlesdr::ft8::Ft8Receiver;
@@ -27,8 +28,12 @@ fn main() {
     // hh-mm-ss_dd-mm-yyyy in local time
     let offset_h: f64 = opt("--utc-offset").and_then(|v| v.parse().ok()).unwrap_or(1.0);
     let t_start = {
-        let hms = parts.iter().rev().nth(1).map(|s| s.split('-').filter_map(|x| x.parse::<i64>().ok()).collect::<Vec<_>>());
-        let dmy = parts.last().map(|s| s.split('-').filter_map(|x| x.parse::<i64>().ok()).collect::<Vec<_>>());
+        let nums = |s: &&str| s.split('-').filter_map(|x| x.parse::<i64>().ok()).collect::<Vec<_>>();
+        // LittleSDR: yyyy-mm-dd_hh-mm-ss_baseband_...; SDR++: ..._hh-mm-ss_dd-mm-yyyy
+        let (hms, dmy) = match parts.first().map(nums) {
+            Some(ymd) if ymd.len() == 3 && ymd[0] > 1900 => (parts.get(1).map(nums), Some(vec![ymd[2], ymd[1], ymd[0]])),
+            _ => (parts.iter().rev().nth(1).map(nums), parts.last().map(nums)),
+        };
         match (hms, dmy) {
             (Some(h), Some(d)) if h.len() == 3 && d.len() == 3 => {
                 (days_from_civil(d[2], d[1], d[0]) * 86_400 + h[0] * 3600 + h[1] * 60 + h[2]) as f64 - offset_h * 3600.0

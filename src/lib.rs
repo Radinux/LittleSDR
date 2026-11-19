@@ -15,6 +15,7 @@ pub mod linear;
 pub mod lrpt;
 pub mod meter;
 pub mod rds;
+pub mod recorder;
 pub mod rs;
 pub mod rtty;
 pub mod source;

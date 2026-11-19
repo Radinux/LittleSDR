@@ -7,7 +7,7 @@
 //! Live commands on stdin: freq <f> (or +1k / -500 to step), rate <r>, mode <m>, bw <Hz>,
 //!   pitch <Hz>, gain <dB>|auto, vol <0-2>, ds 0|1|2, bt on|off (bias-tee), stereo on|off,
 //!   nb on|off [threshold], fx <filter> on|off, fx <filter> <param> <value>, meter on|off,
-//!   dab list, dab play <name>, lrpt save [prefix], lrpt qpsk|oqpsk, rtty on|off, cw on|off, cw vfo on|off, cw (decoded lines), sstv on|off|start <mode>|stop, ft8 on|off, ft4 on|off, ft8 grid <loc>, rtty shift|baud|center <v>, rtty rev on|off|auto, rtty ita2|sql on|off, status, quit.
+//!   dab list, dab play <name>, lrpt save [prefix], lrpt qpsk|oqpsk, rtty on|off, cw on|off, cw vfo on|off, cw (decoded lines), sstv on|off|start <mode>|stop, ft8 on|off, ft4 on|off, ft8 grid <loc>, rec audio|iq|stop|mono|stereo|dir <path>, rtty shift|baud|center <v>, rtty rev on|off|auto, rtty ita2|sql on|off, status, quit.
 //!   Filters: hp lp cw notch anotch nr eq agc limit
 
 use littlesdr::audio::{AudioSink, WavSink};
@@ -265,6 +265,36 @@ fn main() {
                 }
                 _ => eprintln!("lrpt save [prefix]  |  lrpt qpsk|oqpsk   (mode lrpt to receive)"),
             },
+            "rec" => match (v, words.get(2).copied()) {
+                ("audio" | "iq", None) => {
+                    let _ = eng_tx.send(EngineCtl::Rec("mode".into(), if v == "audio" { 1.0 } else { 0.0 }));
+                    let _ = eng_tx.send(EngineCtl::Rec("start".into(), 0.0));
+                }
+                ("stop", None) => {
+                    let _ = eng_tx.send(EngineCtl::Rec("stop".into(), 0.0));
+                }
+                ("mono" | "stereo", None) => {
+                    let _ = eng_tx.send(EngineCtl::Rec("stereo".into(), if v == "stereo" { 1.0 } else { 0.0 }));
+                }
+                ("dir", Some(d)) => {
+                    let _ = eng_tx.send(EngineCtl::RecPath(d.to_string()));
+                }
+                ("width", Some(w)) => match w {
+                    "full" | "0" => {
+                        let _ = eng_tx.send(EngineCtl::Rec("bbMax".into(), 0.0));
+                    }
+                    w => match parse_hz(w) {
+                        Some(hz) => {
+                            let _ = eng_tx.send(EngineCtl::Rec("bbMax".into(), hz));
+                        }
+                        None => eprintln!("rec width full | 500k"),
+                    },
+                },
+                ("", None) => {
+                    let _ = eng_tx.send(EngineCtl::Rec("status".into(), 0.0));
+                }
+                _ => eprintln!("rec audio | rec iq (whole band) | rec width 500k (narrower IQ around the tuned frequency) | full | rec stop | rec mono|stereo | rec dir PATH"),
+            },
             "ft8" | "ft4" => match (v, words.get(2).copied()) {
                 ("on" | "off", None) if words[0] == "ft8" => {
                     let _ = eng_tx.send(EngineCtl::Ft8("enabled".into(), if v == "on" { 1.0 } else { 0.0 }));
@@ -417,7 +447,7 @@ fn main() {
             }
             "quit" | "q" | "exit" => break,
             "" => {}
-            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | meter | rtty | cw | sstv | ft8 | ft4 | lrpt | dab | stereo | nb | fx | status | quit  ({other}?)"),
+            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | meter | rtty | cw | sstv | ft8 | ft4 | rec | lrpt | dab | stereo | nb | fx | status | quit  ({other}?)"),
         }
     }
     let _ = src.ctl.send(SourceCtl::Stop);

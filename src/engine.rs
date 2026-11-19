@@ -151,6 +151,10 @@ pub enum EngineCtl {
     CwList,
     /// FT8/FT4 receiver setting: "enabled", "ft8", "ft4", "clear", "lat", "lon"
     Ft8(String, f64),
+    /// Recorder setting: "mode" (0 baseband, 1 audio), "stereo", "start", "stop"
+    Rec(String, f64),
+    /// Recorder folder
+    RecPath(String),
     /// SSTV setting: "enabled", "start" (mode index, for a missed VIS), "stop"
     Sstv(String, f64),
     /// LRPT: write the pictures so far (file prefix, or a dated name)
@@ -289,6 +293,8 @@ pub struct Engine {
     pub cw: crate::cw::CwSkimmer,
     /// Analog SSTV pictures from the demodulated sound
     pub sstv: crate::sstv::Decoder,
+    /// Sound or baseband IQ to WAV
+    pub rec: crate::recorder::Recorder,
     /// FT8 / FT4 on the standard dial frequencies in view
     pub ft8: crate::ft8::Ft8Receiver,
     /// DAB service asked for before DAB mode was on
@@ -324,6 +330,7 @@ impl Engine {
             rtty: None,
             cw: crate::cw::CwSkimmer::new(),
             sstv: crate::sstv::Decoder::new(),
+            rec: crate::recorder::Recorder::new(),
             ft8: crate::ft8::Ft8Receiver::new(),
             pending_service: None,
             rtty_cfg: Vec::new(),
@@ -368,6 +375,15 @@ impl Engine {
                 if self.cw.follow_vfo { "decoded in CW mode (text to stdout)" } else { "not decoded" }
             ),
             EngineCtl::CwList => self.cw_lines(),
+            EngineCtl::Rec(..) | EngineCtl::RecPath(_) => {
+                if !self.rec.error.is_empty() {
+                    format!("recorder: {}", self.rec.error)
+                } else if self.rec.recording() {
+                    format!("recording -> {}", self.rec.file())
+                } else {
+                    format!("not recording ({} mode, folder {})", if self.rec.mode == crate::recorder::RecMode::Audio { "audio" } else { "baseband" }, self.rec.path.display())
+                }
+            }
             EngineCtl::Ft8(..) => {
                 if !self.ft8.enabled {
                     "FT8/FT4 off".into()
@@ -505,6 +521,12 @@ impl Engine {
                 }
             }
             EngineCtl::CwList => {}
+            EngineCtl::Rec(key, v) => {
+                if !self.rec.set(key, *v) {
+                    eprintln!("[rec] unknown setting {key} (mode, stereo, start, stop)");
+                }
+            }
+            EngineCtl::RecPath(p) => self.rec.set_path(p),
             EngineCtl::Ft8(key, v) => {
                 if !self.ft8.set(key, *v) {
                     eprintln!("[ft8] unknown setting {key} (enabled, ft8, ft4, clear, lat, lon)");
@@ -690,6 +712,7 @@ impl Engine {
         // The skimmer looks at the whole band, before the tuned channel is cut out
         self.cw.feed_iq(&block.samples, block.rate, block.center, self.freq);
         self.ft8.feed_iq(&block.samples, block.rate, block.center, self.freq, self.mode == Mode::Usb);
+        self.rec.feed_iq(&block.samples, block.rate, block.center, self.freq);
         let front = self.front.as_mut().unwrap();
         self.nco.set(self.offset, block.rate);
         self.nco.mix(&mut block.samples);
@@ -714,6 +737,7 @@ impl Engine {
             self.cw.feed_focus(&mono, self.pitch);
         }
         self.fx.process(&mut audio);
+        self.rec.feed_audio(&audio);
 
         // Volume, mute / fade-in, then the delay line
         for f in audio {
