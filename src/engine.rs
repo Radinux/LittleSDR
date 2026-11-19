@@ -149,6 +149,8 @@ pub enum EngineCtl {
     Cw(String, f64),
     /// Print the CW skimmer's decoded lines
     CwList,
+    /// FT8/FT4 receiver setting: "enabled", "ft8", "ft4", "clear", "lat", "lon"
+    Ft8(String, f64),
     /// SSTV setting: "enabled", "start" (mode index, for a missed VIS), "stop"
     Sstv(String, f64),
     /// LRPT: write the pictures so far (file prefix, or a dated name)
@@ -287,6 +289,8 @@ pub struct Engine {
     pub cw: crate::cw::CwSkimmer,
     /// Analog SSTV pictures from the demodulated sound
     pub sstv: crate::sstv::Decoder,
+    /// FT8 / FT4 on the standard dial frequencies in view
+    pub ft8: crate::ft8::Ft8Receiver,
     /// DAB service asked for before DAB mode was on
     pending_service: Option<String>,
     rtty_cfg: Vec<(String, f64)>, // kept so the decoder comes back as it was
@@ -320,6 +324,7 @@ impl Engine {
             rtty: None,
             cw: crate::cw::CwSkimmer::new(),
             sstv: crate::sstv::Decoder::new(),
+            ft8: crate::ft8::Ft8Receiver::new(),
             pending_service: None,
             rtty_cfg: Vec::new(),
             delay: VecDeque::with_capacity(DELAY * 4),
@@ -363,6 +368,17 @@ impl Engine {
                 if self.cw.follow_vfo { "decoded in CW mode (text to stdout)" } else { "not decoded" }
             ),
             EngineCtl::CwList => self.cw_lines(),
+            EngineCtl::Ft8(..) => {
+                if !self.ft8.enabled {
+                    "FT8/FT4 off".into()
+                } else {
+                    let d = |p: usize| match self.ft8.dial(p) {
+                        0.0 => "no channel in view".to_string(),
+                        f => format!("dial {:.3} MHz", f / 1e6),
+                    };
+                    format!("FT8 {}, FT4 {} (decodes printed at the end of each slot)", d(0), d(1))
+                }
+            }
             EngineCtl::Sstv(..) => {
                 let st = self.sstv.status();
                 if !self.sstv.enabled {
@@ -489,6 +505,11 @@ impl Engine {
                 }
             }
             EngineCtl::CwList => {}
+            EngineCtl::Ft8(key, v) => {
+                if !self.ft8.set(key, *v) {
+                    eprintln!("[ft8] unknown setting {key} (enabled, ft8, ft4, clear, lat, lon)");
+                }
+            }
             EngineCtl::Sstv(key, v) => {
                 if !self.sstv.set(key, *v) {
                     eprintln!("[sstv] unknown setting {key} (enabled, start, stop)");
@@ -668,6 +689,7 @@ impl Engine {
         }
         // The skimmer looks at the whole band, before the tuned channel is cut out
         self.cw.feed_iq(&block.samples, block.rate, block.center, self.freq);
+        self.ft8.feed_iq(&block.samples, block.rate, block.center, self.freq, self.mode == Mode::Usb);
         let front = self.front.as_mut().unwrap();
         self.nco.set(self.offset, block.rate);
         self.nco.mix(&mut block.samples);
@@ -837,6 +859,22 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
                         Ok(()) => eprintln!("[dab] picture \"{}\" ({} bytes) -> {path}", sl.name, sl.data.len()),
                         Err(e) => eprintln!("[dab] cannot write {path}: {e}"),
                     }
+                }
+                for r in engine.ft8.take_news() {
+                    let secs = (r.time / 1000 - if r.mode == "FT4" { 7 } else { 15 }).rem_euclid(86_400);
+                    let dist = if r.distance_km > 0.0 { format!("  {:.0} km", r.distance_km) } else { String::new() };
+                    println!(
+                        "{:02}{:02}{:02} {} {:>4.0} {:>5.1} {:>5.0}  {}{}",
+                        secs / 3600,
+                        secs % 3600 / 60,
+                        secs % 60,
+                        r.mode,
+                        r.snr,
+                        r.dt,
+                        r.audio_hz,
+                        r.message,
+                        dist
+                    );
                 }
                 let st = engine.sstv.status();
                 if st.finished != sstv_saved {

@@ -10,6 +10,7 @@ pub mod cw;
 pub mod dab;
 pub mod dsp;
 pub mod engine;
+pub mod ft8;
 pub mod linear;
 pub mod lrpt;
 pub mod meter;
