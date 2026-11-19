@@ -20,6 +20,7 @@ use crate::linear::{AmDemod, Sideband, SsbDemod, SSB_LOW_CUT};
 use crate::dab::DabReceiver;
 use crate::lrpt::LrptDecoder;
 use crate::meter::{Meter, Reading};
+use crate::rds::RdsDecoder;
 use crate::rtty::Rtty;
 use crate::source::IqBlock;
 use crate::stereo::StereoDecoder;
@@ -180,7 +181,7 @@ impl Front {
 
 /// Demodulation, kept across rate changes
 enum Back {
-    Wfm { fm: FmDemod, stereo: StereoDecoder, deemph: [Deemphasis; 2] },
+    Wfm { fm: FmDemod, stereo: StereoDecoder, deemph: [Deemphasis; 2], rds: Box<RdsDecoder> },
     Nfm { fm: FmDemod, audio: DecimFir<f32> },
     Am(AmDemod),
     Ssb(SsbDemod),
@@ -200,6 +201,7 @@ impl Back {
                     fm: FmDemod::new(ifr, mode.deviation()),
                     stereo: st,
                     deemph: [Deemphasis::new(AUDIO_RATE, 50e-6), Deemphasis::new(AUDIO_RATE, 50e-6)],
+                    rds: Box::new(RdsDecoder::new(ifr)),
                 }
             }
             Mode::Nfm => Back::Nfm {
@@ -216,8 +218,9 @@ impl Back {
     fn process(&mut self, iq: &[C32], out: &mut Vec<Frame>) {
         let mut demod = Vec::with_capacity(iq.len());
         match self {
-            Back::Wfm { fm, stereo, deemph } => {
+            Back::Wfm { fm, stereo, deemph, rds } => {
                 fm.process(iq, &mut demod);
+                rds.process(&demod);
                 let start = out.len();
                 stereo.process(&demod, out);
                 // De-emphasis per channel, after the stereo matrix
@@ -364,7 +367,14 @@ impl Engine {
 
     fn apply(&mut self, c: &EngineCtl) {
         match c {
-            EngineCtl::Tune(f) => self.freq = *f,
+            EngineCtl::Tune(f) => {
+                if (*f - self.freq).abs() > 50e3 {
+                    if let Back::Wfm { rds, .. } = &mut self.back {
+                        rds.reset(); // another station
+                    }
+                }
+                self.freq = *f;
+            }
             EngineCtl::Volume(v) => self.volume = v.clamp(0.0, 2.0),
             EngineCtl::Mode(m) if *m != self.mode && *m == Mode::Dab => {
                 self.mode = *m;
@@ -526,6 +536,20 @@ impl Engine {
         if let Back::Dab(rx) = &self.back {
             s += &format!("\n[dab] {}\n", rx.describe());
         }
+        if let Back::Wfm { rds, .. } = &self.back {
+            let i = &rds.info;
+            s += &format!(
+                "\n[rds] {} PI {} PS \"{}\" PTY \"{}\" RT \"{}\" ({} groups, blocks {} ok / {} bad)\n",
+                if rds.active() { "synced" } else { "searching" },
+                i.pi.map_or("-".into(), |p| format!("{p:04X}")),
+                i.ps.trim(),
+                crate::rds::PTY_NAMES[i.pty as usize & 31],
+                i.rt.trim(),
+                i.groups,
+                i.blocks_ok,
+                i.blocks_bad
+            );
+        }
         if let Back::Wfm { stereo, .. } = &self.back {
             s += &format!(
                 ", stereo {} (pilot {:.3}, {})",
@@ -647,6 +671,14 @@ impl Engine {
             Back::Lrpt { dec, .. } => Some(dec.describe()),
             Back::Dab(rx) => Some(rx.describe()),
             _ => None,
+        }
+    }
+
+    /// RDS of the current FM station, in the app's rdsJson format
+    pub fn rds_json(&self) -> String {
+        match &self.back {
+            Back::Wfm { rds, .. } => rds.info.to_json(rds.active()),
+            _ => crate::rds::RdsInfo::default().to_json(false),
         }
     }
 

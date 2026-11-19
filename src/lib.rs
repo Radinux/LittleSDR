@@ -12,6 +12,7 @@ pub mod engine;
 pub mod linear;
 pub mod lrpt;
 pub mod meter;
+pub mod rds;
 pub mod rs;
 pub mod rtty;
 pub mod source;

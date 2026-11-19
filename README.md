@@ -39,6 +39,8 @@ stopping the dongle or cutting the sound.
 - Signal meter: channel power and noise floor (dBFS), SNR, ADC clipping; warns unasked when
   the gain is clearly too high (ADC clipping) or too low (`meter on` prints it every second)
 - Bias-tee for active antennas (`--bias-tee`, `bt on|off`), always switched off on exit (Ctrl+C included)
+- RDS on broadcast FM: station name, RadioText, programme type, PI (own 57 kHz Costas loop,
+  biphase timing, checkword block sync); checked on two Paris stations with no block error
 - Impulse noise blanker on the raw IQ (ignition, electric fences)
 - Switchable audio filters: high-pass, low-pass, CW peak, manual notch, automatic notch (LMS),
   noise reduction (spectral), equalizer, audio AGC, limiter. Every filter runs all the time and
@@ -75,6 +77,7 @@ Live commands on stdin: `freq 101.1M` (`freq +500` / `freq -1k` to step), `rate 
 - `src/meter.rs` — signal meter and ADC overload detection (+ tests)
 - `src/linear.rs` — AM, SSB and CW demodulators, IF AGC (+ tests)
 - `src/stereo.rs` — broadcast FM stereo decoder
+- `src/rds.rs` — RDS decoder (+ tests with a synthetic transmitter)
 - `src/audio_fx.rs` — switchable audio filter chain (+ tests)
 - `src/engine.rs` — the demodulation chain and its live reconfiguration
 - `src/source/` — RTL-SDR USB, rtl_tcp
