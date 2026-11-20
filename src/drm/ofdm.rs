@@ -24,6 +24,8 @@ pub struct SyncInfo {
     pub frame_found: bool,
     pub so: usize,
     pub symbols: u64,
+    /// Sample clock offset of the source, as followed by the timing loop
+    pub drift_ppm: f64,
 }
 
 struct Locked {
@@ -34,7 +36,9 @@ struct Locked {
     /// Absolute sample index of the next symbol's guard start
     next: f64,
     /// Correlation profile around the timing (EMA), offsets -R..=R
-    prof: Vec<C32>,
+    /// Smoothed guard correlation around the timing, and the timing rate correction
+    prof_mag: Vec<f32>,
+    drift: f64,
     /// Integer carrier offset
     k_off: i32,
     k_found: bool,
@@ -42,8 +46,6 @@ struct Locked {
     raw: VecDeque<Vec<C32>>,
     /// Symbols since lock (absolute counter of the next symbol)
     nsym: u64,
-    /// Earliest symbol for the next timing move
-    next_move: u64,
     /// Frame start: symbol counter value of a frame's first symbol
     frame0: Option<u64>,
     frame_score: Vec<f32>,
@@ -52,7 +54,6 @@ struct Locked {
     pending: VecDeque<(usize, Vec<C32>)>,
 }
 
-const PROF_R: i64 = 3;
 const BACKOFF_FRAC: f64 = 0.25; // of the guard: FFT window starts this far before the guard end
 
 pub struct Ofdm {
@@ -159,12 +160,12 @@ impl Ofdm {
             tg,
             fft: FftPlanner::new().plan_fft_forward(tu),
             next: start,
-            prof: vec![C32::default(); (2 * PROF_R + 1) as usize],
+            prof_mag: Vec::new(),
+            drift: 0.0,
             k_off: 0,
             k_found: false,
             raw: VecDeque::new(),
             nsym: 0,
-            next_move: 8,
             frame0: None,
             frame_score: vec![0.0; p.sym_per_frame],
             map: None,
@@ -199,37 +200,44 @@ impl Ofdm {
             let l = self.lock.as_ref().unwrap();
             (l.tu, l.tg, l.next)
         };
+        let r = (tg as i64 / 16).max(3);
         let g = next.round() as i64;
-        let end = g + (tu + tg) as i64 + tu as i64 + PROF_R + 1;
+        let end = g + (tu + tg) as i64 + tu as i64 + r + 1;
         if end > (self.base as usize + self.buf.len()) as i64 {
             return false;
         }
-        // Timing / frequency tracking from the guard correlation around g
-        let mut prof = Vec::with_capacity((2 * PROF_R + 1) as usize);
+        // Guard correlation for window starts g-r..=g+r (running sums over the guard)
+        let n = tg + 2 * r as usize;
+        let mut prod = Vec::with_capacity(n);
         let mut energy = 0f32;
-        for d in -PROF_R..=PROF_R {
-            let mut p = C32::default();
-            for i in 0..tg as i64 {
-                let a = self.sample(g + d + i);
-                let b = self.sample(g + d + i + tu as i64);
-                p += a * b.conj();
-                if d == 0 {
-                    energy += 0.5 * (a.norm_sqr() + b.norm_sqr());
-                }
+        for i in 0..n as i64 {
+            let a = self.sample(g - r + i);
+            let b = self.sample(g - r + i + tu as i64);
+            prod.push(a * b.conj());
+            if i >= r && i < r + tg as i64 {
+                energy += 0.5 * (a.norm_sqr() + b.norm_sqr());
             }
-            prof.push(p);
+        }
+        let mut prof = Vec::with_capacity(2 * r as usize + 1);
+        let mut acc: C32 = prod[..tg].iter().fold(C32::default(), |x, &y| x + y);
+        prof.push(acc);
+        for i in 0..2 * r as usize {
+            acc = acc - prod[i] + prod[i + tg];
+            prof.push(acc);
         }
         // FFT of the useful part, started a little inside the guard
         let backoff = (BACKOFF_FRAC * tg as f64) as i64;
         let start = g + tg as i64 - backoff;
-        let mut v: Vec<Complex32> = (0..tu as i64).map(|i| {
-            let s = self.sample(start + i);
-            Complex32::new(s.re, s.im)
-        }).collect();
+        let mut v: Vec<Complex32> = (0..tu as i64)
+            .map(|i| {
+                let s = self.sample(start + i);
+                Complex32::new(s.re, s.im)
+            })
+            .collect();
         let l = self.lock.as_mut().unwrap();
         l.fft.process(&mut v);
         // Undo the early start (a linear phase over the carriers)
-        let bins: Vec<C32> = (0..tu)
+        let mut bins: Vec<C32> = (0..tu)
             .map(|m| {
                 let k = if m < tu / 2 { m as f64 } else { m as f64 - tu as f64 };
                 let ph = 2.0 * std::f64::consts::PI * k * backoff as f64 / tu as f64;
@@ -237,26 +245,34 @@ impl Ofdm {
                 C32::new(v[m].re, v[m].im) * C32::new(c as f32, s as f32)
             })
             .collect();
-        for (a, b) in l.prof.iter_mut().zip(&prof) {
-            *a = *a * 0.9 + *b * 0.1;
+        // Timing loop: the centre of the (smoothed) correlation profile, followed with a
+        // phase and a rate term (the source's sample clock drifts, ~50 ppm on a KiwiSDR)
+        if l.prof_mag.len() != prof.len() {
+            l.prof_mag = prof.iter().map(|p| p.norm_sqr().sqrt()).collect();
         }
-        // Move the window by one sample only on clear evidence (a neighbour of the profile
-        // stronger than the centre), at most once per frame: each move turns the phase of
-        // the outer carriers by a lot, which the channel estimate must not see as a change
-        let mag = |i: usize| l.prof[i].norm_sqr().sqrt();
-        let c = PROF_R as usize;
-        let mut shift = 0i64;
-        if l.nsym >= l.next_move {
-            if mag(c + 1) > 1.03 * mag(c) && mag(c + 1) >= mag(c - 1) {
-                shift = 1;
-            } else if mag(c - 1) > 1.03 * mag(c) {
-                shift = -1;
-            }
+        for (m, p) in l.prof_mag.iter_mut().zip(&prof) {
+            *m = 0.9 * *m + 0.1 * p.norm_sqr().sqrt();
         }
+        let floor = l.prof_mag.iter().copied().fold(f32::MAX, f32::min);
+        let (mut num, mut den) = (0f64, 0f64);
+        for (i, &m) in l.prof_mag.iter().enumerate() {
+            let w = (m - floor) as f64;
+            num += (i as i64 - r) as f64 * w;
+            den += w;
+        }
+        let err = if den > 0.0 { num / den } else { 0.0 };
+        if l.nsym > 8 {
+            l.drift += 0.000_5 * err;
+            l.next += 0.05 * err;
+        }
+        l.next += (tu + tg) as f64 + l.drift;
+        // Whole-sample steps of the window: symbols waiting for equalisation must share
+        // the new timing reference, and the profile moves with the window
+        let shift = l.next.round() as i64 - g - (tu + tg) as i64;
         if shift != 0 {
-            l.next_move = l.nsym + params(l.mode).sym_per_frame as u64;
-            l.prof.rotate_left(((shift + 2 * PROF_R + 1) % (2 * PROF_R + 1)) as usize);
-            // Symbols waiting for equalisation: same timing reference as the new ones
+            if std::env::var("DRM_DEBUG").is_ok() {
+                eprintln!("sym {} shift {shift} err {err:.2} drift {:.4}", l.nsym, l.drift);
+            }
             let (kmin, tuf) = (l.map.as_ref().map_or(0, |m| m.kmin), tu as f32);
             for (_, cells) in l.pending.iter_mut() {
                 for (i, x) in cells.iter_mut().enumerate() {
@@ -265,14 +281,28 @@ impl Ofdm {
                     *x = *x * C32::new(ph.cos(), ph.sin());
                 }
             }
+            // This symbol too: it was taken with the old window
+            for (m, x) in bins.iter_mut().enumerate() {
+                let k = if m < tu / 2 { m as f32 } else { m as f32 - tuf };
+                let ph = 2.0 * std::f32::consts::PI * k * shift as f32 / tuf;
+                *x = *x * C32::new(ph.cos(), ph.sin());
+            }
+            let len = l.prof_mag.len() as i64;
+            let sh = shift.clamp(-len + 1, len - 1);
+            if sh > 0 {
+                l.prof_mag.rotate_left(sh as usize);
+            } else {
+                l.prof_mag.rotate_right((-sh) as usize);
+            }
         }
-        l.next += (tu + tg) as f64 + shift as f64;
-        let c0 = prof[PROF_R as usize];
+        let drift_ppm = l.drift / (tu + tg) as f64 * 1e6;
+        let c0 = prof[r as usize];
         let resid = -(c0.im.atan2(c0.re) as f64) * rate / (2.0 * std::f64::consts::PI * tu as f64);
         let f = self.freq + 0.05 * resid;
         self.set_freq(f, g + (tu + tg) as i64);
         self.info.freq_offset = self.freq;
         self.info.guard_corr = 0.95 * self.info.guard_corr + 0.05 * (c0.norm_sqr().sqrt() / energy.max(1e-20));
+        self.info.drift_ppm = drift_ppm;
         self.info.symbols += 1;
         self.after_fft(bins, out);
         true
@@ -349,16 +379,19 @@ impl Ofdm {
                 if bs > 0.5 && bs > 2.0 * sorted[1].max(0.0) {
                     l.frame0 = Some(bi as u64);
                     self.info.frame_found = true;
-                    // Spectrum occupancy: the widest one whose edges carry power
+                    // Spectrum occupancy: the widest one whose band edges stand above what lies
+                    // just outside them (relative, so a dulled edge still counts)
                     let mean = |k: i32| -> f32 { l.raw.iter().map(|r| r[(k.rem_euclid(tu)) as usize].norm_sqr()).sum::<f32>() / l.raw.len() as f32 };
-                    let inband: f32 = (1..20).map(&mean).sum::<f32>() / 19.0;
+                    let band = |a: i32, b: i32| -> f32 { (a..=b).map(&mean).sum::<f32>() / (b - a + 1) as f32 };
                     let mut so = 0;
                     for cand in 0..6 {
                         let (kmin, kmax) = (p.kmin[cand], p.kmax[cand]);
-                        if kmin == 0 && kmax == 0 || kmax >= tu / 2 || -kmin >= tu / 2 {
+                        if kmin == 0 && kmax == 0 || kmax + 10 >= tu / 2 || -kmin + 10 >= tu / 2 {
                             continue;
                         }
-                        if mean(kmax - 1) > 0.1 * inband && mean(kmin + 1) > 0.1 * inband {
+                        let hi_ok = band(kmax - 6, kmax) > 4.0 * band(kmax + 3, kmax + 9);
+                        let lo_ok = kmin > 0 || band(kmin, kmin + 6) > 4.0 * band(kmin - 9, kmin - 3);
+                        if hi_ok && lo_ok {
                             so = cand;
                         }
                     }

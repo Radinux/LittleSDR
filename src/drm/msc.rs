@@ -96,8 +96,8 @@ impl MscDecoder {
             self.mem[self.cur[i % d]][self.table[i]] = c;
         }
         let out = self.mem[self.cur[d - 1]].clone();
-        for j in 0..d {
-            self.cur[j] = if self.cur[j] == 0 { d - 1 } else { self.cur[j] - 1 };
+        for c in self.cur.iter_mut().take(d) {
+            *c = if *c == 0 { d - 1 } else { *c - 1 };
         }
         out
     }
@@ -133,7 +133,7 @@ impl Qam {
     /// Axis value by index y0 y1 y2 (y0 = most significant)
     fn table(self) -> &'static [f32] {
         match self {
-            Qam::Q4 => &[0.707_106_8, -0.707_106_8],
+            Qam::Q4 => &[std::f32::consts::FRAC_1_SQRT_2, -std::f32::consts::FRAC_1_SQRT_2],
             Qam::Q16 => &QAM16,
             Qam::Q64 => &[1.080_123_4, -0.154_303_35, 0.462_910_05, -0.771_516_75, 0.771_516_75, -0.462_910_05, 0.154_303_35, -1.080_123_4],
         }

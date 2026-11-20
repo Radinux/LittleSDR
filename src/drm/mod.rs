@@ -9,10 +9,11 @@ pub mod ofdm;
 pub mod sdc;
 pub mod tables;
 
-use crate::dsp::C32;
+use crate::dsp::{Frame as AudioFrame, Interp, C32};
+use std::collections::VecDeque;
 use fac::{FacDecoder, FacInfo};
 use ofdm::{Frame, Ofdm};
-use audio::XheAudio;
+use audio::{TextDecoder, XheAudio};
 use msc::MscDecoder;
 use sdc::{SdcDecoder, SdcInfo};
 
@@ -24,17 +25,25 @@ pub struct DrmReceiver {
     /// MSC frames (400 ms of the multiplex) decoded and not yet taken
     pub msc_frames: Vec<Vec<u8>>,
     pub audio: XheAudio,
+    pub text: TextDecoder,
+    /// New text message, not yet taken
+    pub text_news: Option<String>,
     /// Decoded audio (interleaved float) not yet taken
     pub pcm: Vec<f32>,
     pub last_fac: Option<FacInfo>,
     pub sdc_info: Option<SdcInfo>,
     pub frames: u64,
+    /// 48 kHz output: resampler from the codec's rate, and a reserve that smooths the
+    /// 400 ms bursts of the decoder into a steady stream
+    rs: Option<(u32, Interp<AudioFrame>)>,
+    reserve: VecDeque<AudioFrame>,
+    playing: bool,
 }
 
 impl DrmReceiver {
     /// `rate`: 12, 24 or 48 kHz of complex baseband centred on the DRM channel
     pub fn new(rate: f64) -> DrmReceiver {
-        DrmReceiver { ofdm: Ofdm::new(rate), fac: FacDecoder::new(), sdc: SdcDecoder::new(), msc: MscDecoder::new(), msc_frames: Vec::new(), audio: XheAudio::new(), pcm: Vec::new(), last_fac: None, sdc_info: None, frames: 0 }
+        DrmReceiver { ofdm: Ofdm::new(rate), fac: FacDecoder::new(), sdc: SdcDecoder::new(), msc: MscDecoder::new(), msc_frames: Vec::new(), audio: XheAudio::new(), text: TextDecoder::default(), text_news: None, pcm: Vec::new(), last_fac: None, sdc_info: None, frames: 0, rs: None, reserve: VecDeque::new(), playing: false }
     }
 
     pub fn process(&mut self, iq: &[C32]) {
@@ -69,6 +78,11 @@ impl DrmReceiver {
                                 for m in &got {
                                     if off + len <= m.len() {
                                         self.audio.push(a, &m[off..off + len], &mut self.pcm);
+                                        if a.text && off + len + 4 <= m.len() {
+                                            if let Some(t) = self.text.push(&m[off + len..off + len + 4]) {
+                                                self.text_news = Some(t);
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -81,14 +95,66 @@ impl DrmReceiver {
         }
     }
 
+    /// Engine use: IF samples at `if_rate`; exactly as many 48 kHz frames out as went in
+    /// (so the sound card is fed steadily), audio delayed by a small reserve
+    pub fn process_audio(&mut self, iq: &[C32], if_rate: f64, out: &mut Vec<AudioFrame>) {
+        self.process(iq);
+        let ch = self.audio.channels.max(1) as usize;
+        let rate = self.audio.rate;
+        if rate > 0 && !self.pcm.is_empty() {
+            if self.rs.as_ref().is_none_or(|r| r.0 != rate) {
+                self.rs = Some((rate, Interp::new(rate as f64, 48_000.0)));
+            }
+            let frames: Vec<AudioFrame> = self.pcm.chunks(ch).map(|c| AudioFrame::new(c[0], *c.get(1).unwrap_or(&c[0]))).collect();
+            self.pcm.clear();
+            let mut up = Vec::with_capacity(frames.len() * 48_000 / rate as usize + 4);
+            self.rs.as_mut().unwrap().1.process(&frames, &mut up);
+            self.reserve.extend(up);
+        }
+        self.pcm.clear();
+        let want = (iq.len() as f64 * 48_000.0 / if_rate).round() as usize;
+        // Start once 1 s is in reserve; too much reserve (clock drift): drop some
+        if !self.playing && self.reserve.len() >= 48_000 {
+            self.playing = true;
+        }
+        if self.reserve.len() > 144_000 {
+            let extra = self.reserve.len() - 72_000;
+            self.reserve.drain(..extra);
+        }
+        for _ in 0..want {
+            let f = if self.playing { self.reserve.pop_front() } else { None };
+            if f.is_none() {
+                self.playing = false; // ran dry: fill the reserve again
+            }
+            out.push(f.unwrap_or_default());
+        }
+    }
+
+    pub fn take_text(&mut self) -> Option<String> {
+        self.text_news.take()
+    }
+
+    /// Station name and audio, once known
+    pub fn station(&self) -> String {
+        match &self.sdc_info {
+            Some(s) => {
+                let label = s.labels.first().map(|l| l.1.as_str()).unwrap_or("");
+                let audio = s.audio.first().map(|a| a.describe()).unwrap_or_default();
+                format!("{label} ({audio})")
+            }
+            None => String::new(),
+        }
+    }
+
     pub fn status(&self) -> String {
         let i = &self.ofdm.info;
         format!(
-            "mode {} SO {} | guard corr {:.2}, offset {:+.1} Hz, frame sync {} | {} frames, FAC {} ok / {} bad, SDC {} ok / {} bad | audio frames {} ok / {} bad, {} Hz",
+            "mode {} SO {} | guard corr {:.2}, offset {:+.1} Hz, clock {:+.0} ppm, frame sync {} | {} frames, FAC {} ok / {} bad, SDC {} ok / {} bad | audio frames {} ok / {} bad, {} Hz",
             i.mode.map_or("?".into(), |m| format!("{m:?}")),
             i.so,
             i.guard_corr,
             i.freq_offset,
+            i.drift_ppm,
             if i.frame_found { "yes" } else { "no" },
             self.frames,
             self.fac.ok,

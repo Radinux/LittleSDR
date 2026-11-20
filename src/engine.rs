@@ -15,7 +15,7 @@
 
 use crate::audio::AudioSink;
 use crate::audio_fx::AudioChain;
-use crate::dsp::{lowpass, Deemphasis, DecimFir, FmDemod, Frame, Interp, Nco, NoiseBlanker, C32};
+use crate::dsp::{lowpass, Deemphasis, DecimFir, FmDemod, Frame, Interp, Nco, NoiseBlanker, C32, Upsample};
 use crate::linear::{AmDemod, Sideband, SsbDemod, SSB_LOW_CUT};
 use crate::dab::DabReceiver;
 use crate::lrpt::LrptDecoder;
@@ -45,10 +45,12 @@ pub enum Mode {
     Lrpt,
     /// DAB+ digital radio (Band III, 2.048 MS/s)
     Dab,
+    /// DRM digital shortwave / medium wave (10 or 20 kHz channel centred on the frequency)
+    Drm,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 8] = [Mode::Wfm, Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Cw, Mode::Lrpt, Mode::Dab];
+    pub const ALL: [Mode; 9] = [Mode::Wfm, Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Cw, Mode::Lrpt, Mode::Dab, Mode::Drm];
 
     pub fn parse(s: &str) -> Option<Mode> {
         match s.to_ascii_lowercase().as_str() {
@@ -60,6 +62,7 @@ impl Mode {
             "cw" => Some(Mode::Cw),
             "lrpt" | "meteor" => Some(Mode::Lrpt),
             "dab" | "dab+" => Some(Mode::Dab),
+            "drm" => Some(Mode::Drm),
             _ => None,
         }
     }
@@ -85,6 +88,8 @@ impl Mode {
             // 72 ksym/s, roll-off 0.6: +-57.6 kHz, plus Doppler (+-3.5 kHz)
             Mode::Lrpt => 64_000.0,
             Mode::Dab => 780_000.0,
+            // up to 20 kHz channels (spectrum occupancy 5)
+            Mode::Drm => 15_000.0,
         }
     }
     fn deviation(self) -> f64 {
@@ -96,7 +101,7 @@ impl Mode {
     /// Default channel bandwidth (Hz), None when it is fixed (FM)
     pub fn default_bandwidth(self) -> Option<f64> {
         match self {
-            Mode::Wfm | Mode::Nfm | Mode::Lrpt | Mode::Dab => None,
+            Mode::Wfm | Mode::Nfm | Mode::Lrpt | Mode::Dab | Mode::Drm => None,
             Mode::Am => Some(9_000.0),
             Mode::Usb | Mode::Lsb => Some(2_700.0),
             Mode::Cw => Some(500.0),
@@ -174,6 +179,7 @@ pub enum EngineCtl {
 struct Front {
     rate: f64,
     decim: DecimFir<C32>,
+    up: Option<Upsample<C32>>,
     frac: Interp<C32>,
 }
 
@@ -187,7 +193,15 @@ impl Front {
         let stop = (ifr - pass).max(pass * 1.2).min(rate / 2.0);
         // Input already narrower than the IF (e.g. a recording): nothing to filter
         let taps = if stop <= pass * 1.05 || rate <= ifr * 1.001 { vec![1.0] } else { lowpass((pass + stop) / 2.0 / rate, (stop - pass) / rate) };
-        Front { rate, decim: DecimFir::new(taps, d), frac: Interp::new(mid, ifr) }
+        // Narrow sources (KiwiSDR 12 kHz, 24 kHz recordings): a whole factor up to the IF is
+        // done with a proper filter; cubic interpolation alone would dull the band edges
+        let up_factor = ifr / rate;
+        if rate < ifr && (up_factor - up_factor.round()).abs() < 1e-9 {
+            let f = up_factor.round() as usize;
+            let taps = lowpass(0.45 * rate / ifr, 0.08 * rate / ifr);
+            return Front { rate, decim: DecimFir::new(vec![1.0], 1), up: Some(Upsample::new(&taps, f)), frac: Interp::new(ifr, ifr) };
+        }
+        Front { rate, decim: DecimFir::new(taps, d), up: None, frac: Interp::new(mid, ifr) }
     }
 }
 
@@ -200,6 +214,7 @@ enum Back {
     /// Silent: `rem` carries the IF samples not yet turned into (silent) audio frames
     Lrpt { dec: Box<LrptDecoder>, rem: usize },
     Dab(Box<DabReceiver>),
+    Drm(Box<crate::drm::DrmReceiver>),
 }
 
 impl Back {
@@ -224,6 +239,7 @@ impl Back {
             Mode::Usb | Mode::Lsb | Mode::Cw => Back::Ssb(SsbDemod::new(mode.sideband().unwrap(), bw, pitch)),
             Mode::Lrpt => Back::Lrpt { dec: Box::new(LrptDecoder::new(ifr, true)), rem: 0 },
             Mode::Dab => Back::Dab(Box::new(DabReceiver::new())),
+            Mode::Drm => Back::Drm(Box::new(crate::drm::DrmReceiver::new(ifr))),
         }
     }
 
@@ -252,6 +268,7 @@ impl Back {
             Back::Am(d) => d.process(iq, out),
             Back::Ssb(d) => d.process(iq, out),
             Back::Dab(rx) => rx.process(iq, out),
+            Back::Drm(rx) => rx.process_audio(iq, Mode::Drm.if_rate(), out),
             Back::Lrpt { dec, rem } => {
                 dec.process(iq);
                 // Keep the sound output running (silence) at exactly 48 kHz
@@ -274,7 +291,7 @@ pub struct Engine {
     mode: Mode,
     freq: f64,
     offset: f64,
-    bandwidth: [f64; 8], // per mode, remembered across mode changes
+    bandwidth: [f64; 9], // per mode, remembered across mode changes
     pitch: f64,
     volume: f32,
     stereo: bool,
@@ -621,6 +638,9 @@ impl Engine {
         if let Back::Dab(rx) = &self.back {
             s += &format!("\n[dab] {}\n", rx.describe());
         }
+        if let Back::Drm(rx) = &self.back {
+            s += &format!("\n[drm] {} | {}\n", rx.station(), rx.status());
+        }
         if let Back::Wfm { rds, .. } = &self.back {
             let i = &rds.info;
             s += &format!(
@@ -668,6 +688,7 @@ impl Engine {
             Mode::Lsb => (-SSB_LOW_CUT - bw, -SSB_LOW_CUT),
             Mode::Lrpt => (-57_600.0, 57_600.0),
             Mode::Dab => (-768_000.0, 768_000.0),
+            Mode::Drm => (-5_000.0, 5_000.0),
         }
     }
 
@@ -729,6 +750,11 @@ impl Engine {
 
         let mut dec = Vec::with_capacity(block.samples.len() / front.decim.factor() + 2);
         front.decim.process(&block.samples, &mut dec);
+        if let Some(up) = &mut front.up {
+            let mut u = Vec::with_capacity(dec.len() * 4 + 4);
+            up.process(&dec, &mut u);
+            dec = u;
+        }
         let mut ifs = Vec::with_capacity(dec.len() + 4);
         front.frac.process(&dec, &mut ifs);
         let mut audio = Vec::with_capacity(ifs.len() / 4 + 2);
@@ -775,6 +801,7 @@ impl Engine {
         match &self.back {
             Back::Lrpt { dec, .. } => Some(dec.describe()),
             Back::Dab(rx) => Some(rx.describe()),
+            Back::Drm(rx) => Some(format!("{} | {}", rx.station(), rx.status())),
             _ => None,
         }
     }
@@ -784,6 +811,14 @@ impl Engine {
         match &self.back {
             Back::Wfm { rds, .. } => rds.info.to_json(rds.active()),
             _ => crate::rds::RdsInfo::default().to_json(false),
+        }
+    }
+
+    /// DRM: new text message since the last call
+    pub fn take_drm_text(&mut self) -> Option<String> {
+        match &mut self.back {
+            Back::Drm(rx) => rx.take_text(),
+            _ => None,
         }
     }
 
@@ -883,6 +918,9 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
                 out.clear();
                 engine.process(b, &mut out);
                 sink.write(&out);
+                if let Some(t) = engine.take_drm_text() {
+                    eprintln!("[drm] ♪ {t}");
+                }
                 let (label, slide, service) = engine.take_dab_news();
                 if let Some(l) = label {
                     eprintln!("[dab] ♪ {l}");
@@ -968,7 +1006,12 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
         if last_lrpt.elapsed() >= Duration::from_secs(10) {
             last_lrpt = Instant::now();
             if let Some(st) = engine.lrpt_status() {
-                eprintln!("[{}] {st}", if engine.mode() == Mode::Dab { "dab" } else { "lrpt" });
+                let tag = match engine.mode() {
+                    Mode::Dab => "dab",
+                    Mode::Drm => "drm",
+                    _ => "lrpt",
+                };
+                eprintln!("[{tag}] {st}");
             }
         }
         if verbose && last_report.elapsed() > Duration::from_secs(5) {

@@ -11,6 +11,18 @@ fn main() {
     assert_eq!(info.bits, 16);
     let iq: Vec<C32> = data.chunks_exact(4).map(|b| C32::new(i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0, i16::from_le_bytes([b[2], b[3]]) as f32 / 32768.0)).collect();
     eprintln!("{path}: {:.1} s at {} S/s", iq.len() as f64 / info.rate, info.rate);
+    // DRM_UP=4: feed the receiver 4x upsampled (as the engine does from a 12 kHz source)
+    let up: usize = std::env::var("DRM_UP").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let iq: Vec<C32> = if up > 1 {
+        let taps = littlesdr::dsp::lowpass(0.45 / up as f64, 0.08 / up as f64);
+        let mut u = littlesdr::dsp::Upsample::new(&taps, up);
+        let mut o = Vec::new();
+        u.process(&iq, &mut o);
+        o
+    } else {
+        iq
+    };
+    let info = littlesdr::source::wavfile::WavInfo { rate: info.rate * up as f64, ..info };
     let mut rx = DrmReceiver::new(info.rate);
     let mut audio: Vec<f32> = Vec::new();
     let mut last = None;

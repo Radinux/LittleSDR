@@ -49,7 +49,7 @@ struct BitWriter {
 impl BitWriter {
     fn put(&mut self, v: u32, bits: usize) {
         for i in (0..bits).rev() {
-            if self.n % 8 == 0 {
+            if self.n.is_multiple_of(8) {
                 self.bytes.push(0);
             }
             if (v >> i) & 1 == 1 {
@@ -187,6 +187,10 @@ pub struct XheAudio {
     pub frames_bad: u64,
     pub rate: u32,
     pub channels: u8,
+    /// Samples (all channels) of the last decoded access unit: the length of a lost one
+    last_len: usize,
+    /// Fade-in position after a gap (0 = none)
+    fade: usize,
 }
 
 impl Default for XheAudio {
@@ -197,7 +201,7 @@ impl Default for XheAudio {
 
 impl XheAudio {
     pub fn new() -> XheAudio {
-        XheAudio { dec: None, config: Vec::new(), payload: VecDeque::new(), synced: false, frames_ok: 0, frames_bad: 0, rate: 0, channels: 0 }
+        XheAudio { dec: None, config: Vec::new(), payload: VecDeque::new(), synced: false, frames_ok: 0, frames_bad: 0, rate: 0, channels: 0, last_len: 0, fade: 0 }
     }
 
     /// One audio super frame (the stream's bytes of one MSC frame); PCM appended to `pcm`
@@ -208,18 +212,39 @@ impl XheAudio {
             self.payload.clear();
             self.synced = false;
         }
-        for au in self.split(sf) {
+        let aus = self.split(sf);
+        if aus.is_empty() && !self.synced && self.last_len > 0 && self.rate > 0 {
+            // A whole super frame lost: its 400 ms as silence, so playback keeps time
+            pcm.extend(std::iter::repeat_n(0.0, (0.4 * self.rate as f32) as usize * self.channels.max(1) as usize));
+            self.fade = 1;
+        }
+        for au in aus {
             match au {
                 Some(au) => {
                     self.frames_ok += 1;
                     if let Some(d) = &mut self.dec {
+                        let start = pcm.len();
                         if let Some((r, c)) = d.decode(&au, pcm) {
                             self.rate = r;
                             self.channels = c;
+                            self.last_len = pcm.len() - start;
+                            // Back after a gap: 10 ms ramp instead of a click
+                            if self.fade > 0 {
+                                let n = (r as usize / 100 * c as usize).min(pcm.len() - start);
+                                for (i, x) in pcm[start..start + n].iter_mut().enumerate() {
+                                    *x *= i as f32 / n as f32;
+                                }
+                                self.fade = 0;
+                            }
                         }
                     }
                 }
-                None => self.frames_bad += 1,
+                None => {
+                    // A lost access unit: silence of its length keeps the timing
+                    self.frames_bad += 1;
+                    pcm.extend(std::iter::repeat_n(0.0, self.last_len));
+                    self.fade = 1;
+                }
             }
         }
     }
@@ -298,6 +323,75 @@ impl XheAudio {
         self.payload.drain(..prev);
         self.synced = true;
         out
+    }
+}
+
+/// Text messages: 4 bytes at the end of the audio stream in each frame; segments start
+/// after four 0xFF bytes, each with a header, up to 16 body bytes and a CRC-16
+#[derive(Default)]
+pub struct TextDecoder {
+    buf: Vec<u8>,
+    toggle: Option<u8>,
+    segments: Vec<Option<Vec<u8>>>,
+    count: Option<usize>,
+    pub text: String,
+}
+
+impl TextDecoder {
+    pub fn push(&mut self, four: &[u8]) -> Option<String> {
+        if four.iter().all(|&b| b == 0xFF) {
+            let seg = std::mem::take(&mut self.buf);
+            return self.segment(&seg);
+        }
+        if self.buf.len() < 64 {
+            self.buf.extend_from_slice(four);
+        }
+        None
+    }
+
+    fn segment(&mut self, b: &[u8]) -> Option<String> {
+        if b.len() < 4 {
+            return None;
+        }
+        let (toggle, first, last, cmd) = (b[0] >> 7, (b[0] >> 6) & 1, (b[0] >> 5) & 1, (b[0] >> 4) & 1);
+        let len = if cmd == 1 { 0 } else { (b[0] & 15) as usize + 1 };
+        if b.len() < 2 + len + 2 {
+            return None;
+        }
+        let bits: Vec<u8> = b[..2 + len].iter().flat_map(|&x| (0..8).map(move |k| (x >> (7 - k)) & 1)).collect();
+        if crc(&bits, 16) != (b[2 + len] as u32) << 8 | b[3 + len] as u32 {
+            return None;
+        }
+        if cmd == 1 {
+            if b[0] & 15 == 1 {
+                self.text.clear(); // remove the message
+            }
+            return None;
+        }
+        if self.toggle != Some(toggle) {
+            self.toggle = Some(toggle);
+            self.segments.clear();
+            self.count = None;
+        }
+        let id = if first == 1 { 0 } else { ((b[1] >> 4) & 7) as usize };
+        if self.segments.len() <= id {
+            self.segments.resize(id + 1, None);
+        }
+        self.segments[id] = Some(b[2..2 + len].to_vec());
+        if last == 1 {
+            self.count = Some(id + 1);
+        }
+        let n = self.count?;
+        if self.segments.len() < n || self.segments[..n].iter().any(|s| s.is_none()) {
+            return None;
+        }
+        let all: Vec<u8> = self.segments[..n].iter().flat_map(|s| s.clone().unwrap()).collect();
+        let t = String::from_utf8_lossy(&all).trim().to_string();
+        if t != self.text {
+            self.text = t.clone();
+            return Some(t);
+        }
+        None
     }
 }
 
