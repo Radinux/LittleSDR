@@ -14,6 +14,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -32,9 +33,10 @@ import kotlin.math.abs
 /** Band presets: pick a band (tunes its default entry), then a sub-band or a numbered channel. */
 @Composable
 fun BandsTab(vfoFrequency: Double, onApply: (PresetEntry) -> Unit) {
-    // Band currently shown: the last one picked, or the one containing the VFO
-    val containing = BandPresets.ALL.firstOrNull { b -> b.entries.any { abs(it.frequency - vfoFrequency) < 1.0 } }
+    // Band shown: the one the VFO is in (followed as it moves), else the last one shown
+    val containing = BandPresets.at(vfoFrequency)
     var shown by rememberSaveable { mutableStateOf(containing?.name ?: "FM") }
+    LaunchedEffect(containing?.name) { containing?.let { shown = it.name } }
     val band = BandPresets.ALL.first { it.name == shown }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
