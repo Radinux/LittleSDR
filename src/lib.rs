@@ -9,6 +9,7 @@ pub mod audio_fx;
 pub mod cw;
 pub mod dab;
 pub mod dsp;
+pub mod drm;
 pub mod engine;
 pub mod ft8;
 pub mod linear;
