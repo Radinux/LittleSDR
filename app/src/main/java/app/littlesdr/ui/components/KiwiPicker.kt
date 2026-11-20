@@ -29,6 +29,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -96,6 +98,7 @@ private fun KiwiPickerDialog(
     // Receivers behind the kiwisdr.com proxy are often unreachable: hidden unless asked for
     var directOnly by rememberSaveable { mutableStateOf(true) }
     var manual by rememberSaveable { mutableStateOf("") }
+    var manualOpen by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     // Nearest first when the operator locator is known, otherwise by name
@@ -106,7 +109,7 @@ private fun KiwiPickerDialog(
             .filter { !directOnly || !it.proxied }
             .filter { q.isEmpty() || q in it.name.lowercase() || q in it.location.lowercase() || q in it.hostPort.lowercase() }
             .map { it to position?.let { p -> it.distanceKm(p.lat, p.lon) } }
-            .sortedWith(compareBy<Pair<KiwiServer, Double?>> { it.second ?: Double.MAX_VALUE }.thenBy { it.first.name.lowercase() })
+            .sortedWith(compareBy<Pair<KiwiServer, Double?>> { it.second ?: Double.MAX_VALUE }.thenBy { sortName(it.first) })
             .toList()
     }
     LaunchedEffect(query, freeOnly, directOnly) { listState.scrollToItem(0) }
@@ -124,7 +127,7 @@ private fun KiwiPickerDialog(
                     Text(
                         when {
                             loading && servers.isEmpty() -> "  ·  chargement de la liste publique…"
-                            position == null -> "  ·  ${shown.size}/${servers.size} · locator absent : tri par nom"
+                            position == null -> "  ·  ${shown.size}/${servers.size} · par nom (locator absent)"
                             else -> "  ·  ${shown.size}/${servers.size} · les plus proches d'abord"
                         },
                         style = MaterialTheme.typography.bodyMedium,
@@ -132,12 +135,16 @@ private fun KiwiPickerDialog(
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
+                    IconButton(onClick = { manualOpen = !manualOpen }) {
+                        Icon(Icons.Default.Link, "Adresse manuelle", tint = if (manualOpen) MaterialTheme.colorScheme.primary else LocalContentColor.current)
+                    }
                     if (loading) CircularProgressIndicator(Modifier.padding(12.dp).size(24.dp), strokeWidth = 2.dp)
                     else IconButton(onClick = { onLoad(true) }) { Icon(Icons.Default.Refresh, "Actualiser la liste") }
                     IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Fermer") }
                 }
 
-                // Search + filter + manual address on one line
+                // Search + filters on one line (placeholders on one line too: with a large
+                // system font they used to wrap and eat the list's height)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -145,7 +152,7 @@ private fun KiwiPickerDialog(
                 ) {
                     OutlinedTextField(
                         value = query, onValueChange = { query = it },
-                        placeholder = { Text("Nom, ville, pays…") },
+                        placeholder = { Text("Nom, ville, pays…", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         leadingIcon = { Icon(Icons.Default.Search, null) },
                         trailingIcon = if (query.isNotEmpty()) {
                             { IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "Effacer") } }
@@ -153,13 +160,21 @@ private fun KiwiPickerDialog(
                         singleLine = true,
                         shape = RoundedCornerShape(16.dp),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        modifier = Modifier.weight(1.2f),
+                        modifier = Modifier.weight(1f),
                     )
-                    FilterChip(selected = freeOnly, onClick = { freeOnly = !freeOnly }, label = { Text("Places libres") })
-                    FilterChip(selected = directOnly, onClick = { directOnly = !directOnly }, label = { Text("Accès direct") })
+                    FilterChip(selected = freeOnly, onClick = { freeOnly = !freeOnly }, label = { Text("Places libres", maxLines = 1) })
+                    FilterChip(selected = directOnly, onClick = { directOnly = !directOnly }, label = { Text("Accès direct", maxLines = 1) })
+                }
+                // Manual address: only when asked for (link button in the title)
+                if (manualOpen) Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.padding(end = 8.dp, bottom = 6.dp),
+                ) {
                     OutlinedTextField(
                         value = manual, onValueChange = { manual = it },
-                        placeholder = { Text("Adresse : hôte:8073") },
+                        placeholder = { Text("hôte:8073", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingIcon = { Icon(Icons.Default.Link, null) },
                         singleLine = true,
                         shape = RoundedCornerShape(16.dp),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
@@ -229,6 +244,9 @@ private fun KiwiRow(s: KiwiServer, km: Double?, onClick: () -> Unit) {
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 }
+
+/** Name for the alphabetical order: leading symbols and emoji ("##", "- ", "🧿") skipped */
+private fun sortName(s: KiwiServer): String = s.name.dropWhile { !it.isLetterOrDigit() }.lowercase().ifEmpty { s.hostPort }
 
 /** "host", "host:port" or "http://host:port/" -> "host:port" (KiwiSDR default port 8073). */
 private fun manualHostPort(text: String): String? {
