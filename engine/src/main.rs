@@ -193,7 +193,7 @@ fn main() {
                 std::process::exit(1);
             }
             eprintln!("[source] RTL-SDR #{i}: {}", devs.get(i as usize).cloned().unwrap_or_default());
-            Box::new(source::rtlsdr::RtlSdr { index: i })
+            Box::new(source::rtlsdr::RtlSdr { index: i, fd: None })
         }
         _ => {
             eprintln!("no source (--usb or --rtltcp)");

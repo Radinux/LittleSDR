@@ -241,3 +241,95 @@ mod cpal_sink {
         }
     }
 }
+
+/// Sound for an output driven from elsewhere (Android AAudio's callback): the engine writes,
+/// the callback reads. Same adaptive resampling as the cpal sink, so the source's clock and
+/// the sound card's never drift apart into underruns or a growing delay.
+pub struct RingSink {
+    pub shared: std::sync::Arc<RingShared>,
+    interp: crate::dsp::Interp<Frame>,
+    base_step: f64,
+    target: usize,
+}
+
+pub struct RingShared {
+    pub ring: std::sync::Mutex<std::collections::VecDeque<Frame>>,
+    pub primed: std::sync::atomic::AtomicBool,
+    pub prime: usize,
+    pub underruns: std::sync::atomic::AtomicU64,
+}
+
+impl RingSink {
+    /// `latency_ms`: buffer kept between the engine and the output
+    pub fn new(dev_rate: f64, latency_ms: f64) -> RingSink {
+        let target = (dev_rate * latency_ms / 1000.0) as usize;
+        RingSink {
+            shared: std::sync::Arc::new(RingShared {
+                ring: std::sync::Mutex::new(std::collections::VecDeque::new()),
+                primed: std::sync::atomic::AtomicBool::new(false),
+                prime: target,
+                underruns: std::sync::atomic::AtomicU64::new(0),
+            }),
+            interp: crate::dsp::Interp::new(48_000.0, dev_rate),
+            base_step: 48_000.0 / dev_rate,
+            target: target.max(256),
+        }
+    }
+}
+
+impl RingShared {
+    /// Fills `out` (interleaved, `channels` per frame); silence while (re)filling
+    pub fn read(&self, out: &mut [f32], channels: usize) {
+        use std::sync::atomic::Ordering;
+        let ch = channels.max(1);
+        let mut ring = self.ring.lock().unwrap();
+        if !self.primed.load(Ordering::Relaxed) {
+            if ring.len() < self.prime.max(out.len() / ch) {
+                out.iter_mut().for_each(|x| *x = 0.0);
+                return;
+            }
+            self.primed.store(true, Ordering::Relaxed);
+        }
+        let mut dry = false;
+        for frame in out.chunks_mut(ch) {
+            let s = ring.pop_front().unwrap_or_else(|| {
+                dry = true;
+                Frame::default()
+            });
+            for (i, x) in frame.iter_mut().enumerate() {
+                *x = match (i, ch) {
+                    (_, 1) => (s.l + s.r) * 0.5,
+                    (0, _) => s.l,
+                    (1, _) => s.r,
+                    _ => (s.l + s.r) * 0.5,
+                };
+            }
+        }
+        if dry {
+            self.underruns.fetch_add(1, Ordering::Relaxed);
+            self.primed.store(false, Ordering::Relaxed);
+        }
+    }
+
+    pub fn clear(&self) {
+        self.ring.lock().unwrap().clear();
+        self.primed.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl AudioSink for RingSink {
+    fn write(&mut self, samples: &[Frame]) {
+        let fill = self.shared.ring.lock().unwrap().len();
+        let err = (fill as f64 - self.target as f64) / self.target as f64;
+        self.interp.set_step(self.base_step * (1.0 + (err * 0.002).clamp(-0.005, 0.005)));
+        let mut out = Vec::with_capacity(samples.len() + 8);
+        self.interp.process(samples, &mut out);
+        let mut ring = self.shared.ring.lock().unwrap();
+        ring.extend(out);
+        let max = self.target * 4;
+        if ring.len() > max {
+            let n = ring.len() - max;
+            ring.drain(..n);
+        }
+    }
+}

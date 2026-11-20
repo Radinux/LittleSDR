@@ -20,6 +20,10 @@ extern "C" {
     fn rtlsdr_get_device_count() -> u32;
     fn rtlsdr_get_device_name(index: u32) -> *const c_char;
     fn rtlsdr_open(dev: *mut *mut c_void, index: u32) -> c_int;
+    /// Android build of librtlsdr (SDR++ Brown's): opens the USB file descriptor the app got
+    /// from UsbManager
+    #[cfg(target_os = "android")]
+    fn rtlsdr_open_sys_dev(dev: *mut *mut c_void, fd: c_int) -> c_int;
     fn rtlsdr_close(dev: *mut c_void) -> c_int;
     fn rtlsdr_set_center_freq(dev: *mut c_void, freq: u32) -> c_int;
     fn rtlsdr_set_sample_rate(dev: *mut c_void, rate: u32) -> c_int;
@@ -39,6 +43,8 @@ const BUF_LEN: u32 = 16 * 1024;
 
 pub struct RtlSdr {
     pub index: u32,
+    /// Android: USB device file descriptor from the app (instead of the index)
+    pub fd: Option<i32>,
 }
 
 pub fn list() -> Vec<String> {
@@ -112,7 +118,15 @@ impl Source for RtlSdr {
 
     fn run(self: Box<Self>, cfg: SourceConfig, out: SyncSender<IqBlock>, ctl: Receiver<SourceCtl>) -> Result<(), String> {
         let mut raw: *mut c_void = std::ptr::null_mut();
-        if unsafe { rtlsdr_open(&mut raw, self.index) } != 0 {
+        #[cfg(target_os = "android")]
+        let opened = match self.fd {
+            // SAFETY: plain C call; the fd stays owned by the app
+            Some(fd) => unsafe { rtlsdr_open_sys_dev(&mut raw, fd) },
+            None => unsafe { rtlsdr_open(&mut raw, self.index) },
+        };
+        #[cfg(not(target_os = "android"))]
+        let opened = unsafe { rtlsdr_open(&mut raw, self.index) };
+        if opened != 0 {
             return Err(format!("cannot open RTL-SDR #{} (busy or permission?)", self.index));
         }
         let dev = Dev(raw);
