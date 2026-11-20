@@ -19,7 +19,8 @@ path = "src/main.rs"
 default = ["rtlsdr", "audio"]
 # RTL-SDR over USB through the system librtlsdr
 rtlsdr = []
-# Sound card output (cpal: ALSA / PipeWire on Linux, AAudio on Android later)
+# Sound card output for the CLI (cpal: ALSA / PipeWire). Off on Android: cpal pulls Oboe
+# (C++), and the app has its own AAudio output (src/android/audio.rs)
 audio = ["dep:cpal"]
 
 [dependencies]

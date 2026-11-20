@@ -76,7 +76,7 @@ abstract class RustJniLibsTask : DefaultTask() {
         exec.exec {
             workingDir = engineDir.get().asFile
             environment("ANDROID_NDK_HOME", ndkDir.get())
-            commandLine(listOf(cargo, "ndk") + abis.flatMap { listOf("-t", it) } + listOf("-P", "28", "-o", out.path, "build", "--release", "--lib"))
+            commandLine(listOf(cargo, "ndk") + abis.flatMap { listOf("-t", it) } + listOf("-P", "28", "-o", out.path, "build", "--release", "--lib", "--no-default-features", "--features", "rtlsdr"))
         }
         for (abi in abis) {
             for (lib in listOf("librtlsdr.so", "libusb1.0.so")) {
