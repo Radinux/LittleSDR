@@ -3,7 +3,8 @@
 //! coding (AAC / xHE-AAC, sample rate, stereo, text).
 
 use super::cellmap::{CellMap, SDC};
-use super::fac::{bits_to_u32, crc, depuncture, interleaver, prbs, punct_ones, punct_period, soft4, TAIL};
+use super::fac::{bits_to_u32, crc};
+use super::msc::{levels_decode, Qam};
 use super::ofdm::Frame;
 use crate::dab::fec::Viterbi;
 
@@ -64,44 +65,23 @@ impl SdcDecoder {
         SdcDecoder { viterbi: Viterbi::new(), ok: 0, bad: 0 }
     }
 
-    /// The SDC of a superframe's first frame. `qam4`: SDC mode from the FAC (16-QAM not yet).
+    /// The SDC of a superframe's first frame. `qam4`: SDC mode from the FAC (else 16-QAM).
     pub fn decode(&mut self, map: &CellMap, f: &Frame, qam4: bool) -> Option<SdcInfo> {
-        if !qam4 {
-            return None;
-        }
-        let mut vals = Vec::new();
+        let mut cells = Vec::new();
         for s in 0..map.sym_per_frame {
             for c in 0..map.carriers() {
                 if map.kind[s][c] == SDC {
-                    vals.push((f.cells[s][c], f.csi[s][c]));
+                    cells.push((f.cells[s][c], f.csi[s][c]));
                 }
             }
         }
-        let n = vals.len();
-        if n < 20 {
+        if cells.len() < 20 {
             return None;
         }
-        let mean_csi = vals.iter().map(|v| v.1).sum::<f32>() / n as f32;
-        let scale = 60.0 / std::f32::consts::FRAC_1_SQRT_2 / mean_csi.max(1e-20);
-        let mut soft = Vec::with_capacity(2 * n);
-        for (v, c) in &vals {
-            soft.push(soft4(v.re, *c, scale));
-            soft.push(soft4(v.im, *c, scale));
-        }
-        let mut d = vec![0i8; 2 * n];
-        for (i, &t) in interleaver(2 * n, 21).iter().enumerate() {
-            d[t] = soft[i];
-        }
-        // Code rate 1/2 (pattern 4): M = RX * floor((2N - 12) / RY)
-        let rate = 4;
-        let (rx, ry) = (punct_period(rate), punct_ones(rate));
-        let m = rx * ((2 * n - 12) / ry);
-        let tail = (2 * n - 12) - ry * ((2 * n - 12) / ry);
-        let mother = depuncture(&d, rate, m, Some(&TAIL[tail]));
-        let mut bits = self.viterbi.decode(&mother);
-        for (b, p) in bits.iter_mut().zip(prbs(m)) {
-            *b ^= p;
-        }
+        // Code rates: 1/2 in 4-QAM, levels 1/3 + 2/3 in 16-QAM (Dream iCodRateCombSDC*)
+        let (qam, rates): (Qam, &[usize]) = if qam4 { (Qam::Q4, &[4]) } else { (Qam::Q16, &[2, 7]) };
+        let bits = levels_decode(&self.viterbi, qam, &cells, 0, rates, rates)?;
+        let m = bits.len();
         // Data field: whole bytes after the 4-bit AFS index, then the CRC
         let data_bytes = (m - 20) / 8;
         let useful = 20 + 8 * data_bytes;
