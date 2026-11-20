@@ -22,3 +22,4 @@ pub mod rtty;
 pub mod source;
 pub mod sstv;
 pub mod stereo;
+pub mod xaac;

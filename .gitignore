@@ -2,3 +2,4 @@
 *.wav
 *.f32
 /testdata
+/third_party
