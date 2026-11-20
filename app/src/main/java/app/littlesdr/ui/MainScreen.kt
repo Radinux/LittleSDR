@@ -37,6 +37,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -81,17 +83,18 @@ import app.littlesdr.ui.components.SpectrumPanel
 import app.littlesdr.ui.components.TuningJoystick
 import app.littlesdr.ui.components.AppSpace
 import app.littlesdr.ui.components.DigitalNowPlaying
-import app.littlesdr.ui.components.DigitalPanel
+import app.littlesdr.ui.components.DigitalHeader
+import app.littlesdr.ui.components.DabTuner
+import app.littlesdr.ui.components.DrmTuner
 import app.littlesdr.ui.components.LrptImagePanel
 import app.littlesdr.ui.components.LrptPanel
-import app.littlesdr.ui.components.SpaceFab
+import app.littlesdr.ui.components.SpaceSwitcher
 import app.littlesdr.ui.components.SpaceTitle
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import app.littlesdr.ui.theme.ReadoutStyle
 import kotlinx.coroutines.launch
 
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> Unit) {
     val ready by vm.ready.collectAsStateWithLifecycle()
@@ -136,9 +139,39 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val lrptImage by vm.lrptImage.collectAsStateWithLifecycle()
     val dabFound by vm.dabFound.collectAsStateWithLifecycle()
     val dabScan by vm.dabScan.collectAsStateWithLifecycle()
-    var fabOpen by remember { mutableStateOf(false) }
     // Outside the SDR space, the receiver chip opens the source settings in place
     var showSource by rememberSaveable { mutableStateOf(false) }
+    // Digital space: audio settings open from the player card
+    var audioSheet by rememberSaveable { mutableStateOf(false) }
+
+    val sourcePanel = @Composable {
+        SourcePanel(
+            sources = sources, selected = selectedSource, playing = playing, usbDevice = usb, menu = menu,
+            onSelect = { vm.selectSource(it) }, onAction = { vm.sourceAction(it) }, onWatch = vm::watchSourceMenu,
+            extra = {
+                if (selectedSource == "KiwiSDR") {
+                    KiwiServerButton(
+                        servers = kiwiServers, loading = kiwiLoading, position = vm.operatorPosition(),
+                        onLoad = { vm.loadKiwiServers(it) },
+                        onPick = { hp, name -> vm.setKiwiSite(hp, name) },
+                    )
+                }
+            },
+        )
+    }
+    val audioControls = @Composable {
+        AudioTab(
+            volume = controls.volume,
+            onVolume = vm::setVolume,
+            outputs = remember { vm.audioOutputs() },
+            device = advanced.audio.device,
+            latency = advanced.audio.latency,
+            onDevice = { vm.setOption("audio.device", it.toDouble()) },
+            onLatency = { vm.setOption("audio.latency", it.toDouble()) },
+            stereo = advanced.demod.stereo.takeIf { advanced.demod.stereoAllowed },
+            onStereo = { vm.setOption("demod.stereo", it) },
+        )
+    }
 
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -167,12 +200,24 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                     .windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets(m, m, m, m))),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Box(Modifier.weight(1f).fillMaxHeight()) {
-                Column(
-                    Modifier.fillMaxSize(),
+                val r = corners.innerRadius
+                // Head-unit player card, shared by DAB+ (whole height) and DRM (under the spectrum)
+                val player = @Composable { m: Modifier ->
+                    DigitalNowPlaying(
+                        d = digital, slide = slide, isDab = space == AppSpace.DAB, frequency = stateHolder.value.vfoFrequency,
+                        playing = playing, playEnabled = ready, volume = controls.volume,
+                        onPlay = vm::togglePlay, onVolume = vm::setVolume, onAudioSettings = { audioSheet = true },
+                        cornerRadius = r,
+                        modifier = m,
+                    )
+                }
+                if (space == AppSpace.DAB) player(Modifier.weight(1f).fillMaxHeight())
+                else Column(
+                    Modifier.weight(1f).fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    // The spectrum stays in every space, smaller outside SDR
+                    // Spectrum: big in SDR; a strip above the picture (LRPT) or the player (DRM),
+                    // where a DRM block seen in the band can be tapped to tune it
                     SpectrumPanel(
                         state = stateHolder, view = viewHolder, display = data.display, step = step,
                         onTune = vm::tune, onView = vm::setView, onResetZoom = vm::resetZoom,
@@ -180,7 +225,9 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         maskColor = MaterialTheme.colorScheme.surface,
                         rds = rds,
                         eibi = eibi,
-                        modifier = Modifier.weight(if (space == AppSpace.SDR) 1f else 0.38f).fillMaxWidth(),
+                        modifier = Modifier.weight(
+                            when (space) { AppSpace.SDR -> 1f; AppSpace.DRM -> 0.34f; else -> 0.38f },
+                        ).fillMaxWidth(),
                     )
                     when (space) {
                         AppSpace.SDR -> TuningJoystick(
@@ -191,41 +238,56 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                             onTune = vm::tune,
                             modifier = Modifier.fillMaxWidth().height(52.dp),
                         )
-                        AppSpace.DIGITAL -> DigitalNowPlaying(
-                            d = digital, slide = slide, mode = mode, frequency = stateHolder.value.vfoFrequency, playing = playing,
-                            modifier = Modifier.weight(0.62f).fillMaxWidth(),
-                        )
                         AppSpace.LRPT -> LrptImagePanel(lrptImage, lrpt, playing, Modifier.weight(0.62f).fillMaxWidth())
+                        AppSpace.DRM -> player(Modifier.weight(0.66f).fillMaxWidth())
+                        AppSpace.DAB -> Unit
                     }
                 }
-                // Tap outside closes the menu
-                if (fabOpen) {
-                    Box(Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, null) { fabOpen = false })
-                }
-                SpaceFab(
-                    space = space, open = fabOpen, onOpen = { fabOpen = it },
-                    onSpace = { showSource = false; vm.setSpace(it) },
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = if (space == AppSpace.SDR) 100.dp else 12.dp),
-                )
-                }
-                // Right "pill" cut in two: tabs in the top cap, the selected tab's controls below
+                // Right "pill" cut in three: the top bar is split (tabs or title | space
+                // switcher), the selected tab's controls below.
                 // 330 dp: just what the widest rows need, the rest goes to the waterfall
                 Column(Modifier.width(330.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    val r = corners.innerRadius
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainerLow,
-                        shape = RoundedCornerShape(topStart = r, topEnd = r, bottomStart = 6.dp, bottomEnd = 6.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        if (space == AppSpace.SDR) ControlTabBar(tab, onSelect = { tab = it }, modifier = Modifier.fillMaxWidth())
-                        else SpaceTitle(space, Modifier.fillMaxWidth())
+                    Row(Modifier.fillMaxWidth().height(64.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            shape = RoundedCornerShape(topStart = r, topEnd = 6.dp, bottomStart = 6.dp, bottomEnd = 6.dp),
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                        ) {
+                            if (space == AppSpace.SDR) ControlTabBar(tab, onSelect = { tab = it }, modifier = Modifier.fillMaxSize())
+                            else SpaceTitle(space, Modifier.fillMaxSize())
+                        }
+                        SpaceSwitcher(
+                            space = space,
+                            onSpace = { showSource = false; vm.setSpace(it) },
+                            shape = RoundedCornerShape(topStart = 6.dp, topEnd = r, bottomStart = 6.dp, bottomEnd = 6.dp),
+                            modifier = Modifier.width(72.dp).fillMaxHeight(),
+                        )
                     }
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceContainerLow,
                         shape = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp, bottomStart = r, bottomEnd = r),
                         modifier = Modifier.fillMaxWidth().weight(1f),
                     ) {
-                        Column(
+                        if (space == AppSpace.DAB || space == AppSpace.DRM) Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                            // No outer scroll here: the station list owns all the height left
+                            DigitalHeader(
+                                source = selectedSource, usb = usb != null, sourceOpen = showSource,
+                                onSource = { showSource = !showSource }, onSettings = onOpenSettings,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            if (showSource) Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) { sourcePanel() }
+                            else if (space == AppSpace.DRM) DrmTuner(
+                                frequency = stateHolder.value.vfoFrequency, d = digital, onTune = vm::tune,
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                            )
+                            else DabTuner(
+                                frequency = stateHolder.value.vfoFrequency, d = digital,
+                                found = dabFound, scan = dabScan,
+                                onTune = vm::tune, onService = vm::dabSelect, onScan = vm::scanDab,
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                            )
+                        } else Column(
                             Modifier
                                 .fillMaxSize()
                                 .verticalScroll(rememberScrollState())
@@ -245,30 +307,9 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                             )
                             Header(stateHolder, onTune = vm::tune)
                             Spacer(Modifier.height(8.dp))
-                            val sourcePanel = @Composable {
-                                SourcePanel(
-                                    sources = sources, selected = selectedSource, playing = playing, usbDevice = usb, menu = menu,
-                                    onSelect = { vm.selectSource(it) }, onAction = { vm.sourceAction(it) }, onWatch = vm::watchSourceMenu,
-                                    extra = {
-                                        if (selectedSource == "KiwiSDR") {
-                                            KiwiServerButton(
-                                                servers = kiwiServers, loading = kiwiLoading, position = vm.operatorPosition(),
-                                                onLoad = { vm.loadKiwiServers(it) },
-                                                onPick = { hp, name -> vm.setKiwiSite(hp, name) },
-                                            )
-                                        }
-                                    },
-                                )
-                            }
                             if (space != AppSpace.SDR) {
                                 when {
                                     showSource -> sourcePanel()
-                                    space == AppSpace.DIGITAL -> DigitalPanel(
-                                        mode = mode, frequency = stateHolder.value.vfoFrequency, d = digital,
-                                        found = dabFound, scan = dabScan, volume = controls.volume,
-                                        onKind = vm::setDigitalKind, onTune = vm::tune, onService = vm::dabSelect,
-                                        onScan = vm::scanDab, onVolume = vm::setVolume,
-                                    )
                                     else -> LrptPanel(
                                         frequency = stateHolder.value.vfoFrequency, l = lrpt,
                                         onTune = vm::tune, onOqpsk = vm::setLrptOqpsk, onSave = vm::saveLrpt,
@@ -292,17 +333,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                     squelchLevel = controls.squelchLevel,
                                     onSquelch = vm::setSquelch,
                                 )
-                                ControlTab.Audio -> AudioTab(
-                                    volume = controls.volume,
-                                    onVolume = vm::setVolume,
-                                    outputs = remember { vm.audioOutputs() },
-                                    device = advanced.audio.device,
-                                    latency = advanced.audio.latency,
-                                    onDevice = { vm.setOption("audio.device", it.toDouble()) },
-                                    onLatency = { vm.setOption("audio.latency", it.toDouble()) },
-                                    stereo = advanced.demod.stereo.takeIf { advanced.demod.stereoAllowed },
-                                    onStereo = { vm.setOption("demod.stereo", it) },
-                                )
+                                ControlTab.Audio -> audioControls()
                                 ControlTab.Bands -> BandsTab(stateHolder.value.vfoFrequency, vm::applyPreset)
                                 ControlTab.Morse -> MorseTab(
                                     cw = cw, mode = controls.mode,
@@ -336,6 +367,17 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                 )
                             }
                         }
+                    }
+                }
+            }
+
+            if (audioSheet) {
+                ModalBottomSheet(onDismissRequest = { audioSheet = false }) {
+                    Column(
+                        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
+                    ) {
+                        Text("Audio", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                        audioControls()
                     }
                 }
             }

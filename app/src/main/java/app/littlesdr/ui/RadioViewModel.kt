@@ -265,19 +265,13 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         spacePrefs.edit().putInt("space", target.ordinal).apply()
         val fallback = when (target) {
             AppSpace.SDR -> Mode.WFM
-            AppSpace.DIGITAL -> Mode.DAB
+            AppSpace.DAB -> Mode.DAB
+            AppSpace.DRM -> Mode.DRM
             AppSpace.LRPT -> Mode.LRPT
         }
         val saved = Mode.of(spacePrefs.getInt("mode_${target.name}", -1))
         val mode = saved?.takeIf { target.accepts(it) } ?: fallback
         switchTo(mode)
-    }
-
-    /** In the digital space: DAB+ (band III) or DRM (shortwave) */
-    fun setDigitalKind(m: Mode) {
-        if (state.value.mode == m) return
-        rememberCurrent()
-        switchTo(m)
     }
 
     private fun switchTo(mode: Mode) {
@@ -366,6 +360,17 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     // After the fields above: init blocks run in declaration order
     init {
         viewModelScope.launch { pollSpaces() }
+        // The engine restores its last mode: bring the interface to the space that owns it
+        // (e.g. DRM saved from the old shared DAB+ / DRM space)
+        viewModelScope.launch {
+            val mode = state.first { it.mode != null }.mode ?: return@launch
+            if (!_space.value.accepts(mode)) {
+                AppSpace.entries.firstOrNull { it.accepts(mode) }?.let {
+                    _space.value = it
+                    spacePrefs.edit().putInt("space", it.ordinal).apply()
+                }
+            }
+        }
     }
 
     private suspend fun pollSpaces() {
@@ -376,7 +381,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
             val sp = _space.value
             if (Engine.ready.value && state.value.playing) {
                 when (sp) {
-                    AppSpace.DIGITAL -> {
+                    AppSpace.DAB, AppSpace.DRM -> {
                         val d = Engine.digital()
                         _digital.value = d
                         if (d.slide != lastSlide) {

@@ -668,10 +668,17 @@ impl Service {
                     .filter(|s| !s.label.trim().is_empty())
                     .map(|s| json!({"sid": format!("{:04X}", s.sid), "label": s.label.trim(), "dabPlus": s.ascty == 63}))
                     .collect();
+                // Bit rate of the service being played (kbit/s, EEP sub-channels only; 0: unknown)
+                let bitrate = rx
+                    .playing()
+                    .and_then(|s| s.subch)
+                    .and_then(|c| rx.fic.ensemble.subchannels.get(&c))
+                    .and_then(|c| c.bitrate())
+                    .unwrap_or(0);
                 json!({
                     "kind": "dab", "synced": rx.ofdm.locked(), "snr": rx.ofdm.stats.snr_db,
                     "ensemble": rx.fic.ensemble.label.trim(), "services": services,
-                    "playing": rx.playing().map(|s| s.label.trim().to_string()),
+                    "playing": rx.playing().map(|s| s.label.trim().to_string()), "bitrate": bitrate,
                     "text": d.label, "slide": if d.slide.is_empty() { 0 } else { d.slide_id }, "status": rx.describe(),
                 })
             } else if let Some(rx) = e.drm() {

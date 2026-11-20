@@ -19,6 +19,8 @@ data class DigitalState(
     val ensemble: String = "",
     val services: List<DabService> = emptyList(),
     val playing: String? = null,
+    /** DAB: bit rate of the service being played, kbit/s (0: unknown) */
+    val bitrate: Int = 0,
     /** DAB programme text (DLS), or DRM text message */
     val text: String = "",
     /** Slideshow picture counter (0: none yet) */
@@ -76,6 +78,24 @@ data class DrmPreset(val name: String, val hz: Double)
 /** CNR-1 (China National Radio) broadcasts DRM most of the UTC day on these */
 val DRM_PRESETS: List<DrmPreset> = listOf(6_030, 9_655, 13_790, 15_290, 15_760, 17_700, 21_590)
     .map { DrmPreset("CNR-1", it * 1_000.0) }
+
+/** An AM broadcast band where DRM can be heard (ITU allocations, kHz edges) */
+data class HfBand(val name: String, val lo: Double, val hi: Double) {
+    operator fun contains(hz: Double) = hz in lo..hi
+    val centre: Double get() = Math.round((lo + hi) / 2 / 5_000) * 5_000.0
+}
+
+/** Long and medium wave, then the shortwave broadcast bands, low to high */
+val DRM_BANDS: List<HfBand> = listOf(
+    "GO" to (148.5 to 283.5), "PO" to (526.5 to 1_606.5),
+    "120 m" to (2_300.0 to 2_495.0), "90 m" to (3_200.0 to 3_400.0), "75 m" to (3_900.0 to 4_000.0),
+    "60 m" to (4_750.0 to 5_060.0), "49 m" to (5_900.0 to 6_200.0), "41 m" to (7_200.0 to 7_450.0),
+    "31 m" to (9_400.0 to 9_900.0), "25 m" to (11_600.0 to 12_100.0), "22 m" to (13_570.0 to 13_870.0),
+    "19 m" to (15_100.0 to 15_800.0), "16 m" to (17_480.0 to 17_900.0), "15 m" to (18_900.0 to 19_020.0),
+    "13 m" to (21_450.0 to 21_850.0), "11 m" to (25_670.0 to 26_100.0),
+).map { (n, r) -> HfBand(n, r.first * 1_000.0, r.second * 1_000.0) }
+
+fun hfBandAt(hz: Double): HfBand? = DRM_BANDS.firstOrNull { hz in it }
 
 /** A Meteor-M LRPT downlink */
 data class LrptSatellite(val name: String, val hz: Double)
