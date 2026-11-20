@@ -54,6 +54,15 @@ object NativeBridge {
     @JvmStatic external fun ctyLatLon(calls: Array<String>): DoubleArray
     @JvmStatic external fun rdsJson(): String
 
+    // digital radio (DAB+ / DRM) and Meteor LRPT
+    @JvmStatic external fun digitalJson(): String
+    @JvmStatic external fun dabSelect(what: String)
+    @JvmStatic external fun dabSlide(): ByteArray
+    @JvmStatic external fun lrptJson(): String
+    @JvmStatic external fun lrptSet(key: String, value: Double)
+    @JvmStatic external fun lrptImage(): IntArray
+    @JvmStatic external fun lrptSave(): String
+
     // display (Vulkan renderer)
     @JvmStatic external fun setView(viewBandwidth: Double, viewOffset: Double)
     @JvmStatic external fun setDisplay(

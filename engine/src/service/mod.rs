@@ -36,8 +36,19 @@ pub fn mode_of(i: i32) -> Mode {
     }
 }
 
+/// What the digital receivers hand out once (programme text, slideshow, DRM text), kept
+/// for the UI until the station changes
+#[derive(Default)]
+struct Digital {
+    label: String,
+    slide: Vec<u8>,
+    slide_id: u64,
+    drm_text: String,
+}
+
 /// Shared with the DSP thread
 struct Shared {
+    digital: Mutex<Digital>,
     engine: Mutex<Engine>,
     hist: Mutex<FftHistory>,
     display: Mutex<Display>,
@@ -138,6 +149,7 @@ impl Service {
             engine.control(&EngineCtl::Volume(volume));
             let sq = cfg.get("squelch").and_then(Value::as_array).map(|a| (a[0].as_bool().unwrap_or(false), a[1].as_f64().unwrap_or(-60.0) as f32)).unwrap_or((false, -60.0));
             let shared = Arc::new(Shared {
+                digital: Mutex::new(Digital::default()),
                 engine: Mutex::new(engine),
                 hist: Mutex::new(FftHistory::new(fsz)),
                 display: Mutex::new(Display {
@@ -334,6 +346,21 @@ impl Service {
                     let (lo, hi, off) = {
                         let mut e = sh.engine.lock().unwrap();
                         e.process(block, &mut out);
+                        let (label, slide, _) = e.take_dab_news();
+                        let text = e.take_drm_text();
+                        if label.is_some() || slide.is_some() || text.is_some() {
+                            let mut d = sh.digital.lock().unwrap();
+                            if let Some(l) = label {
+                                d.label = l.trim().to_string();
+                            }
+                            if let Some(s) = slide {
+                                d.slide = s.data;
+                                d.slide_id += 1;
+                            }
+                            if let Some(t) = text {
+                                d.drm_text = t.trim().to_string();
+                            }
+                        }
                         let (lo, hi) = e.channel();
                         (lo, hi, e.frequency() - center)
                     };
@@ -382,6 +409,9 @@ impl Service {
             if let Some(r) = &i.running {
                 let _ = r.src.ctl.send(SourceCtl::Center(i.center as u64));
             }
+        }
+        if (freq - i.freq).abs() > 1.0 {
+            self.clear_digital();
         }
         i.freq = freq;
         let mut e = self.shared.engine.lock().unwrap();
@@ -438,6 +468,7 @@ impl Service {
         let was_dab = mode_of(i.mode_idx) == Mode::Dab;
         i.mode_idx = m;
         let mode = mode_of(m);
+        self.clear_digital();
         let bw = i.bandwidth[(m as usize).min(10)];
         {
             let mut e = self.shared.engine.lock().unwrap();
@@ -514,6 +545,7 @@ impl Service {
         let path = o["recorder"]["path"].as_str().unwrap_or("");
         if !path.is_empty() {
             e.rec.set_path(path);
+            e.out_dir = path.into(); // LRPT pictures go with the recordings
         }
         drop(e);
         self.shared.hist.lock().unwrap().peak_hold = o["fft"]["peakHold"].as_bool().unwrap_or(false);
@@ -615,6 +647,104 @@ impl Service {
     /// One numeric option ("audio", "device")
     pub fn option(&self, group: &str, name: &str) -> f64 {
         self.inner.lock().unwrap().options[group][name].as_f64().unwrap_or(0.0)
+    }
+
+    // ------------------------------------------------------------------ digital radio, satellites
+
+    fn clear_digital(&self) {
+        let mut d = self.shared.digital.lock().unwrap();
+        let id = d.slide_id;
+        *d = Digital { slide_id: id, ..Default::default() };
+    }
+
+    /// DAB+ or DRM reception: ensemble and services, station, texts, quality
+    pub fn digital_json(&self) -> String {
+        self.with_engine(|e| {
+            let d = self.shared.digital.lock().unwrap();
+            if let Some(rx) = e.dab() {
+                let services: Vec<Value> = rx
+                    .services()
+                    .iter()
+                    .filter(|s| !s.label.trim().is_empty())
+                    .map(|s| json!({"sid": format!("{:04X}", s.sid), "label": s.label.trim(), "dabPlus": s.ascty == 63}))
+                    .collect();
+                json!({
+                    "kind": "dab", "synced": rx.ofdm.locked(), "snr": rx.ofdm.stats.snr_db,
+                    "ensemble": rx.fic.ensemble.label.trim(), "services": services,
+                    "playing": rx.playing().map(|s| s.label.trim().to_string()),
+                    "text": d.label, "slide": if d.slide.is_empty() { 0 } else { d.slide_id }, "status": rx.describe(),
+                })
+            } else if let Some(rx) = e.drm() {
+                json!({"kind": "drm", "synced": rx.synced(), "station": rx.label(), "info": rx.station(), "text": d.drm_text, "status": rx.status()})
+            } else {
+                json!({"kind": "none"})
+            }
+        })
+        .to_string()
+    }
+
+    /// DAB: plays a service of the ensemble (SId in hex, or its name)
+    pub fn dab_select(&self, what: &str) {
+        self.clear_digital();
+        self.with_engine(|e| e.control(&EngineCtl::DabSelect(what.to_string())));
+    }
+
+    /// DAB slideshow picture (JPEG or PNG bytes), empty if none
+    pub fn dab_slide(&self) -> Vec<u8> {
+        self.shared.digital.lock().unwrap().slide.clone()
+    }
+
+    /// Meteor LRPT: lock, frames, picture progress
+    pub fn lrpt_json(&self) -> String {
+        self.with_engine(|e| match e.lrpt() {
+            Some(dec) => {
+                let f = &dec.framer.stats;
+                let ch = dec.imager.channels();
+                let lines = ch.first().and_then(|&c| dec.imager.channel(c)).map_or(0, |c| c.1);
+                json!({
+                    "active": true, "locked": dec.framer.locked(), "carrier": dec.demod.freq_hz(), "eye": dec.demod.eye(),
+                    "oqpsk": dec.demod.oqpsk, "framesOk": f.rs_ok, "framesBad": f.rs_fail, "packets": dec.imager.decoded,
+                    "channels": ch, "lines": lines,
+                })
+            }
+            None => json!({"active": false}),
+        })
+        .to_string()
+    }
+
+    /// The LRPT picture so far: [width, height, ARGB...]; colour (channels 64 + 65) when there
+    pub fn lrpt_image(&self) -> Vec<i32> {
+        self.with_engine(|e| {
+            let Some(dec) = e.lrpt() else { return vec![0, 0] };
+            let im = &dec.imager;
+            let argb = |r: u8, g: u8, b: u8| (0xFF00_0000u32 | (r as u32) << 16 | (g as u32) << 8 | b as u32) as i32;
+            let (w, h, px): (usize, usize, Vec<i32>) = match (im.channel(64), im.channel(65)) {
+                (Some((w, h, b)), Some((_, h2, g))) => {
+                    let h = h.min(h2);
+                    (w, h, (0..w * h).map(|k| argb(g[k], g[k], b[k])).collect())
+                }
+                _ => match im.channels().first().and_then(|&c| im.channel(c)) {
+                    Some((w, h, p)) => (w, h, p.iter().map(|&v| argb(v, v, v)).collect()),
+                    None => return vec![0, 0],
+                },
+            };
+            let mut v = Vec::with_capacity(px.len() + 2);
+            v.push(w as i32);
+            v.push(h as i32);
+            v.extend(px);
+            v
+        })
+    }
+
+    /// Writes the LRPT pictures (PNG, with the recordings); the files, one per line
+    pub fn lrpt_save(&self) -> String {
+        self.with_engine(|e| e.save_lrpt(None)).join("\n")
+    }
+
+    pub fn lrpt_set(&self, key: &str, v: f64) {
+        if key == "oqpsk" {
+            self.with_engine(|e| e.control(&EngineCtl::LrptOqpsk(v != 0.0)));
+        }
     }
 
     /// The display data for the renderer

@@ -40,7 +40,8 @@ extern "C" {
     fn NeAACDecClose(h: *mut c_void);
     fn NeAACDecGetCurrentConfiguration(h: *mut c_void) -> *mut Config;
     fn NeAACDecSetConfiguration(h: *mut c_void, c: *mut Config) -> c_uchar;
-    fn NeAACDecInit2(h: *mut c_void, asc: *mut c_uchar, len: c_ulong, rate: *mut c_ulong, channels: *mut c_uchar) -> c_char;
+    // "char" in C: unsigned on ARM, so read as i8 to see the -1 of a failure everywhere
+    fn NeAACDecInit2(h: *mut c_void, asc: *mut c_uchar, len: c_ulong, rate: *mut c_ulong, channels: *mut c_uchar) -> i8;
     fn NeAACDecDecode(h: *mut c_void, info: *mut FrameInfo, buf: *mut c_uchar, len: c_ulong) -> *mut c_void;
     fn NeAACDecGetErrorMessage(e: c_uchar) -> *const c_char;
 }

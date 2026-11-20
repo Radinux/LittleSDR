@@ -1,5 +1,14 @@
 package app.littlesdr.ui
 
+import androidx.compose.ui.graphics.asImageBitmap
+import app.littlesdr.engine.DAB_CHANNELS
+import app.littlesdr.engine.DabService
+import app.littlesdr.engine.DigitalState
+import app.littlesdr.engine.LRPT_SATELLITES
+import app.littlesdr.engine.LrptState
+import app.littlesdr.ui.components.AppSpace
+import kotlinx.coroutines.currentCoroutineContext
+
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -224,6 +233,181 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         // Push display preferences to the renderer
         viewModelScope.launch {
             data.map { it.display }.distinctUntilChanged().collect { applyDisplay(it) }
+        }
+    }
+
+    // ------------------------------------------------------------------ spaces (SDR / DAB+ DRM / LRPT)
+    private val spacePrefs = app.getSharedPreferences("spaces", android.content.Context.MODE_PRIVATE)
+    private val _space = MutableStateFlow(AppSpace.entries.getOrNull(spacePrefs.getInt("space", 0)) ?: AppSpace.SDR)
+    val space: StateFlow<AppSpace> = _space.asStateFlow()
+
+    private fun lastFreq(m: Mode, default: Double): Double =
+        Double.fromBits(spacePrefs.getLong("freq_${m.name}", default.toRawBits()))
+
+    private fun rememberCurrent() {
+        val s = state.value
+        val m = s.mode ?: return
+        spacePrefs.edit().putLong("freq_${m.name}", s.vfoFrequency.toRawBits()).putInt("mode_${_space.value.name}", m.ordinal).apply()
+    }
+
+    private fun defaultFreq(m: Mode) = when (m) {
+        Mode.DAB -> DAB_CHANNELS.first { it.name == "11D" }.hz
+        Mode.DRM -> 13_790_000.0
+        Mode.LRPT -> LRPT_SATELLITES.first().hz
+        else -> 100_000_000.0
+    }
+
+    /** Switches the interface; each space comes back to its own mode and frequency */
+    fun setSpace(target: AppSpace) {
+        if (target == _space.value) return
+        rememberCurrent()
+        _space.value = target
+        spacePrefs.edit().putInt("space", target.ordinal).apply()
+        val fallback = when (target) {
+            AppSpace.SDR -> Mode.WFM
+            AppSpace.DIGITAL -> Mode.DAB
+            AppSpace.LRPT -> Mode.LRPT
+        }
+        val saved = Mode.of(spacePrefs.getInt("mode_${target.name}", -1))
+        val mode = saved?.takeIf { target.accepts(it) } ?: fallback
+        switchTo(mode)
+    }
+
+    /** In the digital space: DAB+ (band III) or DRM (shortwave) */
+    fun setDigitalKind(m: Mode) {
+        if (state.value.mode == m) return
+        rememberCurrent()
+        switchTo(m)
+    }
+
+    private fun switchTo(mode: Mode) {
+        _digital.value = DigitalState()
+        _slide.value = null
+        Engine.setMode(mode)
+        tune(lastFreq(mode, defaultFreq(mode)))
+    }
+
+    private val _digital = MutableStateFlow(DigitalState())
+    val digital: StateFlow<DigitalState> = _digital.asStateFlow()
+    private val _slide = MutableStateFlow<androidx.compose.ui.graphics.ImageBitmap?>(null)
+    val slide: StateFlow<androidx.compose.ui.graphics.ImageBitmap?> = _slide.asStateFlow()
+    private val _lrpt = MutableStateFlow(LrptState())
+    val lrpt: StateFlow<LrptState> = _lrpt.asStateFlow()
+    private val _lrptImage = MutableStateFlow<androidx.compose.ui.graphics.ImageBitmap?>(null)
+    val lrptImage: StateFlow<androidx.compose.ui.graphics.ImageBitmap?> = _lrptImage.asStateFlow()
+
+    fun dabSelect(s: DabService) {
+        _slide.value = null
+        Engine.dabSelect(s.sid)
+    }
+
+    fun setLrptOqpsk(on: Boolean) = Engine.lrptSet("oqpsk", if (on) 1.0 else 0.0)
+
+    fun saveLrpt() {
+        viewModelScope.launch {
+            val files = Engine.lrptSave()
+            _error.value = if (files.isEmpty()) "Pas encore d'image à enregistrer" else "${files.size} image(s) enregistrée(s)"
+        }
+    }
+
+    /** DAB channels where an ensemble was found by the last scan: channel -> ensemble name */
+    private val _dabFound = MutableStateFlow(
+        spacePrefs.getString("dab_found", "")!!.split(';').mapNotNull { e ->
+            e.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] }
+        }.toMap()
+    )
+    val dabFound: StateFlow<Map<String, String>> = _dabFound.asStateFlow()
+
+    /** Scan progress (channel index, total), null when idle */
+    private val _dabScan = MutableStateFlow<Pair<Int, Int>?>(null)
+    val dabScan: StateFlow<Pair<Int, Int>?> = _dabScan.asStateFlow()
+    private var scanJob: Job? = null
+
+    /** Visits every band III channel and keeps those carrying an ensemble */
+    fun scanDab() {
+        if (scanJob?.isActive == true) {
+            scanJob?.cancel()
+            return
+        }
+        scanJob = viewModelScope.launch {
+            if (!state.value.playing && !Engine.start()) {
+                _error.value = "Impossible de démarrer la source pour la recherche"
+                return@launch
+            }
+            val found = linkedMapOf<String, String>()
+            try {
+                for ((i, ch) in DAB_CHANNELS.withIndex()) {
+                    _dabScan.value = i to DAB_CHANNELS.size
+                    tune(ch.hz)
+                    delay(1300)
+                    var d = Engine.digital()
+                    if (d.synced) {
+                        // Synced: the ensemble name follows within a few seconds
+                        repeat(10) {
+                            if (d.ensemble.isNotBlank()) return@repeat
+                            delay(400)
+                            d = Engine.digital()
+                        }
+                        if (d.ensemble.isNotBlank()) found[ch.name] = d.ensemble
+                    }
+                }
+            } finally {
+                _dabScan.value = null
+                if (found.isNotEmpty()) {
+                    _dabFound.value = found
+                    spacePrefs.edit().putString("dab_found", found.entries.joinToString(";") { "${it.key}=${it.value}" }).apply()
+                    DAB_CHANNELS.firstOrNull { it.name == found.keys.first() }?.let { tune(it.hz) }
+                }
+            }
+            if (found.isEmpty()) _error.value = "Aucun multiplex DAB trouvé"
+        }
+    }
+
+    // After the fields above: init blocks run in declaration order
+    init {
+        viewModelScope.launch { pollSpaces() }
+    }
+
+    private suspend fun pollSpaces() {
+        var lastSlide = 0L
+        var lastPackets = -1L
+        var lastImage = 0L
+        while (currentCoroutineContext().isActive) {
+            val sp = _space.value
+            if (Engine.ready.value && state.value.playing) {
+                when (sp) {
+                    AppSpace.DIGITAL -> {
+                        val d = Engine.digital()
+                        _digital.value = d
+                        if (d.slide != lastSlide) {
+                            lastSlide = d.slide
+                            _slide.value = if (d.slide == 0L) null else Engine.dabSlide().let { b ->
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                                    android.graphics.BitmapFactory.decodeByteArray(b, 0, b.size)?.asImageBitmap()
+                                }
+                            }
+                        }
+                    }
+                    AppSpace.LRPT -> {
+                        val l = Engine.lrpt()
+                        _lrpt.value = l
+                        val now = System.currentTimeMillis()
+                        if (l.packets != lastPackets && now - lastImage > 3_000) {
+                            lastPackets = l.packets
+                            lastImage = now
+                            val px = Engine.lrptImage()
+                            _lrptImage.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                                val w = px.getOrElse(0) { 0 }
+                                val h = px.getOrElse(1) { 0 }
+                                if (w <= 0 || h <= 0) null
+                                else android.graphics.Bitmap.createBitmap(px, 2, w, w, h, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
+                            }
+                        }
+                    }
+                    AppSpace.SDR -> {}
+                }
+            }
+            delay(if (sp == AppSpace.SDR) 1000 else 700)
         }
     }
 

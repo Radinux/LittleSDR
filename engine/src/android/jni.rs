@@ -4,7 +4,7 @@
 use super::{audio, render};
 use crate::service::{service, Service};
 use jni::objects::{JClass, JObject, JObjectArray, JString};
-use jni::sys::{jboolean, jdouble, jdoubleArray, jfloat, jint, jintArray, jobjectArray, jstring, JNI_FALSE, JNI_TRUE};
+use jni::sys::{jboolean, jbyteArray, jdouble, jdoubleArray, jfloat, jint, jintArray, jobjectArray, jstring, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
 fn s(env: &mut JNIEnv, j: &JString) -> String {
@@ -220,6 +220,33 @@ json_set!(Java_app_littlesdr_engine_NativeBridge_recSet, rec_set);
 json_get!(Java_app_littlesdr_engine_NativeBridge_sstvJson, sstv_json);
 json_set!(Java_app_littlesdr_engine_NativeBridge_sstvSet, sstv_set);
 json_get!(Java_app_littlesdr_engine_NativeBridge_rdsJson, rds_json);
+
+json_get!(Java_app_littlesdr_engine_NativeBridge_digitalJson, digital_json);
+json_get!(Java_app_littlesdr_engine_NativeBridge_lrptJson, lrpt_json);
+json_get!(Java_app_littlesdr_engine_NativeBridge_lrptSave, lrpt_save);
+json_set!(Java_app_littlesdr_engine_NativeBridge_lrptSet, lrpt_set);
+
+#[no_mangle]
+pub extern "system" fn Java_app_littlesdr_engine_NativeBridge_dabSelect(mut env: JNIEnv, _: JClass, what: JString) {
+    let w = s(&mut env, &what);
+    if let Some(v) = svc() {
+        v.dab_select(&w);
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_app_littlesdr_engine_NativeBridge_dabSlide(env: JNIEnv, _: JClass) -> jbyteArray {
+    let b = svc().map(|v| v.dab_slide()).unwrap_or_default();
+    env.byte_array_from_slice(&b).map(|a| a.into_raw()).unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_app_littlesdr_engine_NativeBridge_lrptImage(env: JNIEnv, _: JClass) -> jintArray {
+    let px = svc().map(|v| v.lrpt_image()).unwrap_or_else(|| vec![0, 0]);
+    let Ok(arr) = env.new_int_array(px.len() as i32) else { return std::ptr::null_mut() };
+    let _ = env.set_int_array_region(&arr, 0, &px);
+    arr.into_raw()
+}
 
 #[no_mangle]
 pub extern "system" fn Java_app_littlesdr_engine_NativeBridge_kiwiSetSite(mut env: JNIEnv, _: JClass, host: JString, _loc: JString) {

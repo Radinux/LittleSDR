@@ -79,6 +79,15 @@ import app.littlesdr.ui.components.KiwiServerButton
 import app.littlesdr.ui.components.SourcePanel
 import app.littlesdr.ui.components.SpectrumPanel
 import app.littlesdr.ui.components.TuningJoystick
+import app.littlesdr.ui.components.AppSpace
+import app.littlesdr.ui.components.DigitalNowPlaying
+import app.littlesdr.ui.components.DigitalPanel
+import app.littlesdr.ui.components.LrptImagePanel
+import app.littlesdr.ui.components.LrptPanel
+import app.littlesdr.ui.components.SpaceFab
+import app.littlesdr.ui.components.SpaceTitle
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import app.littlesdr.ui.theme.ReadoutStyle
 import kotlinx.coroutines.launch
 
@@ -120,6 +129,16 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val step = vm.stepFor(mode)
 
     var tab by rememberSaveable { mutableStateOf(ControlTab.Radio) }
+    val space by vm.space.collectAsStateWithLifecycle()
+    val digital by vm.digital.collectAsStateWithLifecycle()
+    val slide by vm.slide.collectAsStateWithLifecycle()
+    val lrpt by vm.lrpt.collectAsStateWithLifecycle()
+    val lrptImage by vm.lrptImage.collectAsStateWithLifecycle()
+    val dabFound by vm.dabFound.collectAsStateWithLifecycle()
+    val dabScan by vm.dabScan.collectAsStateWithLifecycle()
+    var fabOpen by remember { mutableStateOf(false) }
+    // Outside the SDR space, the receiver chip opens the source settings in place
+    var showSource by rememberSaveable { mutableStateOf(false) }
 
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -148,10 +167,12 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                     .windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets(m, m, m, m))),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                Box(Modifier.weight(1f).fillMaxHeight()) {
                 Column(
-                    Modifier.weight(1f).fillMaxHeight(),
+                    Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
+                    // The spectrum stays in every space, smaller outside SDR
                     SpectrumPanel(
                         state = stateHolder, view = viewHolder, display = data.display, step = step,
                         onTune = vm::tune, onView = vm::setView, onResetZoom = vm::resetZoom,
@@ -159,16 +180,33 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         maskColor = MaterialTheme.colorScheme.surface,
                         rds = rds,
                         eibi = eibi,
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        modifier = Modifier.weight(if (space == AppSpace.SDR) 1f else 0.38f).fillMaxWidth(),
                     )
-                    // Rate joystick: deflection = tuning speed, springs back to stop
-                    TuningJoystick(
-                        frequency = { stateHolder.value.vfoFrequency },
-                        span = { viewHolder.value.bandwidth.takeIf { it > 0 } ?: stateHolder.value.sampleRate },
-                        step = { vm.stepFor(stateHolder.value.mode) },
-                        onTune = vm::tune,
-                        modifier = Modifier.fillMaxWidth().height(52.dp),
-                    )
+                    when (space) {
+                        AppSpace.SDR -> TuningJoystick(
+                            // Rate joystick: deflection = tuning speed, springs back to stop
+                            frequency = { stateHolder.value.vfoFrequency },
+                            span = { viewHolder.value.bandwidth.takeIf { it > 0 } ?: stateHolder.value.sampleRate },
+                            step = { vm.stepFor(stateHolder.value.mode) },
+                            onTune = vm::tune,
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                        )
+                        AppSpace.DIGITAL -> DigitalNowPlaying(
+                            d = digital, slide = slide, mode = mode, frequency = stateHolder.value.vfoFrequency, playing = playing,
+                            modifier = Modifier.weight(0.62f).fillMaxWidth(),
+                        )
+                        AppSpace.LRPT -> LrptImagePanel(lrptImage, lrpt, playing, Modifier.weight(0.62f).fillMaxWidth())
+                    }
+                }
+                // Tap outside closes the menu
+                if (fabOpen) {
+                    Box(Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, null) { fabOpen = false })
+                }
+                SpaceFab(
+                    space = space, open = fabOpen, onOpen = { fabOpen = it },
+                    onSpace = { showSource = false; vm.setSpace(it) },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = if (space == AppSpace.SDR) 100.dp else 12.dp),
+                )
                 }
                 // Right "pill" cut in two: tabs in the top cap, the selected tab's controls below
                 // 330 dp: just what the widest rows need, the rest goes to the waterfall
@@ -179,7 +217,8 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         shape = RoundedCornerShape(topStart = r, topEnd = r, bottomStart = 6.dp, bottomEnd = 6.dp),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        ControlTabBar(tab, onSelect = { tab = it }, modifier = Modifier.fillMaxWidth())
+                        if (space == AppSpace.SDR) ControlTabBar(tab, onSelect = { tab = it }, modifier = Modifier.fillMaxWidth())
+                        else SpaceTitle(space, Modifier.fillMaxWidth())
                     }
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -198,15 +237,16 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                 playing = playing,
                                 playEnabled = ready,
                                 onPlay = vm::togglePlay,
-                                onSource = { tab = ControlTab.Source },
+                                onSource = { if (space == AppSpace.SDR) tab = ControlTab.Source else showSource = !showSource },
                                 onSettings = onOpenSettings,
                                 onFt8 = onOpenFt8,
                                 ft8Active = ft8Active,
+                                showFt8 = space == AppSpace.SDR,
                             )
                             Header(stateHolder, onTune = vm::tune)
                             Spacer(Modifier.height(8.dp))
-                            when (tab) {
-                                ControlTab.Source -> SourcePanel(
+                            val sourcePanel = @Composable {
+                                SourcePanel(
                                     sources = sources, selected = selectedSource, playing = playing, usbDevice = usb, menu = menu,
                                     onSelect = { vm.selectSource(it) }, onAction = { vm.sourceAction(it) }, onWatch = vm::watchSourceMenu,
                                     extra = {
@@ -219,6 +259,23 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                         }
                                     },
                                 )
+                            }
+                            if (space != AppSpace.SDR) {
+                                when {
+                                    showSource -> sourcePanel()
+                                    space == AppSpace.DIGITAL -> DigitalPanel(
+                                        mode = mode, frequency = stateHolder.value.vfoFrequency, d = digital,
+                                        found = dabFound, scan = dabScan, volume = controls.volume,
+                                        onKind = vm::setDigitalKind, onTune = vm::tune, onService = vm::dabSelect,
+                                        onScan = vm::scanDab, onVolume = vm::setVolume,
+                                    )
+                                    else -> LrptPanel(
+                                        frequency = stateHolder.value.vfoFrequency, l = lrpt,
+                                        onTune = vm::tune, onOqpsk = vm::setLrptOqpsk, onSave = vm::saveLrpt,
+                                    )
+                                }
+                            } else when (tab) {
+                                ControlTab.Source -> sourcePanel()
                                 ControlTab.Radio -> RadioTab(
                                     mode = controls.mode,
                                     bandwidth = controls.bandwidth,
@@ -311,6 +368,7 @@ private fun TopRow(
     onSettings: () -> Unit,
     onFt8: () -> Unit,
     ft8Active: Boolean,
+    showFt8: Boolean,
 ) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.weight(1f)) {
@@ -322,7 +380,7 @@ private fun TopRow(
         }
         // Plain "FT8" label (an icon wasn't obvious); highlighted while the decoder runs so it
         // isn't forgotten, as it costs CPU during reception
-        FilterChip(
+        if (showFt8) FilterChip(
             selected = ft8Active,
             onClick = onFt8,
             label = { Text("FT8") },

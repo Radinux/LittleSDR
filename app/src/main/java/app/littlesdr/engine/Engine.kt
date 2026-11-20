@@ -16,9 +16,13 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.Executors
 
-/** Demodulator modes, same order as SDR++ RADIO_IFACE_MODE_*. */
+/** Demodulator modes; the ordinal is the engine's mode id (0-7 as SDR++, then ours). */
 enum class Mode(val label: String) {
-    NFM("NFM"), WFM("WFM"), AM("AM"), DSB("DSB"), USB("USB"), CW("CW"), LSB("LSB"), RAW("RAW");
+    NFM("NFM"), WFM("WFM"), AM("AM"), DSB("DSB"), USB("USB"), CW("CW"), LSB("LSB"), RAW("RAW"),
+    DAB("DAB+"), DRM("DRM"), LRPT("LRPT");
+
+    /** Digital receivers: fixed channel, no bandwidth or squelch to set */
+    val isDigital: Boolean get() = this == DAB || this == DRM || this == LRPT
 
     /** Sensible bandwidth slider range (Hz) per mode. */
     val bandwidthRange: ClosedFloatingPointRange<Float>
@@ -30,6 +34,9 @@ enum class Mode(val label: String) {
             USB, LSB -> 500f..6_000f
             CW -> 50f..1_000f
             RAW -> 1_000f..250_000f
+            DAB -> 1_536_000f..1_536_000f
+            DRM -> 10_000f..10_000f
+            LRPT -> 120_000f..120_000f
         }
 
     val isFm: Boolean get() = this == NFM || this == WFM
@@ -51,6 +58,9 @@ enum class Mode(val label: String) {
             DSB, USB, LSB -> 100.0
             CW -> 10.0
             RAW -> 1_000.0
+            DAB -> 1_712_000.0
+            DRM -> 5_000.0
+            LRPT -> 100_000.0
         }
 
     companion object {
@@ -257,6 +267,14 @@ object Engine {
     }
 
     suspend fun rds(): RdsInfo = call { RdsInfo.parse(NativeBridge.rdsJson()) }
+
+    suspend fun digital(): DigitalState = call { DigitalState.parse(NativeBridge.digitalJson()) }
+    fun dabSelect(what: String) = post { NativeBridge.dabSelect(what) }
+    suspend fun dabSlide(): ByteArray = call { NativeBridge.dabSlide() }
+    suspend fun lrpt(): LrptState = call { LrptState.parse(NativeBridge.lrptJson()) }
+    fun lrptSet(key: String, value: Double) = post { NativeBridge.lrptSet(key, value) }
+    suspend fun lrptImage(): IntArray = call { NativeBridge.lrptImage() }
+    suspend fun lrptSave(): List<String> = call { NativeBridge.lrptSave().lines().filter { it.isNotBlank() } }
 
     suspend fun kiwiSetSite(hostPort: String, location: String) = call { NativeBridge.kiwiSetSite(hostPort, location) }
 

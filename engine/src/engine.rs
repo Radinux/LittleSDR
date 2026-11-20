@@ -814,6 +814,27 @@ impl Engine {
         }
     }
 
+    pub fn dab(&self) -> Option<&DabReceiver> {
+        match &self.back {
+            Back::Dab(rx) => Some(rx),
+            _ => None,
+        }
+    }
+
+    pub fn drm(&self) -> Option<&crate::drm::DrmReceiver> {
+        match &self.back {
+            Back::Drm(rx) => Some(rx),
+            _ => None,
+        }
+    }
+
+    pub fn lrpt(&self) -> Option<&LrptDecoder> {
+        match &self.back {
+            Back::Lrpt { dec, .. } => Some(dec),
+            _ => None,
+        }
+    }
+
     /// DRM: new text message since the last call
     pub fn take_drm_text(&mut self) -> Option<String> {
         match &mut self.back {

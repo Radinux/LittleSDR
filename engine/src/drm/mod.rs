@@ -134,6 +134,16 @@ impl DrmReceiver {
         self.text_news.take()
     }
 
+    /// Frames found and the FAC read: the signal is being received
+    pub fn synced(&self) -> bool {
+        self.ofdm.info.frame_found && self.last_fac.is_some()
+    }
+
+    /// Station label alone (SDC), once known
+    pub fn label(&self) -> String {
+        self.sdc_info.as_ref().and_then(|s| s.labels.first()).map(|l| l.1.trim().to_string()).unwrap_or_default()
+    }
+
     /// Station name and audio, once known
     pub fn station(&self) -> String {
         match &self.sdc_info {
