@@ -1,3 +1,4 @@
+#![cfg_attr(not(faad), allow(dead_code, unused_imports))]
 //! AAC / HE-AAC v1 / v2 decoding through FAAD2 (GPL-2.0-or-later, the system libfaad).
 //! Used by DAB+ (and DRM later): raw access units with an AudioSpecificConfig.
 
@@ -31,6 +32,7 @@ struct FrameInfo {
     ps: c_uchar,
 }
 
+#[cfg(faad)]
 #[link(name = "faad")]
 extern "C" {
     fn NeAACDecOpen() -> *mut c_void;
@@ -56,6 +58,12 @@ unsafe impl Send for AacDecoder {}
 impl AacDecoder {
     /// `asc`: MPEG-4 AudioSpecificConfig
     pub fn new(asc: &[u8]) -> Option<AacDecoder> {
+        #[cfg(not(faad))]
+        {
+            let _ = asc;
+            None // built without FAAD2 (Android until it is cross-compiled)
+        }
+        #[cfg(faad)]
         unsafe {
             let h = NeAACDecOpen();
             if h.is_null() {
@@ -77,6 +85,12 @@ impl AacDecoder {
 
     /// Decodes one access unit; appends interleaved float samples, returns (rate, channels)
     pub fn decode(&mut self, au: &[u8], out: &mut Vec<f32>) -> Option<(u32, u8)> {
+        #[cfg(not(faad))]
+        {
+            let _ = (au, out);
+            None
+        }
+        #[cfg(faad)]
         unsafe {
             let mut info: FrameInfo = std::mem::zeroed();
             let mut buf = au.to_vec();
@@ -96,6 +110,9 @@ impl AacDecoder {
 
 impl Drop for AacDecoder {
     fn drop(&mut self) {
-        unsafe { NeAACDecClose(self.h) }
+        #[cfg(faad)]
+        unsafe {
+            NeAACDecClose(self.h)
+        }
     }
 }

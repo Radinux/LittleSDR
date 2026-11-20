@@ -1,10 +1,11 @@
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
-
-val kitRoot = rootProject.layout.projectDirectory.dir("kit/out").asFile
 
 android {
     namespace = "app.littlesdr"
@@ -20,35 +21,6 @@ android {
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
-        }
-        externalNativeBuild {
-            cmake {
-                arguments += listOf(
-                    "-DANDROID_STL=c++_shared",
-                    "-DSDR_KIT_ROOT=${kitRoot.absolutePath}",
-                )
-                cppFlags += "-std=c++17"
-                // Only what the app loads (AGP would otherwise also build libcorrect's CLI tools)
-                targets += listOf(
-                    "littlesdr", "sdrpp_core", "audio_sink", "radio",
-                    "rtl_sdr_source", "airspy_source", "airspyhf_source", "hackrf_source",
-                    "rtl_tcp_source", "spyserver_source", "kiwisdr_source", "ft8_decoder", "tinycw_decoder", "recorder",
-                )
-            }
-        }
-    }
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "4.1.2"
-        }
-    }
-
-    sourceSets {
-        getByName("main") {
-            // Prebuilt drivers/DSP libs produced by kit/build-kit.sh
-            jniLibs.directories.add(rootProject.file("kit/jniLibs").path)
         }
     }
 
@@ -71,12 +43,53 @@ android {
         compose = true
     }
 
-    packaging {
-        jniLibs {
-            // Modules are dlopen()ed by name, keep them uncompressed & extracted
-            useLegacyPackaging = true
+}
+
+// Native layer, all Rust: the engine (engine/) built by cargo-ndk into liblittlesdr.so, next to
+// the prebuilt RTL-SDR driver it links (kit/jniLibs: librtlsdr + libusb, from kit/build-kit.sh)
+abstract class RustJniLibsTask : DefaultTask() {
+    @get:Inject
+    abstract val exec: ExecOperations
+
+    @get:Internal
+    abstract val engineDir: DirectoryProperty
+
+    @get:Internal
+    abstract val kitLibs: DirectoryProperty
+
+    @get:Input
+    abstract val ndkDir: Property<String>
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    init {
+        // cargo knows what is up to date
+        outputs.upToDateWhen { false }
+    }
+
+    @TaskAction
+    fun build() {
+        val out = outputDir.get().asFile
+        val abis = listOf("arm64-v8a", "x86_64")
+        val cargo = File(System.getProperty("user.home"), ".cargo/bin/cargo").takeIf { it.exists() }?.path ?: "cargo"
+        exec.exec {
+            workingDir = engineDir.get().asFile
+            environment("ANDROID_NDK_HOME", ndkDir.get())
+            commandLine(listOf(cargo, "ndk") + abis.flatMap { listOf("-t", it) } + listOf("-P", "28", "-o", out.path, "build", "--release", "--lib"))
+        }
+        for (abi in abis) {
+            for (lib in listOf("librtlsdr.so", "libusb1.0.so")) {
+                kitLibs.get().asFile.resolve("$abi/$lib").copyTo(out.resolve("$abi/$lib"), overwrite = true)
+            }
         }
     }
+}
+
+val rustJniLibs = tasks.register<RustJniLibsTask>("rustJniLibs") {
+    engineDir.set(rootProject.layout.projectDirectory.dir("engine"))
+    kitLibs.set(rootProject.layout.projectDirectory.dir("kit/jniLibs"))
+    ndkDir.set(androidComponents.sdkComponents.sdkDirectory.map { it.dir("ndk/${android.ndkVersion}").asFile.path })
 }
 
 // Country database used by the FT8 decoder (callsign -> country), shipped as assets/res/cty
@@ -103,6 +116,7 @@ val ctyAssets = tasks.register<CtyAssetsTask>("ctyAssets") {
 androidComponents {
     onVariants { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(ctyAssets, CtyAssetsTask::outputDir)
+        variant.sources.jniLibs?.addGeneratedSourceDirectory(rustJniLibs, RustJniLibsTask::outputDir)
     }
 }
 

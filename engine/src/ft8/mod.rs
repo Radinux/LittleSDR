@@ -151,6 +151,14 @@ impl Default for Ft8Receiver {
     }
 }
 
+/// Distance from the receiver to a call's country (CTY) when the message has no locator
+fn cty_distance(home: Option<(f64, f64)>, call: &str) -> f64 {
+    match (home, crate::service::cty::lookup(call)) {
+        (Some(h), Some(c)) => message::distance_km(h, c).round(),
+        _ => 0.0,
+    }
+}
+
 fn now_s() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
 }
@@ -304,8 +312,8 @@ impl Ft8Receiver {
                         message: d.msg.text.clone(),
                         snr: d.snr,
                         dt: d.dt,
-                        distance_km,
-                        country: String::new(),
+                        distance_km: if distance_km > 0.0 { distance_km } else { cty_distance(home, &d.msg.from) },
+                        country: crate::service::cty::country(&d.msg.from).unwrap_or_default(),
                     }
                 })
                 .collect();

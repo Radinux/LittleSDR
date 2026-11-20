@@ -3,6 +3,7 @@
 //! settings (persisted as JSON in the app's folder) and every decoder's JSON. Platform-free:
 //! the Android module (JNI, AAudio, Vulkan) and tests sit on top of it.
 
+pub mod cty;
 pub mod fft;
 pub mod sources;
 
@@ -102,6 +103,7 @@ fn default_options() -> Value {
 impl Service {
     /// Once at start: the app's folder (settings), and the FFT size of the display
     pub fn init(root: &str, fft_size: usize) -> &'static Service {
+        cty::load(&format!("{root}/res/cty/cty.dat"));
         SERVICE.get_or_init(|| {
             let cfg: Value = std::fs::read_to_string(format!("{root}/littlesdr.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
             let mut options = default_options();
@@ -598,6 +600,21 @@ impl Service {
     }
     pub fn rds_json(&self) -> String {
         self.with_engine(|e| e.rds_json())
+    }
+
+    /// Span of the display (Hz): the stream's rate, else the configured one
+    pub fn sample_rate(&self) -> f64 {
+        let r = f64::from_bits(self.shared.rate.load(Ordering::Relaxed));
+        if r > 0.0 {
+            return r;
+        }
+        let i = self.inner.lock().unwrap();
+        i.settings.rate(&i.kind)
+    }
+
+    /// One numeric option ("audio", "device")
+    pub fn option(&self, group: &str, name: &str) -> f64 {
+        self.inner.lock().unwrap().options[group][name].as_f64().unwrap_or(0.0)
     }
 
     /// The display data for the renderer

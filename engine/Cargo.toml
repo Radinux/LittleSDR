@@ -8,6 +8,8 @@ license = "GPL-3.0-or-later"
 [lib]
 name = "littlesdr"
 path = "src/lib.rs"
+# rlib for the CLI and tests, cdylib: liblittlesdr.so loaded by the Android app
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "littlesdr"
@@ -34,3 +36,7 @@ lto = "thin"
 
 [build-dependencies]
 cc = "1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ash = { version = "0.38", default-features = false, features = ["linked", "std"] }

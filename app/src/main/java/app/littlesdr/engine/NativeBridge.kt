@@ -5,13 +5,11 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * JNI surface of the native engine (app/src/main/cpp/jni_bridge.cpp).
+ * JNI surface of the native engine (Rust: engine/src/android/jni.rs).
  * Every call that touches the engine must go through [Engine], which serializes them.
  */
 object NativeBridge {
     init {
-        System.loadLibrary("c++_shared")
-        System.loadLibrary("sdrpp_core")
         System.loadLibrary("littlesdr")
     }
 

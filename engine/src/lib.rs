@@ -20,6 +20,8 @@ pub mod recorder;
 pub mod rs;
 pub mod rtty;
 pub mod service;
+#[cfg(target_os = "android")]
+pub mod android;
 pub mod source;
 pub mod sstv;
 pub mod stereo;

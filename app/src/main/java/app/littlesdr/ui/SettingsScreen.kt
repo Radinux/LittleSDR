@@ -376,8 +376,8 @@ private fun AboutSection() {
             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         )
         ListItem(
-            headlineContent = { Text("Moteur radio : SDR++Brown") },
-            supportingContent = { Text("Traitement du signal et pilotes de SDR++Brown (basé sur SDR++), licence GPL-3.0") },
+            headlineContent = { Text("Moteur radio : LittleSDR") },
+            supportingContent = { Text("Moteur maison en Rust (traitement du signal, décodeurs, rendu Vulkan), licence GPL-3.0") },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         )
     }
