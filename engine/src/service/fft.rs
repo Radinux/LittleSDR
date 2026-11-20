@@ -7,6 +7,10 @@ use rustfft::{num_complex::Complex32, Fft, FftPlanner};
 use std::sync::Arc;
 
 pub const HISTORY_ROWS: usize = 1024;
+/// Memory cap of the history (floats): fewer rows at very high resolutions (64 MB)
+const HISTORY_FLOATS: usize = 16 << 20;
+/// Most FFTs averaged into one display line (beyond, they are spaced out)
+const MAX_AVG: usize = 16;
 
 /// FFT lines (dB, lowest frequency first) in a ring, as the renderer uploads them
 pub struct FftHistory {
@@ -24,7 +28,8 @@ pub struct FftHistory {
 
 impl FftHistory {
     pub fn new(bins: usize) -> FftHistory {
-        FftHistory { bins, rows: HISTORY_ROWS, lines: vec![-150.0; bins * HISTORY_ROWS], latest: vec![-150.0; bins], peak: vec![-150.0; bins], peak_hold: false, written: 0, generation: 1 }
+        let rows = (HISTORY_FLOATS / bins.max(1)).clamp(128, HISTORY_ROWS);
+        FftHistory { bins, rows, lines: vec![-150.0; bins * rows], latest: vec![-150.0; bins], peak: vec![-150.0; bins], peak_hold: false, written: 0, generation: 1 }
     }
 
     pub fn resize(&mut self, bins: usize) {
@@ -120,8 +125,13 @@ pub struct DisplayFft {
     fft: Arc<dyn Fft<f32>>,
     win: Vec<f32>,
     buf: Vec<C32>,
-    /// Input samples to skip before the next line
+    /// Input samples to skip before the next FFT
     skip: usize,
+    /// Power summed over the FFTs of the line being built, and how many
+    acc: Vec<f32>,
+    nacc: u32,
+    /// Samples covered since the last line
+    since: f64,
 }
 
 impl DisplayFft {
@@ -141,12 +151,28 @@ impl DisplayFft {
         // dB of a full-scale tone: normalise by the window's sum
         let sum: f32 = win.iter().sum();
         let win = win.iter().map(|w| w / sum).collect();
-        DisplayFft { size, rate: rate.clamp(1.0, 120.0), window, fft: FftPlanner::new().plan_fft_forward(size), win, buf: Vec::new(), skip: 0 }
+        DisplayFft {
+            size,
+            rate: rate.clamp(1.0, 120.0),
+            window,
+            fft: FftPlanner::new().plan_fft_forward(size),
+            win,
+            buf: Vec::new(),
+            skip: 0,
+            acc: vec![0.0; size],
+            nacc: 0,
+            since: 0.0,
+        }
     }
 
-    /// New samples at `sample_rate`; complete lines appended to `out` (each `size` long)
+    /// New samples at `sample_rate`; complete lines appended to `out` (each `size` long).
+    ///
+    /// Each line is the average power of every FFT since the previous one (Welch, frames 50 %
+    /// overlapped): a single FFT per line leaves the noise floor grainy, "moving sand", and
+    /// zoomed out (highest bin per pixel) it turns into bright dots.
     pub fn feed(&mut self, iq: &[C32], sample_rate: f64, out: &mut Vec<Vec<f32>>) {
-        let hop = ((sample_rate / self.rate as f64) as usize).max(self.size / 4);
+        let hop = (sample_rate / self.rate as f64).max(1.0);
+        let step = ((hop / MAX_AVG as f64) as usize).max(self.size / 2).max(1);
         let mut i = 0;
         while i < iq.len() {
             if self.skip > 0 {
@@ -155,18 +181,31 @@ impl DisplayFft {
                 i += n;
                 continue;
             }
-            let need = self.size - self.buf.len();
-            let n = need.min(iq.len() - i);
+            let n = (self.size - self.buf.len()).min(iq.len() - i);
             self.buf.extend_from_slice(&iq[i..i + n]);
             i += n;
-            if self.buf.len() == self.size {
-                let mut v: Vec<Complex32> = self.buf.iter().zip(&self.win).map(|(z, w)| Complex32::new(z.re * w, z.im * w)).collect();
-                self.fft.process(&mut v);
-                let half = self.size / 2;
-                let row: Vec<f32> = (0..self.size).map(|k| 10.0 * (v[(k + half) % self.size].norm_sqr() + 1e-20).log10()).collect();
-                out.push(row);
+            if self.buf.len() < self.size {
+                continue;
+            }
+            let mut v: Vec<Complex32> = self.buf.iter().zip(&self.win).map(|(z, w)| Complex32::new(z.re * w, z.im * w)).collect();
+            self.fft.process(&mut v);
+            for (a, z) in self.acc.iter_mut().zip(&v) {
+                *a += z.norm_sqr();
+            }
+            self.nacc += 1;
+            self.since += step as f64;
+            if self.since >= hop {
+                let (half, k) = (self.size / 2, 1.0 / self.nacc as f32);
+                out.push((0..self.size).map(|b| 10.0 * (self.acc[(b + half) % self.size] * k + 1e-20).log10()).collect());
+                self.acc.iter_mut().for_each(|a| *a = 0.0);
+                self.nacc = 0;
+                self.since = (self.since - hop).min(hop);
+            }
+            if step >= self.size {
                 self.buf.clear();
-                self.skip = hop.saturating_sub(self.size);
+                self.skip = step - self.size;
+            } else {
+                self.buf.drain(..step);
             }
         }
     }
@@ -175,6 +214,26 @@ impl DisplayFft {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// White noise: averaged lines must be smooth (a single FFT per line: ~5.6 dB spread)
+    #[test]
+    fn noise_floor_is_smooth() {
+        let rate = 2_400_000.0;
+        let mut f = DisplayFft::new(4096, 25.0, 2);
+        let mut seed = 1u32;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+        };
+        let iq: Vec<C32> = (0..240_000).map(|_| C32::new(rnd(), rnd())).collect();
+        let mut rows = Vec::new();
+        f.feed(&iq, rate, &mut rows);
+        assert_eq!(rows.len(), 2, "lines at 25/s over 0.1 s");
+        let r = &rows[1];
+        let mean = r.iter().sum::<f32>() / r.len() as f32;
+        let sd = (r.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / r.len() as f32).sqrt();
+        assert!(sd < 1.8, "noise floor spread {sd:.2} dB");
+    }
 
     #[test]
     fn tone_lands_in_its_bin_at_0_db() {

@@ -130,7 +130,7 @@ impl Service {
             if fft_size > 0 && cfg.get("options").is_none() {
                 options["fft"]["size"] = json!(fft_size);
             }
-            let fsz = options["fft"]["size"].as_u64().unwrap_or(4096) as usize;
+            let fsz = options["fft"]["size"].as_f64().unwrap_or(4096.0) as usize;
             let mode_idx = cfg.get("mode").and_then(Value::as_i64).unwrap_or(1) as i32;
             let freq = cfg.get("freq").and_then(Value::as_f64).unwrap_or(100e6);
             let mut bandwidth = [0.0; 11];
@@ -153,7 +153,7 @@ impl Service {
                 engine: Mutex::new(engine),
                 hist: Mutex::new(FftHistory::new(fsz)),
                 display: Mutex::new(Display {
-                    fft: DisplayFft::new(fsz, options["fft"]["rate"].as_f64().unwrap_or(25.0) as f32, options["fft"]["window"].as_i64().unwrap_or(2) as i32),
+                    fft: DisplayFft::new(fsz, options["fft"]["rate"].as_f64().unwrap_or(25.0) as f32, options["fft"]["window"].as_f64().unwrap_or(2.0) as i32),
                     smoothing: options["fft"]["smoothing"].as_f64().unwrap_or(0.4) as f32,
                     peak_decay: options["fft"]["peakDecay"].as_f64().unwrap_or(10.0) as f32,
                 }),
@@ -559,6 +559,8 @@ impl Service {
         }
         let val = match (group, name) {
             ("fft", "peakHold") | ("input", "dcBlocking") | ("input", "invertIQ") | ("demod", "nb") | ("demod", "stereo") => json!(v != 0.0),
+            // Whole numbers stay integers: the app reads size, window, latency... as Int
+            _ if v.fract() == 0.0 && v.abs() < 1e15 => json!(v as i64),
             _ => json!(v),
         };
         i.options[group][name] = val;
@@ -566,7 +568,7 @@ impl Service {
             let o = &i.options["fft"];
             let mut d = self.shared.display.lock().unwrap();
             if name == "size" || name == "window" || name == "rate" {
-                d.fft = DisplayFft::new(o["size"].as_u64().unwrap_or(4096) as usize, o["rate"].as_f64().unwrap_or(25.0) as f32, o["window"].as_i64().unwrap_or(2) as i32);
+                d.fft = DisplayFft::new(o["size"].as_f64().unwrap_or(4096.0) as usize, o["rate"].as_f64().unwrap_or(25.0) as f32, o["window"].as_f64().unwrap_or(2.0) as i32);
             }
             d.smoothing = o["smoothing"].as_f64().unwrap_or(0.4).clamp(0.0, 0.95) as f32;
             d.peak_decay = o["peakDecay"].as_f64().unwrap_or(10.0) as f32;
