@@ -32,8 +32,9 @@ struct FrameInfo {
     ps: c_uchar,
 }
 
+// Desktop: the system's libfaad; Android: the static build (build.rs links it)
 #[cfg(faad)]
-#[link(name = "faad")]
+#[cfg_attr(not(target_os = "android"), link(name = "faad"))]
 extern "C" {
     fn NeAACDecOpen() -> *mut c_void;
     fn NeAACDecClose(h: *mut c_void);

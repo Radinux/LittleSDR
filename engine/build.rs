@@ -1,9 +1,14 @@
-// Optional xHE-AAC decoding (DRM): libxaac (Apache-2.0) built in third_party/libxaac/build,
-// or LIBXAAC_DIR. Without it the engine builds and DRM audio stays silent.
+// AAC decoders. FAAD2 (DAB+): the system's on the desktop, the static build of
+// scripts/build-android-aac.sh on Android. libxaac (xHE-AAC, DRM): third_party/libxaac/build
+// (build-<target> on Android) or LIBXAAC_DIR. Without one, the engine still builds and that
+// audio stays silent.
 fn main() {
     shaders();
     println!("cargo:rerun-if-changed=csrc/xaac_shim.c");
     println!("cargo:rerun-if-env-changed=LIBXAAC_DIR");
+    println!("cargo:rerun-if-env-changed=FAAD2_DIR");
+    println!("cargo:rerun-if-changed=third_party/faad2");
+    println!("cargo:rerun-if-changed=third_party/libxaac/build");
     println!("cargo::rustc-check-cfg=cfg(xaac)");
     println!("cargo::rustc-check-cfg=cfg(faad)");
     let target = std::env::var("TARGET").unwrap_or_default();
@@ -15,6 +20,7 @@ fn main() {
     } else if let Ok(d) = std::env::var("FAAD2_DIR").map(|d| format!("{d}/{target}")).or_else(|_| Ok::<_, ()>(format!("{manifest}/third_party/faad2/{target}"))) {
         if std::path::Path::new(&format!("{d}/libfaad.a")).exists() {
             println!("cargo:rustc-link-search=native={d}");
+            println!("cargo:rustc-link-lib=static=faad");
             println!("cargo:rustc-cfg=faad");
         } else {
             println!("cargo:warning=FAAD2 not built for {target}: DAB+ audio disabled");
