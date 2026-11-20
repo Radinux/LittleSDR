@@ -1,0 +1,169 @@
+//! DRM (Digital Radio Mondiale) receiver: OFDM sync and channel estimation, FAC, then (next
+//! steps) SDC, MSC and audio.
+
+pub mod audio;
+pub mod cellmap;
+pub mod fac;
+pub mod msc;
+pub mod ofdm;
+pub mod sdc;
+pub mod tables;
+
+use crate::dsp::{Frame as AudioFrame, Interp, C32};
+use std::collections::VecDeque;
+use fac::{FacDecoder, FacInfo};
+use ofdm::{Frame, Ofdm};
+use audio::{TextDecoder, XheAudio};
+use msc::MscDecoder;
+use sdc::{SdcDecoder, SdcInfo};
+
+pub struct DrmReceiver {
+    ofdm: Ofdm,
+    fac: FacDecoder,
+    sdc: SdcDecoder,
+    msc: MscDecoder,
+    /// MSC frames (400 ms of the multiplex) decoded and not yet taken
+    pub msc_frames: Vec<Vec<u8>>,
+    pub audio: XheAudio,
+    pub text: TextDecoder,
+    /// New text message, not yet taken
+    pub text_news: Option<String>,
+    /// Decoded audio (interleaved float) not yet taken
+    pub pcm: Vec<f32>,
+    pub last_fac: Option<FacInfo>,
+    pub sdc_info: Option<SdcInfo>,
+    pub frames: u64,
+    /// 48 kHz output: resampler from the codec's rate, and a reserve that smooths the
+    /// 400 ms bursts of the decoder into a steady stream
+    rs: Option<(u32, Interp<AudioFrame>)>,
+    reserve: VecDeque<AudioFrame>,
+    playing: bool,
+}
+
+impl DrmReceiver {
+    /// `rate`: 12, 24 or 48 kHz of complex baseband centred on the DRM channel
+    pub fn new(rate: f64) -> DrmReceiver {
+        DrmReceiver { ofdm: Ofdm::new(rate), fac: FacDecoder::new(), sdc: SdcDecoder::new(), msc: MscDecoder::new(), msc_frames: Vec::new(), audio: XheAudio::new(), text: TextDecoder::default(), text_news: None, pcm: Vec::new(), last_fac: None, sdc_info: None, frames: 0, rs: None, reserve: VecDeque::new(), playing: false }
+    }
+
+    pub fn process(&mut self, iq: &[C32]) {
+        let mut frames: Vec<Frame> = Vec::new();
+        self.ofdm.process(iq, &mut frames);
+        for f in frames {
+            self.frames += 1;
+            if let Some(map) = self.ofdm.map() {
+                // A frame whose FAC fails keeps its place: the next one after the last known
+                let fac = match self.fac.decode(map, &f) {
+                    Some(info) => Some(info),
+                    None => self.last_fac.clone().map(|mut i| {
+                        i.frame_id = (i.frame_id + 1) % 3;
+                        i
+                    }),
+                };
+                if let Some(info) = fac {
+                    // The SDC opens each superframe (frame 0)
+                    if info.frame_id == 0 {
+                        if let Some(s) = self.sdc.decode(map, &f, info.sdc_mode == 1) {
+                            self.sdc_info = Some(s);
+                        }
+                    }
+                    if let Some(sdc) = &self.sdc_info {
+                        let got = self.msc.push(map, &f, &info, sdc);
+                        // Audio of the first service, from its stream
+                        if let Some(a) = sdc.audio.iter().find(|a| a.coding == 3) {
+                            let s = a.stream as usize;
+                            if let Some(&(la, lb)) = sdc.streams.get(s) {
+                                let off: usize = sdc.streams[..s].iter().map(|x| (x.0 + x.1) as usize).sum();
+                                let len = (la + lb) as usize - if a.text { 4 } else { 0 };
+                                for m in &got {
+                                    if off + len <= m.len() {
+                                        self.audio.push(a, &m[off..off + len], &mut self.pcm);
+                                        if a.text && off + len + 4 <= m.len() {
+                                            if let Some(t) = self.text.push(&m[off + len..off + len + 4]) {
+                                                self.text_news = Some(t);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        self.msc_frames.extend(got);
+                    }
+                    self.last_fac = Some(info);
+                }
+            }
+        }
+    }
+
+    /// Engine use: IF samples at `if_rate`; exactly as many 48 kHz frames out as went in
+    /// (so the sound card is fed steadily), audio delayed by a small reserve
+    pub fn process_audio(&mut self, iq: &[C32], if_rate: f64, out: &mut Vec<AudioFrame>) {
+        self.process(iq);
+        let ch = self.audio.channels.max(1) as usize;
+        let rate = self.audio.rate;
+        if rate > 0 && !self.pcm.is_empty() {
+            if self.rs.as_ref().is_none_or(|r| r.0 != rate) {
+                self.rs = Some((rate, Interp::new(rate as f64, 48_000.0)));
+            }
+            let frames: Vec<AudioFrame> = self.pcm.chunks(ch).map(|c| AudioFrame::new(c[0], *c.get(1).unwrap_or(&c[0]))).collect();
+            self.pcm.clear();
+            let mut up = Vec::with_capacity(frames.len() * 48_000 / rate as usize + 4);
+            self.rs.as_mut().unwrap().1.process(&frames, &mut up);
+            self.reserve.extend(up);
+        }
+        self.pcm.clear();
+        let want = (iq.len() as f64 * 48_000.0 / if_rate).round() as usize;
+        // Start once 1 s is in reserve; too much reserve (clock drift): drop some
+        if !self.playing && self.reserve.len() >= 48_000 {
+            self.playing = true;
+        }
+        if self.reserve.len() > 144_000 {
+            let extra = self.reserve.len() - 72_000;
+            self.reserve.drain(..extra);
+        }
+        for _ in 0..want {
+            let f = if self.playing { self.reserve.pop_front() } else { None };
+            if f.is_none() {
+                self.playing = false; // ran dry: fill the reserve again
+            }
+            out.push(f.unwrap_or_default());
+        }
+    }
+
+    pub fn take_text(&mut self) -> Option<String> {
+        self.text_news.take()
+    }
+
+    /// Station name and audio, once known
+    pub fn station(&self) -> String {
+        match &self.sdc_info {
+            Some(s) => {
+                let label = s.labels.first().map(|l| l.1.as_str()).unwrap_or("");
+                let audio = s.audio.first().map(|a| a.describe()).unwrap_or_default();
+                format!("{label} ({audio})")
+            }
+            None => String::new(),
+        }
+    }
+
+    pub fn status(&self) -> String {
+        let i = &self.ofdm.info;
+        format!(
+            "mode {} SO {} | guard corr {:.2}, offset {:+.1} Hz, clock {:+.0} ppm, frame sync {} | {} frames, FAC {} ok / {} bad, SDC {} ok / {} bad | audio frames {} ok / {} bad, {} Hz",
+            i.mode.map_or("?".into(), |m| format!("{m:?}")),
+            i.so,
+            i.guard_corr,
+            i.freq_offset,
+            i.drift_ppm,
+            if i.frame_found { "yes" } else { "no" },
+            self.frames,
+            self.fac.ok,
+            self.fac.bad,
+            self.sdc.ok,
+            self.sdc.bad,
+            self.audio.frames_ok,
+            self.audio.frames_bad,
+            self.audio.rate
+        )
+    }
+}
