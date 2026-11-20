@@ -138,7 +138,7 @@ mod tests {
         let (l, r) = (p(|x| x.l), p(|x| x.r));
         let sep = 20.0 * (l / r.max(1e-9)).log10();
         assert!(sep > 25.0, "separation {sep:.1} dB (L {l}, R {r})");
-        assert!((l - 0.9 * 0.7071).abs() < 0.05, "left level {l}");
+        assert!((l - 0.9 * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.05, "left level {l}");
     }
 
     #[test]
