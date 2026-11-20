@@ -122,7 +122,7 @@ impl Service {
                 for (k, v) in o {
                     if let (Some(dst), Some(src)) = (options.get_mut(k).and_then(Value::as_object_mut), v.as_object()) {
                         for (kk, vv) in src {
-                            dst.insert(kk.clone(), vv.clone());
+                            dst.insert(kk.clone(), whole(vv.clone()));
                         }
                     }
                 }
@@ -764,6 +764,15 @@ impl Service {
     /// View (width shown, centre offset) as the UI set it
     pub fn view(&self) -> (f64, f64) {
         self.inner.lock().unwrap().view
+    }
+}
+
+/// 8192.0 -> 8192: settings saved by 1.0 / 1.1.0 kept every number as a decimal, which the
+/// app cannot read into its integer fields (the whole options parse failed: defaults shown)
+fn whole(v: Value) -> Value {
+    match v.as_f64() {
+        Some(x) if v.is_f64() && x.fract() == 0.0 && x.abs() < 1e15 => json!(x as i64),
+        _ => v,
     }
 }
 

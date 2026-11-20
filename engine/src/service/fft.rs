@@ -117,7 +117,10 @@ impl FftHistory {
 
 /// FFT lines from the IQ stream at a given line rate
 pub struct DisplayFft {
+    /// FFT size in use: the requested one, smaller on narrow streams (see `effective`)
     pub size: usize,
+    /// FFT size asked for in the settings (a maximum)
+    pub requested: usize,
     /// Lines per second
     pub rate: f32,
     /// 0 rectangular, 1 Blackman, 2 Nuttall
@@ -132,11 +135,45 @@ pub struct DisplayFft {
     nacc: u32,
     /// Samples covered since the last line
     since: f64,
+    /// Power averaged across lines, for streams too narrow to average within a line
+    ema: Vec<f32>,
+    ema_on: bool,
+}
+
+/// FFT size for a stream: the one asked for, but no longer than 4 line intervals. On a narrow
+/// stream (KiwiSDR 12 kHz: 8192 points = 0.7 s) a long FFT gives one noisy line now and then
+/// with bins finer than any pixel: sand. 12 kHz at 25 lines/s: 1024 points, 12 Hz per bin.
+fn effective(requested: usize, sample_rate: f64, rate: f32) -> usize {
+    let cap = ((4.0 * sample_rate / rate as f64) as usize).max(512);
+    let pow2 = 1usize << (usize::BITS - 1 - cap.leading_zeros());
+    requested.min(pow2)
 }
 
 impl DisplayFft {
     pub fn new(size: usize, rate: f32, window: i32) -> DisplayFft {
         let size = size.clamp(256, 1 << 17);
+        let mut d = DisplayFft {
+            size: 0,
+            requested: size,
+            rate: rate.clamp(1.0, 120.0),
+            window,
+            fft: FftPlanner::new().plan_fft_forward(1),
+            win: Vec::new(),
+            buf: Vec::new(),
+            skip: 0,
+            acc: Vec::new(),
+            nacc: 0,
+            since: 0.0,
+            ema: Vec::new(),
+            ema_on: false,
+        };
+        d.plan(size);
+        d
+    }
+
+    /// (Re)builds the transform for `size` points
+    fn plan(&mut self, size: usize) {
+        let window = self.window;
         let n = size as f32;
         let win: Vec<f32> = (0..size)
             .map(|i| {
@@ -150,19 +187,16 @@ impl DisplayFft {
             .collect();
         // dB of a full-scale tone: normalise by the window's sum
         let sum: f32 = win.iter().sum();
-        let win = win.iter().map(|w| w / sum).collect();
-        DisplayFft {
-            size,
-            rate: rate.clamp(1.0, 120.0),
-            window,
-            fft: FftPlanner::new().plan_fft_forward(size),
-            win,
-            buf: Vec::new(),
-            skip: 0,
-            acc: vec![0.0; size],
-            nacc: 0,
-            since: 0.0,
-        }
+        self.win = win.iter().map(|w| w / sum).collect();
+        self.fft = FftPlanner::new().plan_fft_forward(size);
+        self.size = size;
+        self.buf.clear();
+        self.skip = 0;
+        self.acc = vec![0.0; size];
+        self.nacc = 0;
+        self.since = 0.0;
+        self.ema = vec![0.0; size];
+        self.ema_on = false;
     }
 
     /// New samples at `sample_rate`; complete lines appended to `out` (each `size` long).
@@ -171,6 +205,10 @@ impl DisplayFft {
     /// overlapped): a single FFT per line leaves the noise floor grainy, "moving sand", and
     /// zoomed out (highest bin per pixel) it turns into bright dots.
     pub fn feed(&mut self, iq: &[C32], sample_rate: f64, out: &mut Vec<Vec<f32>>) {
+        let eff = effective(self.requested, sample_rate, self.rate);
+        if eff != self.size {
+            self.plan(eff);
+        }
         let hop = (sample_rate / self.rate as f64).max(1.0);
         let step = ((hop / MAX_AVG as f64) as usize).max(self.size / 2).max(1);
         let mut i = 0;
@@ -196,7 +234,14 @@ impl DisplayFft {
             self.since += step as f64;
             if self.since >= hop {
                 let (half, k) = (self.size / 2, 1.0 / self.nacc as f32);
-                out.push((0..self.size).map(|b| 10.0 * (self.acc[(b + half) % self.size] * k + 1e-20).log10()).collect());
+                // Fewer than 4 FFTs in this line (narrow stream): also average across lines,
+                // ~4 lines' worth (160 ms at 25/s)
+                let old = if self.ema_on { (4u32.saturating_sub(self.nacc) as f32 / 4.0 * 0.8).max(0.0) } else { 0.0 };
+                for (e, a) in self.ema.iter_mut().zip(&self.acc) {
+                    *e = *e * old + a * k * (1.0 - old);
+                }
+                self.ema_on = true;
+                out.push((0..self.size).map(|b| 10.0 * (self.ema[(b + half) % self.size] + 1e-20).log10()).collect());
                 self.acc.iter_mut().for_each(|a| *a = 0.0);
                 self.nacc = 0;
                 self.since = (self.since - hop).min(hop);
@@ -233,6 +278,27 @@ mod tests {
         let mean = r.iter().sum::<f32>() / r.len() as f32;
         let sd = (r.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / r.len() as f32).sqrt();
         assert!(sd < 1.8, "noise floor spread {sd:.2} dB");
+    }
+
+    /// KiwiSDR-like 12 kHz stream with 8192 points asked: the FFT shrinks and stays smooth
+    #[test]
+    fn narrow_stream_is_smooth() {
+        let rate = 12_000.0;
+        let mut f = DisplayFft::new(8192, 25.0, 2);
+        let mut seed = 7u32;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+        };
+        let iq: Vec<C32> = (0..24_000).map(|_| C32::new(rnd(), rnd())).collect();
+        let mut rows = Vec::new();
+        f.feed(&iq, rate, &mut rows);
+        assert_eq!(f.size, 1024, "effective size");
+        assert!(rows.len() >= 20, "{} lines in 2 s", rows.len());
+        let r = rows.last().unwrap();
+        let mean = r.iter().sum::<f32>() / r.len() as f32;
+        let sd = (r.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / r.len() as f32).sqrt();
+        assert!(sd < 3.5, "noise floor spread {sd:.2} dB");
     }
 
     #[test]
