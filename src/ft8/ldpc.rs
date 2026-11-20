@@ -175,7 +175,7 @@ mod tests {
             let mut llr = [0f32; 174];
             for i in 0..174 {
                 let (u, v) = (rnd(), rnd());
-                let g = (-2.0 * u.ln()).sqrt() * (6.283_185 * v).cos();
+                let g = (-2.0 * u.ln()).sqrt() * (std::f32::consts::TAU * v).cos();
                 let y = if cw[i] == 1 { 1.0 } else { -1.0 } + 0.7 * g;
                 llr[i] = 2.0 * y / (0.7 * 0.7);
             }

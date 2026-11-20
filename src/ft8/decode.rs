@@ -553,7 +553,7 @@ mod tests {
         };
         for x in out.iter_mut() {
             let (u, v) = (rnd(), rnd());
-            *x += sigma * (-2.0 * u.ln()).sqrt() * (6.283_185 * v).cos();
+            *x += sigma * (-2.0 * u.ln()).sqrt() * (std::f32::consts::TAU * v).cos();
         }
     }
 
