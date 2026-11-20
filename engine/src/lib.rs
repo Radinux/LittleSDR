@@ -19,6 +19,7 @@ pub mod rds;
 pub mod recorder;
 pub mod rs;
 pub mod rtty;
+pub mod service;
 pub mod source;
 pub mod sstv;
 pub mod stereo;

@@ -262,14 +262,20 @@ pub struct RingShared {
 impl RingSink {
     /// `latency_ms`: buffer kept between the engine and the output
     pub fn new(dev_rate: f64, latency_ms: f64) -> RingSink {
+        let shared = std::sync::Arc::new(RingShared {
+            ring: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            primed: std::sync::atomic::AtomicBool::new(false),
+            prime: (dev_rate * latency_ms / 1000.0) as usize,
+            underruns: std::sync::atomic::AtomicU64::new(0),
+        });
+        RingSink::with_shared(shared, dev_rate, latency_ms)
+    }
+
+    /// A new writer on an existing ring (the output keeps reading the same one)
+    pub fn with_shared(shared: std::sync::Arc<RingShared>, dev_rate: f64, latency_ms: f64) -> RingSink {
         let target = (dev_rate * latency_ms / 1000.0) as usize;
         RingSink {
-            shared: std::sync::Arc::new(RingShared {
-                ring: std::sync::Mutex::new(std::collections::VecDeque::new()),
-                primed: std::sync::atomic::AtomicBool::new(false),
-                prime: target,
-                underruns: std::sync::atomic::AtomicU64::new(0),
-            }),
+            shared,
             interp: crate::dsp::Interp::new(48_000.0, dev_rate),
             base_step: 48_000.0 / dev_rate,
             target: target.max(256),

@@ -678,7 +678,7 @@ impl Engine {
     }
 
     /// Channel limits relative to the tuned frequency (Hz)
-    fn channel(&self) -> (f64, f64) {
+    pub fn channel(&self) -> (f64, f64) {
         let bw = self.bandwidth[self.mode.index()];
         match self.mode {
             Mode::Wfm => (-90e3, 90e3),
@@ -883,6 +883,11 @@ impl Engine {
             s += &format!("\n  {:>10.2} kHz  {tail}", f / 1e3);
         }
         s
+    }
+
+    /// Tuned frequency (Hz)
+    pub fn frequency(&self) -> f64 {
+        self.freq
     }
 
     pub fn mode(&self) -> Mode {
