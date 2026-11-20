@@ -114,6 +114,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val usb by vm.usbDevice.collectAsStateWithLifecycle()
     val menu by vm.sourceMenu.collectAsStateWithLifecycle()
     val gainControls by vm.gainControls.collectAsStateWithLifecycle()
+    val receiverControls by vm.receiverControls.collectAsStateWithLifecycle()
     val cw by vm.cw.collectAsStateWithLifecycle()
     val sstv by vm.sstv.collectAsStateWithLifecycle()
     val rec by vm.rec.collectAsStateWithLifecycle()
@@ -279,6 +280,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                             if (showSource) Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) { sourcePanel() }
                             else if (space == AppSpace.DRM) DrmTuner(
                                 frequency = stateHolder.value.vfoFrequency, d = digital, onTune = vm::tune,
+                                controls = receiverControls, onControl = { vm.sourceAction(it) },
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                             )
                             else DabTuner(

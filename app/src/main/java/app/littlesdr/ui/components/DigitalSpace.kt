@@ -1,5 +1,8 @@
 package app.littlesdr.ui.components
 
+import app.littlesdr.engine.SmAction
+import app.littlesdr.engine.SmWidget
+
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.BorderStroke
@@ -579,11 +582,20 @@ private fun ChannelGridSheet(frequency: Double, found: Map<String, String>, onPi
  * frequencies. The spectrum strip on the left lets you tap a DRM block you see in the band.
  */
 @Composable
-fun DrmTuner(frequency: Double, d: DigitalState, onTune: (Double) -> Unit, modifier: Modifier = Modifier) {
+fun DrmTuner(
+    frequency: Double,
+    d: DigitalState,
+    onTune: (Double) -> Unit,
+    controls: List<SmWidget>,
+    onControl: (SmAction) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var bands by rememberSaveable { mutableStateOf(false) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         FrequencyDisplay(frequency, onTune, Modifier.fillMaxWidth())
         BandSelector(frequency, onTune, onOpenGrid = { bands = true })
+        // Gain and bias-tee (active loop / preamp) without going into the source settings
+        if (controls.isNotEmpty()) GainControls(controls, onControl)
         Text("Fréquences DRM connues", style = MaterialTheme.typography.titleSmall)
         DrmPresetList(frequency, onTune, Modifier.weight(1f).fillMaxWidth())
         StatusLine(d.status)

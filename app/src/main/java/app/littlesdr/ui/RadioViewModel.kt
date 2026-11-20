@@ -94,6 +94,12 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    /** Gain block plus the bias-tee switch: what the DRM screen needs for an active HF antenna */
+    val receiverControls: StateFlow<List<SmWidget>> = sourceMenu
+        .map { menu -> menu.filter { isGainControl(it) || (it is SmWidget.Checkbox && ("bias" in it.id.lowercase() || "bias" in it.label.lowercase())) } }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
     private fun isGainControl(w: SmWidget): Boolean {
         val gainWords = listOf("gain", "lna", "vga", "mixer", "attenuat")
         return when (w) {
@@ -568,10 +574,13 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     fun ft8Set(key: String, value: Boolean) = viewModelScope.launch { _ft8.value = Engine.ft8Set(key, if (value) 1.0 else 0.0) }
     fun ft8Clear() = viewModelScope.launch { _ft8.value = Engine.ft8Set("clear", 1.0) }
 
-    /** Tune the receiver on an FT8/FT4 channel: USB, VFO on the dial, so you can also listen. */
+    /**
+     * Tune the receiver on an FT8/FT4 channel: USB with the VFO on the dial frequency (the
+     * engine's USB passband starts at the VFO), so you can also listen.
+     */
     fun tuneDigital(dialHz: Long) {
         Engine.setMode(Mode.USB)
-        tune(dialHz + 1_500.0) // middle of the 3 kHz passband
+        tune(dialHz.toDouble())
     }
 
     fun refreshAdvanced() = viewModelScope.launch { if (Engine.ready.value) _advanced.value = Engine.options() }
