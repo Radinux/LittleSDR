@@ -112,9 +112,10 @@ impl Channel {
         }
         self.up.set(-1_500.0, RATE);
         self.up.mix(&mut buf);
-        // Time base from the wall clock: the block just arrived, so it ends now
+        // Time base from the wall clock: the block just arrived, so it ends now (network
+        // sources come in bursts: up to 2 s off before starting over)
         let end_expected = self.t0 + (self.audio.len() + buf.len()) as f64 / RATE;
-        if self.audio.is_empty() || (end_expected - now).abs() > 0.5 {
+        if self.audio.is_empty() || (end_expected - now).abs() > 2.0 {
             self.audio.clear();
             self.t0 = now - buf.len() as f64 / RATE;
         }

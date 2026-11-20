@@ -7,6 +7,7 @@ use std::thread::JoinHandle;
 
 pub mod kiwisdr;
 pub mod rtltcp;
+pub mod spyserver;
 pub mod wavfile;
 pub mod ws;
 #[cfg(feature = "rtlsdr")]

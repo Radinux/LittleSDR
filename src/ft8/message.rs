@@ -182,7 +182,12 @@ pub fn unpack(b: &[u8], hashes: &mut CallHashes) -> Option<Message> {
             let call2 = if p2 { format!("{c2}{suffix}") } else { c2.clone() };
             let (extra, grid) = if g <= MAXGRID4 {
                 let gr = grid4(g);
-                (if ir { format!("R {gr}") } else { gr.clone() }, gr)
+                // "RR73" is also a square (in the Arctic): senders use it for the reply
+                if gr == "RR73" {
+                    ("RR73".to_string(), String::new())
+                } else {
+                    (if ir { format!("R {gr}") } else { gr.clone() }, gr)
+                }
             } else {
                 let rp = g - MAXGRID4;
                 let e = match rp {
