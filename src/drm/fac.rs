@@ -191,7 +191,7 @@ impl FacDecoder {
             return None;
         }
         let mean_csi = csis.iter().sum::<f32>() / 65.0;
-        let scale = 60.0 / 0.7071 / mean_csi.max(1e-20);
+        let scale = 60.0 / std::f32::consts::FRAC_1_SQRT_2 / mean_csi.max(1e-20);
         for (v, &c) in vals.iter().zip(&csis) {
             soft.push(soft4(v.re, c, scale));
             soft.push(soft4(v.im, c, scale));

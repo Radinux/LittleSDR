@@ -351,7 +351,7 @@ impl Ofdm {
                     self.info.frame_found = true;
                     // Spectrum occupancy: the widest one whose edges carry power
                     let mean = |k: i32| -> f32 { l.raw.iter().map(|r| r[(k.rem_euclid(tu)) as usize].norm_sqr()).sum::<f32>() / l.raw.len() as f32 };
-                    let inband: f32 = (1..20).map(|k| mean(k)).sum::<f32>() / 19.0;
+                    let inband: f32 = (1..20).map(&mean).sum::<f32>() / 19.0;
                     let mut so = 0;
                     for cand in 0..6 {
                         let (kmin, kmax) = (p.kmin[cand], p.kmax[cand]);
