@@ -13,11 +13,21 @@ fn main() {
     eprintln!("{path}: {:.1} s at {} S/s", iq.len() as f64 / info.rate, info.rate);
     let mut rx = DrmReceiver::new(info.rate);
     let mut last = None;
+    let mut last_sdc = None;
     for (i, c) in iq.chunks(info.rate as usize / 10).enumerate() {
         rx.process(c);
-        if rx.last_fac != last {
-            last = rx.last_fac.clone();
-            eprintln!("{:6.1} s  FAC {:?}", i as f64 / 10.0, last);
+        if rx.last_fac.as_ref().map(|f| (f.service_id, f.language, f.msc_mode)) != last {
+            last = rx.last_fac.as_ref().map(|f| (f.service_id, f.language, f.msc_mode));
+            eprintln!("{:6.1} s  FAC {:?}", i as f64 / 10.0, rx.last_fac);
+        }
+        if rx.sdc_info != last_sdc {
+            last_sdc = rx.sdc_info.clone();
+            if let Some(s) = &last_sdc {
+                eprintln!("{:6.1} s  SDC streams {:?} prot {:?} labels {:?}", i as f64 / 10.0, s.streams, s.prot, s.labels);
+                for a in &s.audio {
+                    eprintln!("          audio: {} (service {}, stream {}, config {:02x?})", a.describe(), a.short_id, a.stream, a.config);
+                }
+            }
         }
         if i % 50 == 49 {
             eprintln!("{:6.1} s  {}", (i + 1) as f64 / 10.0, rx.status());
