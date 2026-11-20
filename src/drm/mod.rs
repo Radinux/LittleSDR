@@ -3,6 +3,7 @@
 
 pub mod cellmap;
 pub mod fac;
+pub mod msc;
 pub mod ofdm;
 pub mod sdc;
 pub mod tables;
@@ -10,12 +11,16 @@ pub mod tables;
 use crate::dsp::C32;
 use fac::{FacDecoder, FacInfo};
 use ofdm::{Frame, Ofdm};
+use msc::MscDecoder;
 use sdc::{SdcDecoder, SdcInfo};
 
 pub struct DrmReceiver {
     ofdm: Ofdm,
     fac: FacDecoder,
     sdc: SdcDecoder,
+    msc: MscDecoder,
+    /// MSC frames (400 ms of the multiplex) decoded and not yet taken
+    pub msc_frames: Vec<Vec<u8>>,
     pub last_fac: Option<FacInfo>,
     pub sdc_info: Option<SdcInfo>,
     pub frames: u64,
@@ -24,7 +29,7 @@ pub struct DrmReceiver {
 impl DrmReceiver {
     /// `rate`: 12, 24 or 48 kHz of complex baseband centred on the DRM channel
     pub fn new(rate: f64) -> DrmReceiver {
-        DrmReceiver { ofdm: Ofdm::new(rate), fac: FacDecoder::new(), sdc: SdcDecoder::new(), last_fac: None, sdc_info: None, frames: 0 }
+        DrmReceiver { ofdm: Ofdm::new(rate), fac: FacDecoder::new(), sdc: SdcDecoder::new(), msc: MscDecoder::new(), msc_frames: Vec::new(), last_fac: None, sdc_info: None, frames: 0 }
     }
 
     pub fn process(&mut self, iq: &[C32]) {
@@ -33,12 +38,24 @@ impl DrmReceiver {
         for f in frames {
             self.frames += 1;
             if let Some(map) = self.ofdm.map() {
-                if let Some(info) = self.fac.decode(map, &f) {
+                // A frame whose FAC fails keeps its place: the next one after the last known
+                let fac = match self.fac.decode(map, &f) {
+                    Some(info) => Some(info),
+                    None => self.last_fac.clone().map(|mut i| {
+                        i.frame_id = (i.frame_id + 1) % 3;
+                        i
+                    }),
+                };
+                if let Some(info) = fac {
                     // The SDC opens each superframe (frame 0)
                     if info.frame_id == 0 {
                         if let Some(s) = self.sdc.decode(map, &f, info.sdc_mode == 1) {
                             self.sdc_info = Some(s);
                         }
+                    }
+                    if let Some(sdc) = &self.sdc_info {
+                        let got = self.msc.push(map, &f, &info, sdc);
+                        self.msc_frames.extend(got);
                     }
                     self.last_fac = Some(info);
                 }

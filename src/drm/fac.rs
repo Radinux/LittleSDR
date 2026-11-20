@@ -45,6 +45,11 @@ pub fn punct_ones(rate: usize) -> usize {
     PUNCT[rate].iter().map(|p| p.count_ones() as usize).sum()
 }
 
+/// Pattern of step `step` (data part)
+pub fn mask(rate: usize, step: usize) -> u8 {
+    PUNCT[rate][step % PUNCT[rate].len()]
+}
+
 pub fn punct_period(rate: usize) -> usize {
     PUNCT[rate].len()
 }
@@ -254,4 +259,20 @@ mod tests {
         let sent: usize = (0..steps).map(|s| PUNCT[6][s % 3].count_ones() as usize).sum();
         assert_eq!(sent, 130);
     }
+}
+
+/// Punctures mother-code bits (4 per step, as `crate::dab::fec::encode` makes them) with the
+/// same patterns as `depuncture`: what the transmitter sent
+pub fn puncture(mother: &[u8], rate: usize, steps: usize, tail: Option<&[u8; 6]>) -> Vec<u8> {
+    let pat = PUNCT[rate];
+    let mut out = Vec::with_capacity(2 * steps + 24);
+    for st in 0..steps + 6 {
+        let mask = if st < steps { pat[st % pat.len()] } else { tail.map_or(pat[st % pat.len()], |t| t[st - steps]) };
+        for b in 0..4 {
+            if mask & (1 << b) != 0 {
+                out.push(mother[4 * st + b]);
+            }
+        }
+    }
+    out
 }

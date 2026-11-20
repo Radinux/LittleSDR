@@ -14,6 +14,7 @@ fn main() {
     let mut rx = DrmReceiver::new(info.rate);
     let mut last = None;
     let mut last_sdc = None;
+    let (mut msc_total, mut hdr_ok, mut dir_good) = (0, 0, 0);
     for (i, c) in iq.chunks(info.rate as usize / 10).enumerate() {
         rx.process(c);
         if rx.last_fac.as_ref().map(|f| (f.service_id, f.language, f.msc_mode)) != last {
@@ -29,9 +30,24 @@ fn main() {
                 }
             }
         }
+        for m in rx.msc_frames.drain(..) {
+            // xHE-AAC audio super frame header: border count, reservoir, CRC-8
+            let bits: Vec<u8> = (0..8).map(|k| (m[0] >> (7 - k)) & 1).collect();
+            msc_total += 1;
+            if littlesdr::drm::fac::crc(&bits, 8) == m[1] as u32 {
+                hdr_ok += 1;
+                let n = (m[0] >> 4) as usize;
+                // Directory at the end: 12-bit index + 4-bit repeat of the count
+                let dir_ok = (0..n).all(|j| m[m.len() - 2 * (j + 1) + 1] as usize & 15 == n);
+                if dir_ok {
+                    dir_good += 1;
+                }
+            }
+        }
         if i % 50 == 49 {
             eprintln!("{:6.1} s  {}", (i + 1) as f64 / 10.0, rx.status());
         }
     }
     eprintln!("end: {}", rx.status());
+    eprintln!("MSC frames {msc_total}: audio super frame header CRC ok {hdr_ok}, directory consistent {dir_good}");
 }
