@@ -307,7 +307,11 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                 ft8Active = ft8Active,
                                 showFt8 = space == AppSpace.SDR,
                             )
-                            Header(stateHolder, onTune = vm::tune)
+                            // The frequency where tuning happens: Radio, Bands, Record (and LRPT); the
+                            // receiver, audio, memories, Morse and SSTV tabs don't need it
+                            if (space != AppSpace.SDR || tab == ControlTab.Radio || tab == ControlTab.Bands || tab == ControlTab.Record) {
+                                Header(stateHolder, onTune = vm::tune)
+                            }
                             Spacer(Modifier.height(8.dp))
                             if (space != AppSpace.SDR) {
                                 when {
