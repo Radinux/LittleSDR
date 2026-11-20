@@ -163,6 +163,7 @@ impl Source for KiwiSdr {
                     if buf.len() >= 1024 {
                         if st.lock().unwrap().message != "receiving" {
                             set_msg("receiving");
+                            eprintln!("[source] KiwiSDR {}: receiving, {:.3} kS/s around {:.3} kHz", self.site, rate / 1e3, center / 1e3);
                         }
                         let samples = std::mem::replace(&mut buf, Vec::with_capacity(2048));
                         if out.send(IqBlock { samples, rate, center, settle_ms: 0.0, time: None }).is_err() {
