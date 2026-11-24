@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed (monochrome) launcher icon: the radio silhouette, speaker / dial / knobs cut out -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:pivotX="54" android:pivotY="60" android:scaleX="0.84" android:scaleY="0.84">
+        <path android:pathData="M70,44 L77,31" android:strokeColor="#FFFFFFFF" android:strokeWidth="2.6" android:strokeLineCap="round" />
+        <path android:pathData="M74.6,31a2.4,2.4 0,1 0,4.8,0a2.4,2.4 0,1 0,-4.8,0z" android:fillColor="#FFFFFFFF" />
+        <path android:pathData="M33,42h42a9,9 0,0 1,9,9v22a9,9 0,0 1,-9,9h-42a9,9 0,0 1,-9,-9v-22a9,9 0,0 1,9,-9zM29.5,62a11.5,11.5 0,1 0,23.0,0a11.5,11.5 0,1 0,-23.0,0zM59,49h16a3,3 0,0 1,3,3v7a3,3 0,0 1,-3,3h-16a3,3 0,0 1,-3,-3v-7a3,3 0,0 1,3,-3zM56.8,72a4.2,4.2 0,1 0,8.4,0a4.2,4.2 0,1 0,-8.4,0zM68.8,72a4.2,4.2 0,1 0,8.4,0a4.2,4.2 0,1 0,-8.4,0z" android:fillColor="#FFFFFFFF" android:fillType="evenOdd" />
+        <path android:pathData="M30.5,57.4a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM30.5,62.0a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM30.5,66.6a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM35.1,52.8a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM35.1,57.4a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM35.1,62.0a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM35.1,66.6a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM35.1,71.2a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM39.7,52.8a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM39.7,57.4a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM39.7,62.0a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM39.7,66.6a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM39.7,71.2a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM44.3,52.8a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM44.3,57.4a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM44.3,62.0a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM44.3,66.6a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM44.3,71.2a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM48.9,57.4a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM48.9,62.0a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0zM48.9,66.6a1.3,1.3 0,1 0,2.6,0a1.3,1.3 0,1 0,-2.6,0z" android:fillColor="#FFFFFFFF" />
+        <path android:pathData="M66.5,50 V61" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" />
+    </group>
+</vector>
