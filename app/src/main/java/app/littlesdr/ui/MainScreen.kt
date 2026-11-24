@@ -40,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
@@ -140,6 +141,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val lrptImage by vm.lrptImage.collectAsStateWithLifecycle()
     val dabFound by vm.dabFound.collectAsStateWithLifecycle()
     val dabScan by vm.dabScan.collectAsStateWithLifecycle()
+    val kiwiRefused by vm.kiwiRefused.collectAsStateWithLifecycle()
     // Outside the SDR space, the receiver chip opens the source settings in place
     var showSource by rememberSaveable { mutableStateOf(false) }
     // Digital space: audio settings open from the player card
@@ -152,7 +154,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
             extra = {
                 if (selectedSource == "KiwiSDR") {
                     KiwiServerButton(
-                        servers = kiwiServers, loading = kiwiLoading, position = vm.operatorPosition(),
+                        servers = kiwiServers, loading = kiwiLoading, position = vm.operatorPosition(), refused = kiwiRefused,
                         onLoad = { vm.loadKiwiServers(it) },
                         onPick = { hp, name -> vm.setKiwiSite(hp, name) },
                     )
@@ -183,7 +185,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
         vm.setDisplayColors(cs.primary.copy(alpha = 0.35f).toArgb(), cs.primary.toArgb(), cs.surfaceContainerLowest.toArgb())
     }
     LaunchedEffect(error) {
-        error?.let { snackbar.showSnackbar(it); vm.clearError() }
+        error?.let { snackbar.showSnackbar(it, withDismissAction = true, duration = SnackbarDuration.Long); vm.clearError() }
     }
 
     Scaffold(

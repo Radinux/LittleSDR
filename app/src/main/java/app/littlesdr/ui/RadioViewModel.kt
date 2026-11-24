@@ -426,9 +426,13 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     fun setStep(mode: Mode, step: Double) { _steps.value = _steps.value + (mode to step) }
 
     // ------------------------------------------------------------------ playback
+    /** Set when the user stops: any other end of reception is the source giving up */
+    private var userStopped = false
+
     fun togglePlay() {
         viewModelScope.launch {
             if (state.value.playing) {
+                userStopped = true
                 Engine.stop()
             } else {
                 if (Engine.start()) {
@@ -806,6 +810,48 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private var kiwiJob: Job? = null
+
+    /** KiwiSDR servers that turned the app away (their application slots taken): marked in the picker */
+    private val kiwiPrefs = app.getSharedPreferences("kiwi", android.content.Context.MODE_PRIVATE)
+    private val _kiwiRefused = MutableStateFlow(kiwiPrefs.getStringSet("refused", emptySet())!!.toSet())
+    val kiwiRefused: StateFlow<Set<String>> = _kiwiRefused.asStateFlow()
+
+    private fun currentKiwiSite(): String? =
+        _sourceMenu.value.filterIsInstance<SmWidget.InputText>().firstOrNull { it.id == "kiwi_site" }?.value?.takeIf { it.isNotBlank() }
+
+    private fun markKiwi(site: String, refused: Boolean) {
+        val now = if (refused) _kiwiRefused.value + site else _kiwiRefused.value - site
+        if (now == _kiwiRefused.value) return
+        _kiwiRefused.value = now
+        kiwiPrefs.edit().putStringSet("refused", now).apply()
+    }
+
+    init {
+        // Reception that ends without the user stopping it: say why (server refusal, unplugged),
+        // and remember KiwiSDR servers that turn applications away. A server that then plays
+        // for 30 s is cleared again.
+        viewModelScope.launch {
+            var was = false
+            var cleared: Job? = null
+            state.map { it.playing }.distinctUntilChanged().collect { playing ->
+                cleared?.cancel()
+                if (playing) {
+                    if (selectedSource.value == "KiwiSDR") cleared = launch {
+                        delay(30_000)
+                        if (state.value.playing) currentKiwiSite()?.let { markKiwi(it, false) }
+                    }
+                } else if (was && !userStopped) {
+                    val why = Engine.sourceError()
+                    _error.value = if (why.isBlank()) "Réception interrompue" else why
+                    if (selectedSource.value == "KiwiSDR" && why.startsWith("Pas de place pour les applications")) {
+                        currentKiwiSite()?.let { markKiwi(it, true) }
+                    }
+                }
+                userStopped = false
+                was = playing
+            }
+        }
+    }
 
     /** Only the latest pick counts: an earlier, slower one is cancelled before it reaches the engine. */
     fun setKiwiSite(hostPort: String, name: String) {

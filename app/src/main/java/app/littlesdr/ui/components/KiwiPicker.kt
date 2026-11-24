@@ -62,6 +62,7 @@ fun KiwiServerButton(
     servers: List<KiwiServer>,
     loading: Boolean,
     position: GeoPoint?,
+    refused: Set<String> = emptySet(),
     onLoad: (force: Boolean) -> Unit,
     onPick: (hostPort: String, name: String) -> Unit,
 ) {
@@ -72,7 +73,7 @@ fun KiwiServerButton(
     }
     if (open) {
         KiwiPickerDialog(
-            servers = servers, loading = loading, position = position, onLoad = onLoad,
+            servers = servers, loading = loading, position = position, refused = refused, onLoad = onLoad,
             onPick = { hp, name -> onPick(hp, name); open = false },
             onDismiss = { open = false },
         )
@@ -88,6 +89,7 @@ private fun KiwiPickerDialog(
     servers: List<KiwiServer>,
     loading: Boolean,
     position: GeoPoint?,
+    refused: Set<String>,
     onLoad: (force: Boolean) -> Unit,
     onPick: (hostPort: String, name: String) -> Unit,
     onDismiss: () -> Unit,
@@ -102,14 +104,15 @@ private fun KiwiPickerDialog(
     val listState = rememberLazyListState()
 
     // Nearest first when the operator locator is known, otherwise by name
-    val shown = remember(servers, query, freeOnly, directOnly, position) {
+    val shown = remember(servers, query, freeOnly, directOnly, position, refused) {
         val q = query.trim().lowercase()
         servers.asSequence()
             .filter { !freeOnly || it.free }
             .filter { !directOnly || !it.proxied }
             .filter { q.isEmpty() || q in it.name.lowercase() || q in it.location.lowercase() || q in it.hostPort.lowercase() }
             .map { it to position?.let { p -> it.distanceKm(p.lat, p.lon) } }
-            .sortedWith(compareBy<Pair<KiwiServer, Double?>> { it.second ?: Double.MAX_VALUE }.thenBy { sortName(it.first) })
+            // Servers that already turned the app away go last
+            .sortedWith(compareBy<Pair<KiwiServer, Double?>> { it.first.hostPort in refused }.thenBy { it.second ?: Double.MAX_VALUE }.thenBy { sortName(it.first) })
             .toList()
     }
     LaunchedEffect(query, freeOnly, directOnly) { listState.scrollToItem(0) }
@@ -189,7 +192,7 @@ private fun KiwiPickerDialog(
 
                 LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f)) {
                     items(shown, key = { it.first.hostPort }) { (s, km) ->
-                        KiwiRow(s, km) { onPick(s.hostPort, s.name) }
+                        KiwiRow(s, km, s.hostPort in refused) { onPick(s.hostPort, s.name) }
                     }
                     if (shown.isEmpty() && !loading) {
                         item {
@@ -209,7 +212,7 @@ private fun KiwiPickerDialog(
 
 /** One line: name | place | distance | listeners. */
 @Composable
-private fun KiwiRow(s: KiwiServer, km: Double?, onClick: () -> Unit) {
+private fun KiwiRow(s: KiwiServer, km: Double?, refused: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -223,8 +226,13 @@ private fun KiwiRow(s: KiwiServer, km: Double?, onClick: () -> Unit) {
             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1.4f),
         )
         Text(
-            if (s.proxied) "${s.location} · proxy" else s.location,
-            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            when {
+                refused -> "a refusé l'app (places prises)"
+                s.proxied -> "${s.location} · proxy"
+                else -> s.location
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (refused) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
         )
         Text(

@@ -310,6 +310,8 @@ object Engine {
     }
 
     /** Reads the selected source's settings, optionally applying one user action first. */
+    suspend fun sourceError(): String = call { NativeBridge.sourceError() }
+
     suspend fun sourceMenu(action: SmAction? = null): List<SmWidget> = call {
         val json = if (action == null) {
             NativeBridge.sourceMenu("", 0, false, 0, 0f, "")

@@ -275,8 +275,15 @@ impl Service {
 
     // ------------------------------------------------------------------ playback
 
+    /// Receiving: started, and the source has not stopped by itself
     pub fn is_playing(&self) -> bool {
-        self.inner.lock().unwrap().running.is_some()
+        self.inner.lock().unwrap().running.as_ref().is_some_and(|r| !r.src.thread.is_finished())
+    }
+
+    /// Why the source stopped by itself (empty if it did not)
+    pub fn source_error(&self) -> String {
+        let i = self.inner.lock().unwrap();
+        i.running.as_ref().and_then(|r| r.src.error.lock().unwrap().clone()).unwrap_or_default()
     }
 
     /// Opens the source and starts the DSP thread. Err: why it could not start.
@@ -286,6 +293,12 @@ impl Service {
 
     pub fn try_start(&self) -> Result<(), String> {
         let mut i = self.inner.lock().unwrap();
+        if i.running.as_ref().is_some_and(|r| r.src.thread.is_finished()) {
+            // The source gave up on its own (refused, unplugged): clear it, start afresh
+            drop(i);
+            self.stop();
+            i = self.inner.lock().unwrap();
+        }
         if i.running.is_some() {
             return Ok(());
         }
@@ -458,7 +471,7 @@ impl Service {
         let off = i.freq - center;
         let level = self.shared.hist.lock().unwrap().level(span, off + lo, off + hi) as f64;
         let (sq_on, sq) = *self.shared.squelch.lock().unwrap();
-        [i.freq, center, span, off, bw, level, i.mode_idx as f64, i.running.is_some() as u8 as f64, sq_on as u8 as f64, sq as f64, i.volume as f64]
+        [i.freq, center, span, off, bw, level, i.mode_idx as f64, i.running.as_ref().is_some_and(|r| !r.src.thread.is_finished()) as u8 as f64, sq_on as u8 as f64, sq as f64, i.volume as f64]
     }
 
     // ------------------------------------------------------------------ demodulator

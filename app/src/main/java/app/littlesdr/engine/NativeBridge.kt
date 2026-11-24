@@ -22,6 +22,8 @@ object NativeBridge {
     @JvmStatic external fun sourceNames(): Array<String>
     @JvmStatic external fun selectedSource(): String
     @JvmStatic external fun selectSource(name: String)
+    /** Why the source stopped by itself (server refusal, unplugged...), empty if it did not */
+    @JvmStatic external fun sourceError(): String
     @JvmStatic external fun sourceMenu(diffId: String, type: Int, b: Boolean, i: Int, f: Float, s: String): String
 
     // playback / tuning

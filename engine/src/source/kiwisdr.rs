@@ -17,6 +17,9 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// Start of the error when a KiwiSDR turns applications away (the app remembers those servers)
+pub const KIWI_REFUSED: &str = "Pas de place pour les applications";
+
 /// IQ passband requested from the server (Hz each side)
 const HALF_BAND: f64 = 6_000.0;
 
@@ -63,7 +66,7 @@ impl Source for KiwiSdr {
         };
         let st = self.status.clone();
         let set_msg = |m: &str| st.lock().unwrap().message = m.to_string();
-        set_msg("connecting");
+        set_msg("connexion…");
         let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
         let mut ws = WebSocket::connect(&host, port, &format!("/kiwi/{ms}/SND"), Duration::from_secs(8))?;
         let mut center = cfg.center as f64;
@@ -80,7 +83,7 @@ impl Source for KiwiSdr {
             ws.send_text(&c)?;
         }
         st.lock().unwrap().connected = true;
-        set_msg("connected, waiting for data");
+        set_msg("connecté, en attente des données");
         let mut rate = 12_000.0;
         let mut last_keepalive = Instant::now();
         let mut buf: Vec<C32> = Vec::with_capacity(2048);
@@ -115,7 +118,7 @@ impl Source for KiwiSdr {
                 Ok(m) => m,
                 Err(e) => {
                     st.lock().unwrap().connected = false;
-                    set_msg(&format!("disconnected: {e}"));
+                    set_msg(&format!("déconnecté : {e}"));
                     return Err(e);
                 }
             };
@@ -130,26 +133,31 @@ impl Source for KiwiSdr {
                         rate = r;
                         st.lock().unwrap().rate = r;
                     }
+                    // "too_busy=N": N = channels its admin allows to applications (not to its web
+                    // page), all taken. 0 = its web page only. Often N slots held for good by the
+                    // owner's own decoders (WSPR, FT8 skimmers): the server lets anyone in for
+                    // ~10 s, then cuts. The admin's choice: reported, not worked around.
                     match msg_value(&text, "too_busy") {
-                        // Number of channels its admin allows to applications: 0 = its own web
-                        // page only (the server cuts other clients after ~10 s)
                         Some("0") => {
-                            set_msg("refuses applications");
-                            return Err("this KiwiSDR only accepts its own web page, not applications: pick another one".into());
+                            set_msg("refuse les applications");
+                            return Err(format!("{KIWI_REFUSED} : ce KiwiSDR n'accepte que sa propre page web. Choisis-en un autre.").into());
                         }
-                        Some(_) => {
-                            set_msg("server full (too busy)");
-                            return Err("KiwiSDR full: all its channels are in use".into());
+                        Some(n) => {
+                            set_msg("places pour applications prises");
+                            return Err(format!(
+                                "{KIWI_REFUSED} : ce KiwiSDR ne laisse que {n} connexion(s) aux applications et elles sont prises, souvent par ses propres décodeurs automatiques. Choisis-en un autre."
+                            )
+                            .into());
                         }
                         None => {}
                     }
                     if msg_value(&text, "badp").is_some_and(|v| v == "1") {
-                        set_msg("password needed");
-                        return Err("KiwiSDR needs a password".into());
+                        set_msg("mot de passe requis");
+                        return Err("Ce KiwiSDR demande un mot de passe".into());
                     }
                     if msg_value(&text, "down").is_some() {
-                        set_msg("server down");
-                        return Err("KiwiSDR is down".into());
+                        set_msg("serveur arrêté");
+                        return Err("Ce KiwiSDR est arrêté".into());
                     }
                 }
                 b"SND" if b.len() >= 20 && b[3] & 0x08 != 0 => {
@@ -162,7 +170,7 @@ impl Source for KiwiSdr {
                     }
                     if buf.len() >= 1024 {
                         if st.lock().unwrap().message != "receiving" {
-                            set_msg("receiving");
+                            set_msg("réception");
                             eprintln!("[source] KiwiSDR {}: receiving, {:.3} kS/s around {:.3} kHz", self.site, rate / 1e3, center / 1e3);
                         }
                         let samples = std::mem::replace(&mut buf, Vec::with_capacity(2048));

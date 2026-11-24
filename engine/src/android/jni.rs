@@ -76,6 +76,12 @@ pub extern "system" fn Java_app_littlesdr_engine_NativeBridge_selectSource(mut e
 }
 
 #[no_mangle]
+pub extern "system" fn Java_app_littlesdr_engine_NativeBridge_sourceError(mut env: JNIEnv, _: JClass) -> jstring {
+    let v = svc().map(|v| v.source_error()).unwrap_or_default();
+    js(&mut env, &v)
+}
+
+#[no_mangle]
 pub extern "system" fn Java_app_littlesdr_engine_NativeBridge_sourceMenu(mut env: JNIEnv, _: JClass, id: JString, _t: jint, b: jboolean, i: jint, f: jfloat, text: JString) -> jstring {
     let (id, text) = (s(&mut env, &id), s(&mut env, &text));
     let v = svc().map(|v| v.source_menu(&id, b != JNI_FALSE, i, f, &text)).unwrap_or_else(|| "[]".into());

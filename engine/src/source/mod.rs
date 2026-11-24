@@ -60,6 +60,8 @@ pub struct SourceConfig {
 pub struct SourceHandle {
     pub ctl: Sender<SourceCtl>,
     pub thread: JoinHandle<()>,
+    /// Why the source stopped by itself (server refusal, unplugged...), once it has
+    pub error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 pub trait Source: Send + 'static {
@@ -71,15 +73,18 @@ pub trait Source: Send + 'static {
 pub fn spawn(source: Box<dyn Source>, cfg: SourceConfig, out: SyncSender<IqBlock>) -> SourceHandle {
     let (tx, rx) = std::sync::mpsc::channel();
     let name = source.name();
+    let error = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let err = error.clone();
     let thread = std::thread::Builder::new()
         .name(format!("source {name}"))
         .spawn(move || {
             if let Err(e) = source.run(cfg, out, rx) {
                 eprintln!("[source] {name}: {e}");
+                *err.lock().unwrap() = Some(e.to_string());
             }
         })
         .expect("spawn source thread");
-    SourceHandle { ctl: tx, thread }
+    SourceHandle { ctl: tx, thread, error }
 }
 
 /// RTL-SDR bytes (unsigned 8-bit I, Q) to complex samples.
