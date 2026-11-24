@@ -96,6 +96,7 @@ fun CarRadioScreen(
     cornerRadius: Dp,
     catalog: List<app.littlesdr.ui.RadioViewModel.CatalogStation>,
     onCatalog: (app.littlesdr.ui.RadioViewModel.CatalogStation) -> Unit,
+    afSearching: Boolean,
     onPlay: () -> Unit,
     onStep: (Int) -> Unit,
     onService: (DabService) -> Unit,
@@ -112,7 +113,7 @@ fun CarRadioScreen(
         val portrait = maxHeight > maxWidth
         val display = @Composable { m: Modifier ->
             CarDisplay(
-                d, slide, frequency, playing, playEnabled, af, source, usb, space, cornerRadius,
+                d, slide, frequency, playing, playEnabled, af, afSearching, source, usb, space, cornerRadius,
                 onPlay, onStep, onAf, onSource, onSettings, onSpace, m,
             )
         }
@@ -162,6 +163,7 @@ private fun CarDisplay(
     playing: Boolean,
     playEnabled: Boolean,
     af: Boolean,
+    afSearching: Boolean,
     source: String,
     usb: Boolean,
     space: AppSpace,
@@ -205,10 +207,11 @@ private fun CarDisplay(
                 CarArtwork(slide, d.playing, Modifier.fillMaxHeight().aspectRatio(1f, matchHeightConstraintsFirst = true))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     val ch = dabChannelAt(frequency)
+                    val where = listOfNotNull(ch?.name ?: String.format(Locale.FRANCE, "%.3f MHz", frequency / 1e6), d.ensemble.ifBlank { null }).joinToString(" · ")
                     Text(
-                        listOfNotNull(ch?.name ?: String.format(Locale.FRANCE, "%.3f MHz", frequency / 1e6), d.ensemble.ifBlank { null }).joinToString(" · "),
+                        if (afSearching) "AF : recherche de la station… ($where)" else where,
                         style = MaterialTheme.typography.titleMedium,
-                        color = cs.onSurfaceVariant,
+                        color = if (afSearching) cs.primary else cs.onSurfaceVariant,
                         maxLines = 1,
                         modifier = Modifier.basicMarquee(),
                     )

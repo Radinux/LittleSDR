@@ -145,6 +145,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val kiwiRefused by vm.kiwiRefused.collectAsStateWithLifecycle()
     val dabAf by vm.dabAf.collectAsStateWithLifecycle()
     val dabCatalog by vm.catalog.collectAsStateWithLifecycle()
+    val afSearching by vm.afSearching.collectAsStateWithLifecycle()
     // Outside the SDR space, the receiver chip opens the source settings in place
     var showSource by rememberSaveable { mutableStateOf(false) }
     // Digital space: audio settings open from the player card
@@ -213,7 +214,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                     playing = playing, playEnabled = ready,
                     found = dabFound, scan = dabScan, af = dabAf,
                     source = selectedSource, usb = usb != null, space = space, cornerRadius = corners.innerRadius,
-                    catalog = dabCatalog, onCatalog = vm::playCatalog,
+                    catalog = dabCatalog, onCatalog = vm::playCatalog, afSearching = afSearching,
                     onPlay = vm::togglePlay, onStep = vm::dabStep,
                     onService = vm::dabSelect, onTune = vm::tuneDab, onScan = vm::scanDab, onAf = vm::setDabAf,
                     onSource = { showSource = true }, onSettings = onOpenSettings,

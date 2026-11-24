@@ -418,6 +418,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (d.synced && d.playing != null) {
             armed = true
+            followRounds = 0
             lostSince = 0
             d.sid?.let { followSid = it }
             lastStation = d.playing
@@ -433,7 +434,21 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     /** The multiplex is gone: try the frequencies it announced for the station, then the
      *  channels where the station was heard before. The engine keeps the station asked for,
      *  so it starts by itself wherever its SId is found. */
+    private var followRounds = 0
+    private val _afSearching = MutableStateFlow(false)
+    /** Station following at work (the channel changes by itself) */
+    val afSearching: StateFlow<Boolean> = _afSearching.asStateFlow()
+
     private suspend fun follow() {
+        _afSearching.value = true
+        try {
+            followRound()
+        } finally {
+            _afSearching.value = false
+        }
+    }
+
+    private suspend fun followRound() {
         val sid = followSid ?: return
         val here = state.value.vfoFrequency
         val candidates = (lastAf.map { it.toDouble() } +
@@ -457,7 +472,15 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         if (lastFm.isNotEmpty() && fmBackup(sid, here)) return
         // Nowhere for now: back where it was, try again in 20 s
         if (candidates.isNotEmpty()) tune(here)
-        lostSince = System.currentTimeMillis() + 16_000
+        // Three rounds without the station: stop (it comes back when a station plays)
+        followRounds++
+        if (followRounds >= 3) {
+            armed = false
+            followRounds = 0
+            _error.value = "AF : « ${lastStation ?: sid} » introuvable, suivi arrêté. Choisis une station pour le relancer."
+        } else {
+            lostSince = System.currentTimeMillis() + 16_000
+        }
     }
 
     /** FM fallback: the announced FM frequencies, the one whose RDS PI is the SId first (the
@@ -545,6 +568,10 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
             scanJob?.cancel()
             return
         }
+        // A scan is not "losing the station": no following during it or after it
+        followJob?.cancel()
+        armed = false
+        lostSince = 0
         scanJob = viewModelScope.launch {
             if (!state.value.playing && !Engine.start()) {
                 _error.value = "Impossible de démarrer la source pour la recherche"
@@ -573,6 +600,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                 }
             } finally {
                 _dabScan.value = null
+                armed = false
                 if (found.isNotEmpty()) {
                     // A scan replaces everything: no French multiplex left in Germany
                     _dabFound.value = found
@@ -671,6 +699,10 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             if (state.value.playing) {
                 userStopped = true
+                // Stop means stop: no scan or station following carries on behind
+                scanJob?.cancel()
+                followJob?.cancel()
+                armed = false
                 Engine.stop()
             } else {
                 if (Engine.start()) {
