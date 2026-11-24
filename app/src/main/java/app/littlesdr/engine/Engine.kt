@@ -27,8 +27,8 @@ enum class Mode(val label: String) {
     /** Sensible bandwidth slider range (Hz) per mode. */
     val bandwidthRange: ClosedFloatingPointRange<Float>
         get() = when (this) {
-            NFM -> 1_000f..50_000f
-            WFM -> 50_000f..250_000f
+            NFM -> 3_000f..25_000f
+            WFM -> 30_000f..220_000f
             AM -> 1_000f..30_000f
             DSB -> 1_000f..20_000f
             USB, LSB -> 500f..6_000f

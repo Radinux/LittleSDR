@@ -85,8 +85,9 @@ impl Mode {
     /// Half the channel width kept by the front end (the demodulator narrows it further)
     pub fn half_band(self) -> f64 {
         match self {
-            Mode::Wfm => 100_000.0,
-            Mode::Nfm => 8_000.0,
+            // the widest channel filter (220 kHz) fits; the IF (240 kHz) keeps aliases outside it
+            Mode::Wfm => 110_000.0,
+            Mode::Nfm => 13_000.0,
             Mode::Am => 10_000.0,
             Mode::Usb | Mode::Lsb | Mode::Cw => 5_000.0,
             // 72 ksym/s, roll-off 0.6: +-57.6 kHz, plus Doppler (+-3.5 kHz)
@@ -115,10 +116,12 @@ impl Mode {
             _ => 5_000.0,
         }
     }
-    /// Default channel bandwidth (Hz), None when it is fixed (FM)
+    /// Default channel bandwidth (Hz), None when it is fixed (digital modes)
     pub fn default_bandwidth(self) -> Option<f64> {
         match self {
-            Mode::Wfm | Mode::Nfm | Mode::Lrpt | Mode::Dab | Mode::Drm | Mode::Adsb => None,
+            Mode::Lrpt | Mode::Dab | Mode::Drm | Mode::Adsb => None,
+            Mode::Wfm => Some(180_000.0),
+            Mode::Nfm => Some(12_500.0),
             Mode::Am => Some(9_000.0),
             Mode::Usb | Mode::Lsb => Some(2_700.0),
             Mode::Cw => Some(500.0),
@@ -127,6 +130,8 @@ impl Mode {
     /// Accepted bandwidth range
     pub fn bandwidth_range(self) -> (f64, f64) {
         match self {
+            Mode::Wfm => (30_000.0, 220_000.0),
+            Mode::Nfm => (3_000.0, 25_000.0),
             Mode::Am => (2_000.0, 16_000.0),
             Mode::Usb | Mode::Lsb => (500.0, 4_000.0),
             Mode::Cw => (50.0, 1_500.0),
@@ -226,8 +231,9 @@ impl Front {
 
 /// Demodulation, kept across rate changes
 enum Back {
-    Wfm { fm: FmDemod, stereo: StereoDecoder, deemph: [Deemphasis; 2], rds: Box<RdsDecoder> },
-    Nfm { fm: FmDemod, audio: DecimFir<f32> },
+    /// `chan`: the channel filter (bandwidth setting) before the discriminator
+    Wfm { chan: DecimFir<C32>, fm: FmDemod, stereo: StereoDecoder, deemph: [Deemphasis; 2], rds: Box<RdsDecoder> },
+    Nfm { chan: DecimFir<C32>, fm: FmDemod, audio: DecimFir<f32> },
     Am(AmDemod),
     Ssb(SsbDemod),
     /// Silent: `rem` carries the IF samples not yet turned into (silent) audio frames
@@ -246,6 +252,7 @@ impl Back {
                 let mut st = StereoDecoder::new(ifr, (ifr / AUDIO_RATE) as usize);
                 st.enabled = stereo;
                 Back::Wfm {
+                    chan: channel_filter(bw, ifr),
                     fm: FmDemod::new(ifr, mode.deviation()),
                     stereo: st,
                     deemph: [Deemphasis::new(AUDIO_RATE, 50e-6), Deemphasis::new(AUDIO_RATE, 50e-6)],
@@ -253,6 +260,7 @@ impl Back {
                 }
             }
             Mode::Nfm => Back::Nfm {
+                chan: channel_filter(bw, ifr),
                 fm: FmDemod::new(ifr, mode.deviation()),
                 audio: DecimFir::new(lowpass(3_900.0 / ifr, 900.0 / ifr), 1),
             },
@@ -268,8 +276,10 @@ impl Back {
     fn process(&mut self, iq: &[C32], out: &mut Vec<Frame>) {
         let mut demod = Vec::with_capacity(iq.len());
         match self {
-            Back::Wfm { fm, stereo, deemph, rds } => {
-                fm.process(iq, &mut demod);
+            Back::Wfm { chan, fm, stereo, deemph, rds } => {
+                let mut c = Vec::with_capacity(iq.len());
+                chan.process(iq, &mut c);
+                fm.process(&c, &mut demod);
                 rds.process(&demod);
                 let start = out.len();
                 stereo.process(&demod, out);
@@ -281,8 +291,10 @@ impl Back {
                     *f = Frame::new(l, r);
                 }
             }
-            Back::Nfm { fm, audio } => {
-                fm.process(iq, &mut demod);
+            Back::Nfm { chan, fm, audio } => {
+                let mut c = Vec::with_capacity(iq.len());
+                chan.process(iq, &mut c);
+                fm.process(&c, &mut demod);
                 let mut a = Vec::with_capacity(demod.len());
                 audio.process(&demod, &mut a);
                 out.extend(a.into_iter().map(Frame::mono));
@@ -309,6 +321,11 @@ impl Back {
             }
         }
     }
+}
+
+/// FM channel filter: `bw` wide (Hz) at the IF rate
+fn channel_filter(bw: f64, ifr: f64) -> DecimFir<C32> {
+    DecimFir::new(lowpass(bw / 2.0 / ifr, (0.12 * bw).max(1_000.0) / ifr), 1)
 }
 
 fn now_s() -> f64 {
@@ -542,9 +559,11 @@ impl Engine {
                 }
                 let bw = bw.clamp(lo, hi);
                 self.bandwidth[self.mode.index()] = bw;
+                let ifr = self.mode.if_rate();
                 match &mut self.back {
                     Back::Am(d) => d.set_bandwidth(bw),
                     Back::Ssb(d) => d.set_bandwidth(bw),
+                    Back::Wfm { chan, .. } | Back::Nfm { chan, .. } => *chan = channel_filter(bw, ifr),
                     _ => {}
                 }
             }
@@ -746,8 +765,7 @@ impl Engine {
     pub fn channel(&self) -> (f64, f64) {
         let bw = self.bandwidth[self.mode.index()];
         match self.mode {
-            Mode::Wfm => (-90e3, 90e3),
-            Mode::Nfm => (-6.25e3, 6.25e3),
+            Mode::Wfm | Mode::Nfm => (-bw / 2.0, bw / 2.0),
             Mode::Am | Mode::Cw => (-bw / 2.0, bw / 2.0),
             Mode::Usb => (SSB_LOW_CUT, SSB_LOW_CUT + bw),
             Mode::Lsb => (-SSB_LOW_CUT - bw, -SSB_LOW_CUT),
@@ -1146,4 +1164,77 @@ fn utc_stamp() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + (m <= 2) as i64;
     format!("{y:04}{m:02}{d:02}-{:02}{:02}", rem / 3600, rem % 3600 / 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FM at the tuned frequency (1 kHz tone, 75 kHz deviation) plus `adjacent`: a stronger FM
+    /// station 150 kHz up (5 kHz tone). Returns the sound's power at 1 kHz and at 5 kHz.
+    fn fm_tones(bw: Option<f64>, adjacent: bool) -> (f64, f64) {
+        let rate = 1_200_000.0;
+        let mut e = Engine::new(Mode::Wfm, 100e6);
+        e.control(&EngineCtl::Stereo(false));
+        if let Some(b) = bw {
+            e.control(&EngineCtl::Bandwidth(b));
+        }
+        let (mut p1, mut p2) = (0.0f64, 0.0f64);
+        let mut out = Vec::new();
+        let mut audio = Vec::new();
+        for blk in 0..40 {
+            let n = 12_000;
+            let s: Vec<C32> = (0..n)
+                .map(|k| {
+                    let t = (blk * n + k) as f64 / rate;
+                    let tau = std::f64::consts::TAU;
+                    // phase of FM = 2 pi dev / fm * sin(2 pi fm t)
+                    let a = 75e3 / 1e3 * (tau * 1e3 * t).sin();
+                    let mut z = C32::new(a.cos() as f32, a.sin() as f32) * 0.1;
+                    if adjacent {
+                        let b = tau * 150e3 * t + 75e3 / 5e3 * (tau * 5e3 * t).sin();
+                        z += C32::new(b.cos() as f32, b.sin() as f32) * 0.5;
+                    }
+                    z
+                })
+                .collect();
+            out.clear();
+            e.process(IqBlock { samples: s, rate, center: 100e6, settle_ms: 0.0, time: None }, &mut out);
+            if blk > 10 {
+                audio.extend(out.iter().map(|f| f.l as f64));
+            }
+        }
+        // Goertzel-like correlation at both tones
+        for (f, p) in [(1e3, &mut p1), (5e3, &mut p2)] {
+            let (mut c, mut s) = (0.0, 0.0);
+            for (k, v) in audio.iter().enumerate() {
+                let ph = std::f64::consts::TAU * f * k as f64 / AUDIO_RATE;
+                c += v * ph.cos();
+                s += v * ph.sin();
+            }
+            *p = (c * c + s * s) / (audio.len() as f64).powi(2);
+        }
+        (p1, p2)
+    }
+
+    #[test]
+    fn fm_bandwidth_is_set() {
+        let mut e = Engine::new(Mode::Wfm, 100e6);
+        assert_eq!(e.channel(), (-90e3, 90e3));
+        e.control(&EngineCtl::Bandwidth(120e3));
+        assert_eq!(e.channel(), (-60e3, 60e3));
+        e.control(&EngineCtl::Mode(Mode::Nfm));
+        assert_eq!(e.channel(), (-6.25e3, 6.25e3));
+        e.control(&EngineCtl::Bandwidth(20e3));
+        assert_eq!(e.channel(), (-10e3, 10e3));
+
+        // The station plays through the default filter; a narrow one keeps the strong
+        // neighbour 150 kHz away out of the sound, a wide one lets it in
+        let (clean, _) = fm_tones(None, false);
+        let (wanted, leak_wide) = fm_tones(Some(220e3), true);
+        let (wanted_n, leak_narrow) = fm_tones(Some(100e3), true);
+        assert!(clean > 1e-4, "no tone: {clean}");
+        assert!(leak_narrow < leak_wide / 10.0, "narrow {leak_narrow:e} vs wide {leak_wide:e}");
+        assert!(wanted_n > wanted, "{wanted_n:e} {wanted:e}");
+    }
 }
