@@ -42,6 +42,8 @@ pub fn mode_of(i: i32) -> Mode {
 struct Digital {
     label: String,
     slide: Vec<u8>,
+    /// MOT content name of the slide ("logo.png", "cover_1234.jpg"...)
+    slide_name: String,
     slide_id: u64,
     drm_text: String,
 }
@@ -368,6 +370,7 @@ impl Service {
                             }
                             if let Some(s) = slide {
                                 d.slide = s.data;
+                                d.slide_name = s.name;
                                 d.slide_id += 1;
                             }
                             if let Some(t) = text {
@@ -700,7 +703,7 @@ impl Service {
                     "sid": sid.map(|s| format!("{s:04X}")), "af": af, "fm": fm,
                     "ensemble": rx.fic.ensemble.label.trim(), "services": services,
                     "playing": rx.playing().map(|s| s.label.trim().to_string()), "bitrate": bitrate,
-                    "text": d.label, "slide": if d.slide.is_empty() { 0 } else { d.slide_id }, "status": rx.describe(),
+                    "text": d.label, "slide": if d.slide.is_empty() { 0 } else { d.slide_id }, "slideName": d.slide_name, "status": rx.describe(),
                 })
             } else if let Some(rx) = e.drm() {
                 json!({"kind": "drm", "synced": rx.synced(), "station": rx.label(), "info": rx.station(), "text": d.drm_text, "status": rx.status()})

@@ -31,6 +31,8 @@ data class DigitalState(
     val text: String = "",
     /** Slideshow picture counter (0: none yet) */
     val slide: Long = 0,
+    /** Name of the slideshow picture as the station sent it ("logo.png", "cover.jpg"...) */
+    val slideName: String = "",
     /** DRM station label, and label + audio coding */
     val station: String = "",
     val info: String = "",

@@ -181,8 +181,10 @@ private fun SignalBadge(playing: Boolean, d: DigitalState) {
 internal fun stationLogo(name: String?): ImageBitmap? {
     val on by app.littlesdr.data.StationLogos.enabled.collectAsState()
     val mobile by app.littlesdr.data.StationLogos.mobileData.collectAsState()
-    val logo by produceState<ImageBitmap?>(null, name, on, mobile) {
-        value = if (name.isNullOrBlank() || !on) null else app.littlesdr.data.StationLogos.get(name)
+    val rev by app.littlesdr.data.StationLogos.revision.collectAsState()
+    val logo by produceState<ImageBitmap?>(null, name, on, mobile, rev) {
+        // Online logos off: only the ones taken from the multiplex (no internet needed)
+        value = if (name.isNullOrBlank()) null else app.littlesdr.data.StationLogos.get(name)
     }
     return logo
 }

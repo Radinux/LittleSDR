@@ -659,6 +659,8 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                         if (d.slide != lastSlide) {
                             lastSlide = d.slide
                             _slide.value = if (d.slide == 0L) null else Engine.dabSlide().let { b ->
+                                // A station logo among the slides: kept for when none is online
+                                if (sp == AppSpace.DAB) app.littlesdr.data.StationLogos.offerSlide(d.playing, b, d.slideName, d.text)
                                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                                     android.graphics.BitmapFactory.decodeByteArray(b, 0, b.size)?.asImageBitmap()
                                 }

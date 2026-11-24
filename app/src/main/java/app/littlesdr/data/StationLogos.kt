@@ -46,6 +46,42 @@ object StationLogos {
     private val _enabled = MutableStateFlow(true)
     /** Fetch logos from the internet at all */
     val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
+    /** Bumps when a logo appears without a request (taken from the multiplex) */
+    private val _revision = MutableStateFlow(0)
+    val revision: StateFlow<Int> = _revision.asStateFlow()
+
+    /** Per station: slides seen (content hash -> programme texts it was shown under) */
+    private val slidesSeen = HashMap<String, HashMap<String, MutableList<String>>>()
+
+    /**
+     * A slideshow picture from the multiplex: kept as the station's logo when it really is
+     * one, never an album cover. Either its name says "logo", or the same picture keeps
+     * coming back across different songs (3 times, under 2 programme texts at least): a
+     * cover goes with one song, a logo with all of them. Used only when the directory
+     * online has no logo for the station.
+     */
+    suspend fun offerSlide(station: String?, bytes: ByteArray, name: String, text: String) {
+        if (!::app.isInitialized || station.isNullOrBlank() || bytes.isEmpty()) return
+        val hash = MessageDigest.getInstance("SHA-1").digest(bytes).joinToString("") { "%02x".format(it) }
+        val isLogo = lock.withLock {
+            val seen = slidesSeen.getOrPut(station) { HashMap() }.getOrPut(hash) { mutableListOf() }
+            seen += text.trim()
+            name.contains("logo", ignoreCase = true) || (seen.size >= 3 && seen.distinct().size >= 2)
+        }
+        if (!isLogo) return
+        val k = key(station, country())
+        val mux = File(dir, "$k.mux")
+        if (File(dir, "$k.img").exists() || (mux.exists() && mux.length() == bytes.size.toLong())) return
+        val bmp = withContext(Dispatchers.IO) {
+            decode(bytes)?.also { mux.writeBytes(bytes) }
+        } ?: return
+        lock.withLock {
+            // The online one wins when there is one; this fills the gap otherwise
+            if (!File(dir, "$k.img").exists()) memory[k] = bmp
+        }
+        _revision.value++
+    }
+
     private val _mobileData = MutableStateFlow(false)
     /** Also over mobile data (metered networks) */
     val mobileData: StateFlow<Boolean> = _mobileData.asStateFlow()
@@ -96,21 +132,23 @@ object StationLogos {
         lock.withLock { if (memory.containsKey(k)) return memory[k] }
         val bmp = withContext(Dispatchers.IO) { load(name, cc, k) }
         // A miss caused by the network rules is not remembered: retried later on Wi-Fi
-        if (bmp != null || File(dir, "$k.none").exists()) lock.withLock { memory[k] = bmp }
+        if (bmp != null || File(dir, "$k.none").exists()) lock.withLock { if (memory[k] == null) memory[k] = bmp }
         return bmp
     }
 
     private fun load(name: String, cc: String, k: String): ImageBitmap? {
         val img = File(dir, "$k.img")
         if (img.exists()) return decode(img.readBytes())
+        // The logo the station itself sent on the multiplex, when the directory has none
+        val mux = File(dir, "$k.mux").takeIf { it.exists() }?.let { decode(it.readBytes()) }
         val none = File(dir, "$k.none")
-        if (none.exists() && System.currentTimeMillis() - none.lastModified() < MISS_TTL_MS) return null
-        if (!mayDownload()) return null
+        if (none.exists() && System.currentTimeMillis() - none.lastModified() < MISS_TTL_MS) return mux
+        if (!mayDownload()) return mux
         val url = find(name, cc) ?: find(name, null)
         val bytes = url?.let { download(it) }
         val bmp = bytes?.let { decode(it) }
         if (bmp != null) img.writeBytes(bytes) else none.writeText("")
-        return bmp
+        return bmp ?: mux
     }
 
     /** Best favicon URL for a name: exact name first, then a name starting with it; country first */
