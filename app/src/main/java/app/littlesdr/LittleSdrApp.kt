@@ -18,6 +18,7 @@ class LittleSdrApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        app.littlesdr.data.StationLogos.init(this)
         store = AppStore(this)
         eibi = EiBiRepository(this)
         usb = UsbSdrManager(this).also { it.register() }

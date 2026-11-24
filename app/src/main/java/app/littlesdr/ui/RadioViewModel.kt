@@ -266,6 +266,11 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     /** Switches the interface; each space comes back to its own mode and frequency */
     fun setSpace(target: AppSpace) {
         if (target == _space.value) return
+        // An FM fallback belongs to the DAB screen: it ends with it
+        if (_fmBackup.value != null) {
+            _fmBackup.value = null
+            followJob?.cancel()
+        }
         rememberCurrent()
         _space.value = target
         spacePrefs.edit().putInt("space", target.ordinal).apply()
@@ -299,6 +304,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     fun dabSelect(s: DabService) {
         _slide.value = null
         followSid = s.sid
+        leaveFmBackup()
         Engine.dabSelect(s.sid)
     }
 
@@ -325,12 +331,29 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     private var lostSince = 0L
     private var noSignalSince = 0L
     private var lastAf: List<Long> = emptyList()
+    private var lastFm: List<Long> = emptyList()
+    private var lastStation: String? = null
+
+    /** FM fallback in progress: where on FM, and the DAB channel it came from */
+    data class FmBackup(val fmHz: Double, val dabHz: Double, val sid: String, val station: String?)
+    private val _fmBackup = MutableStateFlow<FmBackup?>(null)
+    val fmBackup: StateFlow<FmBackup?> = _fmBackup.asStateFlow()
+    private var nextDabTry = 0L
 
     /** Channel picked by the user: no following until a station plays there */
     fun tuneDab(hz: Double) {
         armed = false
         lostSince = 0
+        leaveFmBackup()
         tune(hz)
+    }
+
+    /** Back to DAB from the FM fallback (the user picked a channel or a station) */
+    private fun leaveFmBackup() {
+        if (_fmBackup.value == null) return
+        _fmBackup.value = null
+        Engine.setMode(Mode.DAB)
+        followSid?.let { Engine.dabSelect(it) }
     }
 
     private fun saveDab() {
@@ -368,7 +391,9 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
             armed = true
             lostSince = 0
             d.sid?.let { followSid = it }
+            lastStation = d.playing
             if (d.af.isNotEmpty()) lastAf = d.af
+            if (d.fm.isNotEmpty()) lastFm = d.fm
             return
         }
         if (!armed || !_dabAf.value || followSid == null) return
@@ -399,9 +424,68 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        // No DAB anywhere: the same programme on FM, if the multiplex announced it
+        if (lastFm.isNotEmpty() && fmBackup(sid, here)) return
         // Nowhere for now: back where it was, try again in 20 s
         if (candidates.isNotEmpty()) tune(here)
         lostSince = System.currentTimeMillis() + 16_000
+    }
+
+    /** FM fallback: the announced FM frequencies, the one whose RDS PI is the SId first (the
+     *  same programme for sure), else the strongest. False if nothing could be heard. */
+    private suspend fun fmBackup(sid: String, dabHz: Double): Boolean {
+        Engine.setMode(Mode.WFM)
+        var best: Double? = null
+        var bestDb = -200f
+        for (hz in lastFm.map { it.toDouble() }) {
+            tune(hz)
+            delay(2_500)
+            if (Engine.rds().pi.equals(sid, ignoreCase = true)) {
+                best = hz
+                break
+            }
+            if (signalDb.value > bestDb) {
+                bestDb = signalDb.value
+                best = hz
+            }
+        }
+        if (best == null) {
+            Engine.setMode(Mode.DAB)
+            Engine.dabSelect(sid)
+            tune(dabHz)
+            return false
+        }
+        tune(best)
+        _fmBackup.value = FmBackup(best, dabHz, sid, lastStation)
+        nextDabTry = System.currentTimeMillis() + 60_000
+        _error.value = "Repli FM : « ${lastStation ?: sid} » sur ${String.format(java.util.Locale.FRANCE, "%.1f MHz", best / 1e6)}"
+        return true
+    }
+
+    /** On FM fallback: once a minute, look for the station on DAB again and go back if found */
+    private suspend fun tryBackToDab() {
+        val b = _fmBackup.value ?: return
+        nextDabTry = System.currentTimeMillis() + 60_000
+        Engine.setMode(Mode.DAB)
+        Engine.dabSelect(b.sid)
+        val tries = (listOf(b.dabHz) + lastAf.map { it.toDouble() } +
+            dabServices.filter { b.sid in it.value }.keys.mapNotNull { n -> DAB_CHANNELS.firstOrNull { it.name == n }?.hz }).distinct()
+        for (hz in tries.take(4)) {
+            tune(hz)
+            repeat(10) {
+                delay(500)
+                val d = Engine.digital()
+                if (d.synced && d.playing != null) {
+                    _fmBackup.value = null
+                    lostSince = 0
+                    _error.value = "Retour en DAB : « ${d.playing} »"
+                    return
+                }
+            }
+        }
+        // Still nothing on DAB: back to FM
+        Engine.setMode(Mode.WFM)
+        tune(b.fmHz)
     }
 
     fun setLrptOqpsk(on: Boolean) = Engine.lrptSet("oqpsk", if (on) 1.0 else 0.0)
@@ -497,6 +581,21 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
             if (Engine.ready.value && state.value.playing) {
                 when (sp) {
                     AppSpace.DAB, AppSpace.DRM -> {
+                        val fm = _fmBackup.value
+                        if (sp == AppSpace.DAB && fm != null) {
+                            // FM fallback: the card shows the station and its RDS text
+                            val r = Engine.rds()
+                            _digital.value = DigitalState(
+                                kind = "dab", synced = true, playing = fm.station ?: r.ps.ifBlank { null },
+                                text = r.rt, sid = fm.sid,
+                                ensemble = "FM ${String.format(java.util.Locale.FRANCE, "%.1f", fm.fmHz / 1e6)} MHz (repli)",
+                            )
+                            if (System.currentTimeMillis() > nextDabTry && followJob?.isActive != true) {
+                                followJob = viewModelScope.launch { tryBackToDab() }
+                            }
+                            delay(700)
+                            continue
+                        }
                         val d = Engine.digital()
                         _digital.value = d
                         if (sp == AppSpace.DAB) dabWatch(d)

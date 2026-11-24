@@ -124,6 +124,7 @@ fun SettingsScreen(vm: RadioViewModel, onBack: () -> Unit) {
                     EiBiSection(eibiStatus.season, eibiStatus.count, eibiStatus.updated, eibiStatus.updating) { vm.updateEibi() }
                     val locating by vm.locating.collectAsStateWithLifecycle()
                     OperatorSection(adv.operator, data.operator.autoLocator, locating, vm::setOptionString, vm::setAutoLocator)
+                    LogosSection()
                     AboutSection()
                     Spacer(Modifier.height(16.dp))
                 }
@@ -358,6 +359,28 @@ private fun PaletteTile(p: Palette, selected: Boolean, onClick: () -> Unit) {
             Text(p.label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
             if (selected) Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
         }
+    }
+}
+
+// ---------------------------------------------------------------- Station logos
+
+@Composable
+private fun LogosSection() {
+    val on by app.littlesdr.data.StationLogos.enabled.collectAsStateWithLifecycle()
+    val mobile by app.littlesdr.data.StationLogos.mobileData.collectAsStateWithLifecycle()
+    Section("Logos des stations") {
+        ListItem(
+            headlineContent = { Text("Logos depuis internet") },
+            supportingContent = { Text("DAB+ et DRM : logo de la station tant qu'elle n'envoie pas d'image (annuaire radio-browser.info : seuls le nom de la station et le pays sont envoyés)") },
+            trailingContent = { Switch(checked = on, onCheckedChange = { app.littlesdr.data.StationLogos.setEnabled(it) }) },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        )
+        ListItem(
+            headlineContent = { Text("Aussi via données mobiles") },
+            supportingContent = { Text("Sinon en Wi-Fi seulement. Chaque logo n'est téléchargé qu'une fois (quelques ko).") },
+            trailingContent = { Switch(checked = mobile, enabled = on, onCheckedChange = { app.littlesdr.data.StationLogos.setMobileData(it) }) },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        )
     }
 }
 

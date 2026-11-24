@@ -63,6 +63,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -174,6 +176,17 @@ private fun SignalBadge(playing: Boolean, d: DigitalState) {
     }
 }
 
+/** Logo of a station from the internet (null while loading, unknown, or not allowed now) */
+@Composable
+private fun stationLogo(name: String?): ImageBitmap? {
+    val on by app.littlesdr.data.StationLogos.enabled.collectAsState()
+    val mobile by app.littlesdr.data.StationLogos.mobileData.collectAsState()
+    val logo by produceState<ImageBitmap?>(null, name, on, mobile) {
+        value = if (name.isNullOrBlank() || !on) null else app.littlesdr.data.StationLogos.get(name)
+    }
+    return logo
+}
+
 /** Slideshow on the left, station / programme text / audio on the right */
 @Composable
 private fun PlayingContent(d: DigitalState, slide: ImageBitmap?, isDab: Boolean) {
@@ -182,7 +195,7 @@ private fun PlayingContent(d: DigitalState, slide: ImageBitmap?, isDab: Boolean)
         val art = min(maxHeight, maxWidth * 0.42f)
         val compact = maxHeight < 170.dp
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(if (compact) 16.dp else 24.dp)) {
-            Artwork(slide, Modifier.size(art))
+            Artwork(slide, if (isDab) d.playing else d.station.ifBlank { null }, Modifier.size(art))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp)) {
                 val title = when {
                     isDab -> d.playing ?: if (d.services.isEmpty()) "Recherche du multiplex…" else "Choisis une station"
@@ -223,16 +236,19 @@ private fun PlayingContent(d: DigitalState, slide: ImageBitmap?, isDab: Boolean)
 
 /** MOT slideshow in a rounded square; a radio icon until a picture arrives */
 @Composable
-private fun Artwork(slide: ImageBitmap?, modifier: Modifier = Modifier) {
+private fun Artwork(slide: ImageBitmap?, station: String?, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
+    // The station's logo (internet) until its own slideshow arrives
+    val logo = stationLogo(station)
     Box(
         modifier.clip(RoundedCornerShape(16.dp)).background(cs.surfaceContainerHighest),
         contentAlignment = Alignment.Center,
     ) {
-        Crossfade(slide, label = "slide") { s ->
+        Crossfade(slide ?: logo, label = "slide") { s ->
             if (s != null) {
                 // Slides are 4:3: fit, so text on them is never cropped
-                Image(s, "Diaporama de la station", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                Image(s, if (s === slide) "Diaporama de la station" else "Logo de la station", contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize().padding(if (s === slide) 0.dp else 12.dp))
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Icon(Icons.Rounded.Radio, null, Modifier.fillMaxSize(0.42f), tint = cs.primary.copy(alpha = 0.7f))
@@ -509,6 +525,10 @@ private fun StationRow(s: DabService, current: Boolean, onClick: () -> Unit) {
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            stationLogo(s.label)?.let { logo ->
+                Image(logo, null, contentScale = ContentScale.Fit, modifier = Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)))
+                Spacer(Modifier.width(12.dp))
+            }
             Column(Modifier.weight(1f)) {
                 Text(
                     s.label,
