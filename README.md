@@ -86,6 +86,18 @@ cargo test --release
 cargo run --release -- --help
 ```
 
+## 🐧 Prototype Linux
+
+Le même moteur sur le bureau, avec une interface egui : spectre et cascade (clic pour accorder), modes, réglages du récepteur, stations DAB+, RDS, DRM. Son par PipeWire / ALSA.
+
+```sh
+cd desktop
+cargo run --release                                   # source et fréquence gardées d'une fois sur l'autre
+cargo run --release -- --file capture.wav --mode 8    # un enregistrement IQ, en DAB+
+```
+
+Options : `--file <iq.wav>`, `--mode <0-10>` (NFM, WFM, AM, DSB, USB, CW, LSB, RAW, DAB+, DRM, LRPT), `--no-audio`. Les réglages vont dans `~/.local/share/littlesdr`. Il faut `libfaad` (paquet `faad2`) et, pour le RTL-SDR en USB, `librtlsdr`.
+
 ## 🧩 Architecture
 
 ```
@@ -96,7 +108,7 @@ Kotlin / Compose Material 3              app/src/main/java/app/littlesdr
  ├─ usb/       détection, permission, descripteur USB → pilote
  └─ service/   service au premier plan (écoute en arrière-plan)
 
-Rust                                     engine/
+Rust                                     engine/   (desktop/ : prototype Linux, egui)
  ├─ src/service/   couche pour l'app : sources, fil DSP, spectre, état, réglages
  ├─ src/android/   JNI, son AAudio, rendu Vulkan (ash), shaders GLSL
  ├─ src/source/    RTL-SDR, rtl_tcp, SpyServer, KiwiSDR, fichiers WAV
