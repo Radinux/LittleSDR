@@ -22,5 +22,5 @@ fn main() {
         wav.write(&out);
     }
     wav.finish();
-    eprintln!("{}", e.status().lines().filter(|l| l.contains("dab") || l.contains("engine") || l.contains("rds")).collect::<Vec<_>>().join("\n"));
+    eprintln!("{}", e.status().lines().filter(|l| l.contains("dab") || l.contains("adsb") || l.contains("engine") || l.contains("rds")).collect::<Vec<_>>().join("\n"));
 }

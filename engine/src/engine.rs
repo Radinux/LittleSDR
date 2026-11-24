@@ -47,10 +47,12 @@ pub enum Mode {
     Dab,
     /// DRM digital shortwave / medium wave (10 or 20 kHz channel centred on the frequency)
     Drm,
+    /// ADS-B / Mode S aircraft on 1090 MHz (no sound)
+    Adsb,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 9] = [Mode::Wfm, Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Cw, Mode::Lrpt, Mode::Dab, Mode::Drm];
+    pub const ALL: [Mode; 10] = [Mode::Wfm, Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Cw, Mode::Lrpt, Mode::Dab, Mode::Drm, Mode::Adsb];
 
     pub fn parse(s: &str) -> Option<Mode> {
         match s.to_ascii_lowercase().as_str() {
@@ -63,6 +65,7 @@ impl Mode {
             "lrpt" | "meteor" => Some(Mode::Lrpt),
             "dab" | "dab+" => Some(Mode::Dab),
             "drm" => Some(Mode::Drm),
+            "adsb" | "ads-b" | "1090" => Some(Mode::Adsb),
             _ => None,
         }
     }
@@ -75,6 +78,7 @@ impl Mode {
             Mode::Wfm => 240_000.0,
             Mode::Lrpt => 192_000.0, // 2.67 samples per 72 ksym/s symbol
             Mode::Dab => crate::dab::ofdm::RATE,
+            Mode::Adsb => crate::adsb::RATE,
             _ => 48_000.0,
         }
     }
@@ -90,6 +94,19 @@ impl Mode {
             Mode::Dab => 780_000.0,
             // up to 20 kHz channels (spectrum occupancy 5)
             Mode::Drm => 15_000.0,
+            Mode::Adsb => 1_000_000.0,
+        }
+    }
+    /// The signal fills the captured band: tuned exactly (no offset from the DC spike)
+    pub fn fills_band(self) -> bool {
+        matches!(self, Mode::Dab | Mode::Adsb)
+    }
+    /// The sample rate the mode needs from the receiver, when it has one (RTL-SDR, SDRplay)
+    pub fn own_rate(self) -> Option<f64> {
+        match self {
+            Mode::Dab => Some(crate::dab::ofdm::RATE),
+            Mode::Adsb => Some(crate::adsb::RATE),
+            _ => None,
         }
     }
     fn deviation(self) -> f64 {
@@ -101,7 +118,7 @@ impl Mode {
     /// Default channel bandwidth (Hz), None when it is fixed (FM)
     pub fn default_bandwidth(self) -> Option<f64> {
         match self {
-            Mode::Wfm | Mode::Nfm | Mode::Lrpt | Mode::Dab | Mode::Drm => None,
+            Mode::Wfm | Mode::Nfm | Mode::Lrpt | Mode::Dab | Mode::Drm | Mode::Adsb => None,
             Mode::Am => Some(9_000.0),
             Mode::Usb | Mode::Lsb => Some(2_700.0),
             Mode::Cw => Some(500.0),
@@ -170,6 +187,8 @@ pub enum EngineCtl {
     DabSelect(String),
     /// DAB: print the services of the ensemble
     DabList,
+    /// ADS-B setting: "lat" / "lon" (receiver), "clear", "list" (print the aircraft)
+    Adsb(String, f64),
     /// Print the state on stderr
     Status,
     Stop,
@@ -215,6 +234,8 @@ enum Back {
     Lrpt { dec: Box<LrptDecoder>, rem: usize },
     Dab(Box<DabReceiver>),
     Drm(Box<crate::drm::DrmReceiver>),
+    /// Silent: `rem` counts IF samples not yet turned into audio frames (x 48 kHz)
+    Adsb { dec: Box<crate::adsb::AdsbDecoder>, rem: u64 },
 }
 
 impl Back {
@@ -240,6 +261,7 @@ impl Back {
             Mode::Lrpt => Back::Lrpt { dec: Box::new(LrptDecoder::new(ifr, true)), rem: 0 },
             Mode::Dab => Back::Dab(Box::new(DabReceiver::new())),
             Mode::Drm => Back::Drm(Box::new(crate::drm::DrmReceiver::new(ifr))),
+            Mode::Adsb => Back::Adsb { dec: Box::new(crate::adsb::AdsbDecoder::new(ifr)), rem: 0 },
         }
     }
 
@@ -277,8 +299,20 @@ impl Back {
                 out.extend(std::iter::repeat(Frame::default()).take(*rem / per));
                 *rem %= per;
             }
+            Back::Adsb { dec, rem } => {
+                dec.process(iq, now_s());
+                // Silence at exactly 48 kHz (2.4 MS/s is not a whole multiple)
+                *rem += iq.len() as u64 * AUDIO_RATE as u64;
+                let ifr = Mode::Adsb.if_rate() as u64;
+                out.extend(std::iter::repeat(Frame::default()).take((*rem / ifr) as usize));
+                *rem %= ifr;
+            }
         }
     }
+}
+
+fn now_s() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
 }
 
 pub struct Stats {
@@ -291,7 +325,7 @@ pub struct Engine {
     mode: Mode,
     freq: f64,
     offset: f64,
-    bandwidth: [f64; 9], // per mode, remembered across mode changes
+    bandwidth: [f64; 10], // per mode, remembered across mode changes
     pitch: f64,
     volume: f32,
     stereo: bool,
@@ -318,6 +352,8 @@ pub struct Engine {
     pub ft8: crate::ft8::Ft8Receiver,
     /// DAB service asked for before DAB mode was on
     pending_service: Option<String>,
+    /// Receiver position for ADS-B (distance, bearing, surface positions), kept across modes
+    adsb_home: Option<(f64, f64)>,
     rtty_cfg: Vec<(String, f64)>, // kept so the decoder comes back as it was
     delay: VecDeque<Frame>,
     mute: usize,    // audio samples still muted
@@ -353,6 +389,7 @@ impl Engine {
             out_dir: std::path::PathBuf::from("."),
             ft8: crate::ft8::Ft8Receiver::new(),
             pending_service: None,
+            adsb_home: None,
             rtty_cfg: Vec::new(),
             delay: VecDeque::with_capacity(DELAY * 4),
             mute: 0,
@@ -490,6 +527,9 @@ impl Engine {
                 if let Some(r) = &mut self.rtty {
                     r.set_sideband(*m != Mode::Lsb); // mark = higher RF frequency
                 }
+                if let Back::Adsb { dec, .. } = &mut self.back {
+                    dec.home = self.adsb_home;
+                }
                 if let (Some(f), false) = (&self.front, same_front) {
                     self.front = Some(Front::new(f.rate, *m));
                 }
@@ -594,6 +634,26 @@ impl Engine {
                 }
                 _ => self.pending_service = Some(what.clone()),
             },
+            EngineCtl::Adsb(k, v) => {
+                match k.as_str() {
+                    "lat" => self.adsb_home = Some((*v, self.adsb_home.map_or(0.0, |h| h.1))),
+                    "lon" => self.adsb_home = Some((self.adsb_home.map_or(0.0, |h| h.0), *v)),
+                    "nohome" => self.adsb_home = None,
+                    _ => {}
+                }
+                match &mut self.back {
+                    Back::Adsb { dec, .. } => {
+                        dec.home = self.adsb_home;
+                        match k.as_str() {
+                            "clear" => dec.clear(),
+                            "list" => eprintln!("{}", dec.table(now_s())),
+                            _ => {}
+                        }
+                    }
+                    _ if k == "list" => eprintln!("[adsb] mode adsb to receive (freq 1090M)"),
+                    _ => {}
+                }
+            }
             EngineCtl::DabList => match &self.back {
                 Back::Dab(rx) => {
                     let list = rx.services();
@@ -643,6 +703,9 @@ impl Engine {
         if let Back::Drm(rx) = &self.back {
             s += &format!("\n[drm] {} | {}\n", rx.station(), rx.status());
         }
+        if let Back::Adsb { dec, .. } = &self.back {
+            s += &format!("\n[adsb] {}\n", dec.describe());
+        }
         if let Back::Wfm { rds, .. } = &self.back {
             let i = &rds.info;
             s += &format!(
@@ -691,6 +754,7 @@ impl Engine {
             Mode::Lrpt => (-57_600.0, 57_600.0),
             Mode::Dab => (-768_000.0, 768_000.0),
             Mode::Drm => (-5_000.0, 5_000.0),
+            Mode::Adsb => (-1_000_000.0, 1_000_000.0),
         }
     }
 
@@ -804,6 +868,7 @@ impl Engine {
             Back::Lrpt { dec, .. } => Some(dec.describe()),
             Back::Dab(rx) => Some(rx.describe()),
             Back::Drm(rx) => Some(format!("{} | {}", rx.station(), rx.status())),
+            Back::Adsb { dec, .. } => Some(dec.table(now_s())),
             _ => None,
         }
     }
@@ -827,6 +892,21 @@ impl Engine {
         match &self.back {
             Back::Drm(rx) => Some(rx),
             _ => None,
+        }
+    }
+
+    pub fn adsb(&self) -> Option<&crate::adsb::AdsbDecoder> {
+        match &self.back {
+            Back::Adsb { dec, .. } => Some(dec),
+            _ => None,
+        }
+    }
+
+    /// ADS-B state for the app (aircraft, with their tracks when `trails`)
+    pub fn adsb_json(&self, trails: bool) -> String {
+        match &self.back {
+            Back::Adsb { dec, .. } => dec.json(now_s(), trails).to_string(),
+            _ => serde_json::json!({"active": false, "home": self.adsb_home.map(|h| vec![h.0, h.1])}).to_string(),
         }
     }
 
@@ -1037,6 +1117,7 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
                 let tag = match engine.mode() {
                     Mode::Dab => "dab",
                     Mode::Drm => "drm",
+                    Mode::Adsb => "adsb",
                     _ => "lrpt",
                 };
                 eprintln!("[{tag}] {st}");

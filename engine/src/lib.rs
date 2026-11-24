@@ -4,6 +4,7 @@
 //! Android (through JNI) and on Linux.
 
 pub mod aac;
+pub mod adsb;
 pub mod audio;
 pub mod audio_fx;
 pub mod cw;

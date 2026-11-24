@@ -21,7 +21,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// The app's demodulator numbering (SDR++'s, kept): NFM, WFM, AM, DSB, USB, CW, LSB, RAW, then
-/// ours: DAB, DRM, LRPT
+/// ours: DAB, DRM, LRPT, ADS-B
 pub fn mode_of(i: i32) -> Mode {
     match i {
         0 => Mode::Nfm,
@@ -32,6 +32,7 @@ pub fn mode_of(i: i32) -> Mode {
         8 => Mode::Dab,
         9 => Mode::Drm,
         10 => Mode::Lrpt,
+        11 => Mode::Adsb,
         _ => Mode::Am,
     }
 }
@@ -81,7 +82,7 @@ struct Inner {
     mode_idx: i32,
     freq: f64,
     center: f64,
-    bandwidth: [f64; 11],
+    bandwidth: [f64; 12],
     volume: f32,
     options: Value,
     running: Option<Running>,
@@ -135,12 +136,12 @@ impl Service {
             let fsz = options["fft"]["size"].as_f64().unwrap_or(4096.0) as usize;
             let mode_idx = cfg.get("mode").and_then(Value::as_i64).unwrap_or(1) as i32;
             let freq = cfg.get("freq").and_then(Value::as_f64).unwrap_or(100e6);
-            let mut bandwidth = [0.0; 11];
+            let mut bandwidth = [0.0; 12];
             for (i, b) in bandwidth.iter_mut().enumerate() {
                 *b = mode_of(i as i32).default_bandwidth().unwrap_or(0.0);
             }
             if let Some(bw) = cfg.get("bandwidth").and_then(Value::as_array) {
-                for (i, v) in bw.iter().enumerate().take(11) {
+                for (i, v) in bw.iter().enumerate().take(12) {
                     if let Some(x) = v.as_f64() {
                         bandwidth[i] = x;
                     }
@@ -308,8 +309,8 @@ impl Service {
         let (src, handles) = sources::open(&kind, &i.settings, i.usb_fd)?;
         let mode = mode_of(i.mode_idx);
         let mut rate = i.settings.rate(&kind);
-        if mode == Mode::Dab && (kind == "RTL-SDR" || kind == "RTL-TCP") {
-            rate = crate::dab::ofdm::RATE;
+        if let (Some(r), true) = (mode.own_rate(), own_rate_source(&kind)) {
+            rate = r;
         }
         if rate > 0.0 && (i.center - i.freq).abs() > 0.45 * rate {
             i.center = plan_center(i.freq, rate, mode);
@@ -481,11 +482,11 @@ impl Service {
 
     pub fn set_mode(&self, m: i32) {
         let mut i = self.inner.lock().unwrap();
-        let was_dab = mode_of(i.mode_idx) == Mode::Dab;
+        let was = mode_of(i.mode_idx).own_rate();
         i.mode_idx = m;
         let mode = mode_of(m);
         self.clear_digital();
-        let bw = i.bandwidth[(m as usize).min(10)];
+        let bw = i.bandwidth[(m as usize).min(11)];
         {
             let mut e = self.shared.engine.lock().unwrap();
             e.control(&EngineCtl::Mode(mode));
@@ -493,10 +494,9 @@ impl Service {
                 e.control(&EngineCtl::Bandwidth(bw));
             }
         }
-        // DAB needs its own sample rate on an RTL-SDR
-        let is_rtl = i.kind == "RTL-SDR" || i.kind == "RTL-TCP";
-        if is_rtl && (mode == Mode::Dab) != was_dab {
-            let rate = if mode == Mode::Dab { crate::dab::ofdm::RATE } else { i.settings.rate(&i.kind) };
+        // DAB and ADS-B need their own sample rate on an RTL-SDR or an SDRplay
+        if own_rate_source(&i.kind) && mode.own_rate() != was {
+            let rate = mode.own_rate().unwrap_or_else(|| i.settings.rate(&i.kind));
             if let Some(r) = &i.running {
                 let _ = r.src.ctl.send(SourceCtl::Rate(rate as u32));
             }
@@ -508,7 +508,7 @@ impl Service {
 
     pub fn set_bandwidth(&self, hz: f32) {
         let mut i = self.inner.lock().unwrap();
-        let m = (i.mode_idx as usize).min(10);
+        let m = (i.mode_idx as usize).min(11);
         if mode_of(i.mode_idx).default_bandwidth().is_none() {
             return; // fixed (FM, digital)
         }
@@ -558,6 +558,13 @@ impl Service {
         e.control(&EngineCtl::Blanker(nb, o["demod"]["nbLevel"].as_f64().map(|v| v as f32)));
         let loc = o["operator"]["location"].as_str().unwrap_or("");
         e.ft8.home = crate::ft8::message::grid_latlon(loc);
+        match e.ft8.home {
+            Some((lat, lon)) => {
+                e.control(&EngineCtl::Adsb("lat".into(), lat));
+                e.control(&EngineCtl::Adsb("lon".into(), lon));
+            }
+            None => e.control(&EngineCtl::Adsb("nohome".into(), 0.0)),
+        }
         let path = o["recorder"]["path"].as_str().unwrap_or("");
         if !path.is_empty() {
             e.rec.set_path(path);
@@ -772,6 +779,16 @@ impl Service {
         self.with_engine(|e| e.save_lrpt(None)).join("\n")
     }
 
+    /// ADS-B: aircraft in view; `trails`: with their tracks (for the map)
+    pub fn adsb_json(&self, trails: bool) -> String {
+        self.with_engine(|e| e.adsb_json(trails))
+    }
+
+    /// ADS-B setting: "clear"; "lat" / "lon" (receiver position, also set from the locator)
+    pub fn adsb_set(&self, key: &str, v: f64) {
+        self.with_engine(|e| e.control(&EngineCtl::Adsb(key.into(), v)));
+    }
+
     pub fn lrpt_set(&self, key: &str, v: f64) {
         if key == "oqpsk" {
             self.with_engine(|e| e.control(&EngineCtl::LrptOqpsk(v != 0.0)));
@@ -798,9 +815,14 @@ fn whole(v: Value) -> Value {
     }
 }
 
+/// Receivers that can take the exact rate DAB / ADS-B want (others are resampled)
+fn own_rate_source(kind: &str) -> bool {
+    matches!(kind, "RTL-SDR" | "RTL-TCP" | "SDRplay")
+}
+
 /// Hardware centre for a frequency: off the DC spike of wide receivers
 pub fn plan_center(freq: f64, rate: f64, mode: Mode) -> f64 {
-    if rate >= 1e6 && mode != Mode::Dab {
+    if rate >= 1e6 && !mode.fills_band() {
         freq - 250e3
     } else {
         freq
@@ -810,7 +832,7 @@ pub fn plan_center(freq: f64, rate: f64, mode: Mode) -> f64 {
 /// The channel must fit in the clean part of the band, clear of the DC spike
 pub fn needs_retune(freq: f64, center: f64, rate: f64, mode: Mode) -> bool {
     let d = (freq - center).abs();
-    if mode == Mode::Dab {
+    if mode.fills_band() {
         return d > 1.0;
     }
     let edge = rate * 0.45 - mode.half_band();

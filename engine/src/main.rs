@@ -1,7 +1,7 @@
 //! Command-line LittleSDR: listen with the engine, change settings live.
 //!
 //!   littlesdr [--usb [N] | --rtltcp HOST:PORT | --kiwi HOST[:PORT] | --spy HOST[:PORT] | --file IQ.wav [--loop] [--center HZ]] [--freq 96.5M] [--rate 2.4M]
-//!             [--mode wfm|nfm|am|usb|lsb|cw|lrpt|dab] [--service NAME] [--gain DB|auto] [--ds 0|1|2] [--bias-tee]
+//!             [--mode wfm|nfm|am|usb|lsb|cw|lrpt|dab|drm|adsb] [--service NAME] [--gain DB|auto] [--ds 0|1|2] [--bias-tee]
 //!             [--wav out.wav] [--out DIR (pictures and recordings; default ~/Images/LittleSDR, ~/Musique/LittleSDR)] [--no-audio] [--verbose] [--script "3s rate 1.024M; 6s quit"]
 //!
 //! Live commands on stdin: freq <f> (or +1k / -500 to step), rate <r>, mode <m>, bw <Hz>,
@@ -62,7 +62,7 @@ fn parse_hz(s: &str) -> Option<f64> {
 /// spike stays out of the channel. DAB fills the whole band (its centre carrier is unused):
 /// tuned exactly.
 fn plan(freq: f64, rate: f64, mode: Mode) -> u64 {
-    let offset = if rate >= 1e6 && mode != Mode::Dab { 250e3 } else { 0.0 };
+    let offset = if rate >= 1e6 && !mode.fills_band() { 250e3 } else { 0.0 };
     (freq - offset).round() as u64
 }
 
@@ -70,7 +70,7 @@ fn plan(freq: f64, rate: f64, mode: Mode) -> u64 {
 /// of the captured band and stay clear of the DC spike. Otherwise only the VFO moves.
 fn needs_retune(freq: f64, center: u64, rate: f64, mode: Mode) -> bool {
     let d = (freq - center as f64).abs();
-    if mode == Mode::Dab {
+    if mode.fills_band() {
         return d > 1.0;
     }
     let edge = rate * 0.45 - mode.half_band();
@@ -124,7 +124,7 @@ fn main() {
             }
             "--freq" => freq = args.next().and_then(|v| parse_hz(&v)).expect("--freq"),
             "--rate" => rate = args.next().and_then(|v| parse_hz(&v)).expect("--rate"),
-            "--mode" => mode = args.next().and_then(|v| Mode::parse(&v)).expect("--mode wfm|nfm|am|usb|lsb|cw|lrpt|dab"),
+            "--mode" => mode = args.next().and_then(|v| Mode::parse(&v)).expect("--mode wfm|nfm|am|usb|lsb|cw|lrpt|dab|drm|adsb"),
             "--gain" => gain = args.next().and_then(|v| v.parse().ok()),
             "--bias-tee" => bias_tee = true,
             "--ds" => ds = args.next().and_then(|v| v.parse().ok()).unwrap_or(0),
@@ -202,8 +202,8 @@ fn main() {
     };
     let center = plan(freq, rate, mode);
     let (iq_tx, iq_rx) = mpsc::sync_channel(64);
-    if mode == Mode::Dab {
-        rate = crate_dab_rate();
+    if let Some(r) = mode.own_rate() {
+        rate = r;
     }
     let src = source::spawn(src, SourceConfig { rate: rate as u32, center, gain, direct_sampling: ds, bias_tee }, iq_tx);
 
@@ -322,6 +322,20 @@ fn main() {
                     Err(_) => eprintln!("fx {v} {key} <number>"),
                 },
                 _ => eprintln!("fx <filter> on|off  |  fx <filter> <param> <value>"),
+            },
+            "adsb" => match (v, words.get(2).and_then(|w| w.parse::<f64>().ok())) {
+                ("" | "list" | "ls", _) => {
+                    let _ = eng_tx.send(EngineCtl::Adsb("list".into(), 0.0));
+                }
+                ("clear", _) => {
+                    let _ = eng_tx.send(EngineCtl::Adsb("clear".into(), 0.0));
+                }
+                (lat, Some(lon)) if lat.parse::<f64>().is_ok() => {
+                    let _ = eng_tx.send(EngineCtl::Adsb("lat".into(), lat.parse().unwrap()));
+                    let _ = eng_tx.send(EngineCtl::Adsb("lon".into(), lon));
+                    eprintln!("[adsb] receiver at {lat} {lon}");
+                }
+                _ => eprintln!("adsb [list]  |  adsb clear  |  adsb <lat> <lon>   (mode adsb, freq 1090M)"),
             },
             "lrpt" => match v {
                 "save" => {
@@ -465,9 +479,9 @@ fn main() {
                 if let Some(m) = Mode::parse(v) {
                     cur_mode = m;
                     let _ = eng_tx.send(EngineCtl::Mode(m));
-                    if m == Mode::Dab && cur_rate != crate_dab_rate() {
-                        // DAB is sampled at exactly 2.048 MS/s (changed live)
-                        cur_rate = crate_dab_rate();
+                    if let Some(r) = m.own_rate().filter(|&r| r != cur_rate) {
+                        // DAB is sampled at exactly 2.048 MS/s, ADS-B at 2.4 (changed live)
+                        cur_rate = r;
                         let _ = src.ctl.send(SourceCtl::Rate(cur_rate as u32));
                     }
                     follow(cur_freq, cur_rate, cur_mode, &mut cur_center);
@@ -517,15 +531,11 @@ fn main() {
             }
             "quit" | "q" | "exit" => break,
             "" => {}
-            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | meter | rtty | cw | sstv | ft8 | ft4 | rec | lrpt | dab | stereo | nb | fx | status | quit  ({other}?)"),
+            other => eprintln!("commands: freq | rate | mode | bw | pitch | gain | vol | ds | bt | meter | rtty | cw | sstv | ft8 | ft4 | rec | lrpt | dab | adsb | stereo | nb | fx | status | quit  ({other}?)"),
         }
     }
     let _ = src.ctl.send(SourceCtl::Stop);
     let _ = eng_tx.send(EngineCtl::Stop);
     let _ = eng.join();
     let _ = src.thread.join(); // dongle released (bias-tee off) before we exit
-}
-
-fn crate_dab_rate() -> f64 {
-    littlesdr::dab::ofdm::RATE
 }
