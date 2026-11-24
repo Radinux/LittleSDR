@@ -690,8 +690,14 @@ impl Service {
                     .and_then(|c| rx.fic.ensemble.subchannels.get(&c))
                     .and_then(|c| c.bitrate())
                     .unwrap_or(0);
+                // Service following: where else the service being played (or asked for) is
+                let sid = rx.playing().map(|s| s.sid).or_else(|| rx.wanted_id().and_then(|w| u32::from_str_radix(w, 16).ok()));
+                let e = &rx.fic.ensemble;
+                let af: Vec<u32> = sid.map(|s| e.alternatives(s)).unwrap_or_default();
+                let fm: Vec<u32> = sid.map(|s| e.fm_alternatives(s)).unwrap_or_default();
                 json!({
                     "kind": "dab", "synced": rx.ofdm.locked(), "snr": rx.ofdm.stats.snr_db,
+                    "sid": sid.map(|s| format!("{s:04X}")), "af": af, "fm": fm,
                     "ensemble": rx.fic.ensemble.label.trim(), "services": services,
                     "playing": rx.playing().map(|s| s.label.trim().to_string()), "bitrate": bitrate,
                     "text": d.label, "slide": if d.slide.is_empty() { 0 } else { d.slide_id }, "status": rx.describe(),

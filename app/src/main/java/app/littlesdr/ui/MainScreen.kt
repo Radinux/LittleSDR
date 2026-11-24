@@ -142,6 +142,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val dabFound by vm.dabFound.collectAsStateWithLifecycle()
     val dabScan by vm.dabScan.collectAsStateWithLifecycle()
     val kiwiRefused by vm.kiwiRefused.collectAsStateWithLifecycle()
+    val dabAf by vm.dabAf.collectAsStateWithLifecycle()
     // Outside the SDR space, the receiver chip opens the source settings in place
     var showSource by rememberSaveable { mutableStateOf(false) }
     // Digital space: audio settings open from the player card
@@ -288,7 +289,8 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                             else DabTuner(
                                 frequency = stateHolder.value.vfoFrequency, d = digital,
                                 found = dabFound, scan = dabScan,
-                                onTune = vm::tune, onService = vm::dabSelect, onScan = vm::scanDab,
+                                onTune = vm::tuneDab, onService = vm::dabSelect, onScan = vm::scanDab,
+                                af = dabAf, onAf = vm::setDabAf,
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                             )
                         } else Column(

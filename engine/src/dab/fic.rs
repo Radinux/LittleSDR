@@ -3,7 +3,7 @@
 //! the sub-channels (position in the CIF, size, protection) where their audio is.
 
 use super::fec::{crc16_ok, depuncture, pack, prbs, Viterbi};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Protection {
@@ -53,6 +53,33 @@ pub struct Ensemble {
     pub label: String,
     pub services: BTreeMap<u32, Service>,
     pub subchannels: BTreeMap<u8, SubChannel>,
+    /// FIG 0/21: frequencies (Hz) of ensembles, this one included (other transmitters)
+    pub ensemble_freqs: BTreeMap<u16, BTreeSet<u32>>,
+    /// FIG 0/21: FM frequencies (Hz) by RDS PI code
+    pub fm_freqs: BTreeMap<u16, BTreeSet<u32>>,
+    /// FIG 0/24: other ensembles (EId) carrying a service (SId)
+    pub other_ensembles: BTreeMap<u32, BTreeSet<u16>>,
+}
+
+impl Ensemble {
+    /// Where else a service can be heard on DAB (Hz): other transmitters of this ensemble
+    /// and the ensembles that also carry it, as the FIC announces them
+    pub fn alternatives(&self, sid: u32) -> Vec<u32> {
+        let mut eids: BTreeSet<u16> = self.other_ensembles.get(&sid).cloned().unwrap_or_default();
+        eids.insert(self.eid);
+        let mut v: BTreeSet<u32> = BTreeSet::new();
+        for e in eids {
+            if let Some(f) = self.ensemble_freqs.get(&e) {
+                v.extend(f);
+            }
+        }
+        v.into_iter().collect()
+    }
+
+    /// FM frequencies of the same programme (Hz): RDS PI = SId for most broadcasters
+    pub fn fm_alternatives(&self, sid: u32) -> Vec<u32> {
+        u16::try_from(sid).ok().and_then(|pi| self.fm_freqs.get(&pi)).map(|f| f.iter().copied().collect()).unwrap_or_default()
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -234,6 +261,65 @@ impl Fic {
                     }
                 }
             }
+            21 => {
+                // Frequency information: per ensemble (EId) or FM station (PI), its frequencies
+                let mut i = 0;
+                while i + 2 <= d.len() {
+                    let len = (d[i + 1] & 0x1F) as usize;
+                    let Some(list) = d.get(i + 2..i + 2 + len) else { break };
+                    i += 2 + len;
+                    let mut j = 0;
+                    while j + 3 <= list.len() {
+                        let id = u16::from_be_bytes([list[j], list[j + 1]]);
+                        let (rm, n) = (list[j + 2] >> 4, (list[j + 2] & 7) as usize);
+                        let Some(f) = list.get(j + 3..j + 3 + n) else { break };
+                        j += 3 + n;
+                        match rm {
+                            // DAB ensemble: 5-bit control + 19-bit frequency in 16 kHz units
+                            0 => {
+                                for e in f.chunks_exact(3) {
+                                    let hz = ((((e[0] & 7) as u32) << 16) | ((e[1] as u32) << 8) | e[2] as u32) * 16_000;
+                                    if hz > 0 {
+                                        self.ensemble.ensemble_freqs.entry(id).or_default().insert(hz);
+                                    }
+                                }
+                            }
+                            // FM with RDS: 87.5 MHz + n x 100 kHz
+                            8 => {
+                                for &c in f {
+                                    if (1..=204).contains(&c) {
+                                        self.ensemble.fm_freqs.entry(id).or_default().insert(87_500_000 + c as u32 * 100_000);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            24 => {
+                // Other-ensemble services: SId -> the EIds that also carry it
+                let sid_len = if pd { 4 } else { 2 };
+                let mut i = 0;
+                while i + sid_len + 1 <= d.len() {
+                    let sid = if pd {
+                        u32::from_be_bytes([d[i], d[i + 1], d[i + 2], d[i + 3]])
+                    } else {
+                        u16::from_be_bytes([d[i], d[i + 1]]) as u32
+                    };
+                    i += sid_len;
+                    let n = (d[i] & 0x0F) as usize;
+                    i += 1;
+                    for _ in 0..n {
+                        if i + 2 > d.len() {
+                            return;
+                        }
+                        let eid = u16::from_be_bytes([d[i], d[i + 1]]);
+                        i += 2;
+                        self.ensemble.other_ensembles.entry(sid).or_default().insert(eid);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -262,3 +348,31 @@ const UEP_SIZES: [u16; 64] = [
     84, 96, 116, 140, 80, 104, 116, 140, 168, 96, 116, 140, 168, 208, 116, 140, 168, 208, 232, 128, 168, 192, 232, 280, 160, 208, 280, 192,
     280, 416,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FIG 0/21 (ensemble 0x1001 on 11D, FM PI 0xD312 on 99.5 MHz) and FIG 0/24 (SId 0xD312
+    /// also on ensemble 0x1002, itself on 5C): the service's alternatives
+    #[test]
+    fn frequency_information_and_other_ensembles() {
+        let mut f = Fic::new();
+        f.ensemble.eid = 0x1001;
+        let khz16 = |hz: u32| hz / 16_000;
+        let e = |hz: u32| [(khz16(hz) >> 16) as u8 & 7, (khz16(hz) >> 8) as u8, khz16(hz) as u8];
+        // FIG 0/21 body: Rfa+len, then [Id, R&M|C|n, freqs...]
+        let mut l = vec![];
+        l.extend_from_slice(&[0x10, 0x01, 0x03]);
+        l.extend_from_slice(&e(222_064_000));
+        l.extend_from_slice(&[0x10, 0x02, 0x03]);
+        l.extend_from_slice(&e(178_352_000));
+        l.extend_from_slice(&[0xD3, 0x12, 0x81, 120]); // 87.5 + 12.0 = 99.5 MHz
+        let mut b = vec![21u8, 0, l.len() as u8];
+        b.extend(l);
+        f.fig0(&b);
+        f.fig0(&[24, 0xD3, 0x12, 0x01, 0x10, 0x02]);
+        assert_eq!(f.ensemble.alternatives(0xD312), vec![178_352_000, 222_064_000]);
+        assert_eq!(f.ensemble.fm_alternatives(0xD312), vec![99_500_000]);
+    }
+}

@@ -298,7 +298,110 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
 
     fun dabSelect(s: DabService) {
         _slide.value = null
+        followSid = s.sid
         Engine.dabSelect(s.sid)
+    }
+
+    // ---- DAB: multiplexes kept up to date, and service following (AF)
+
+    /** Services (SId) heard on each channel: where to look for a station elsewhere */
+    private val dabServices: MutableMap<String, Set<String>> =
+        spacePrefs.getString("dab_services", "")!!.split(';').mapNotNull { e ->
+            e.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1].split(',').filter(String::isNotBlank).toSet() }
+        }.toMap().toMutableMap()
+
+    private val _dabAf = MutableStateFlow(spacePrefs.getBoolean("dab_af", true))
+    /** Follow the station to another frequency when its multiplex is lost */
+    val dabAf: StateFlow<Boolean> = _dabAf.asStateFlow()
+    fun setDabAf(on: Boolean) {
+        _dabAf.value = on
+        spacePrefs.edit().putBoolean("dab_af", on).apply()
+    }
+
+    private var followSid: String? = null
+    private var followJob: Job? = null
+    /** The station played here: losing it starts following (not a channel the user just picked) */
+    private var armed = false
+    private var lostSince = 0L
+    private var noSignalSince = 0L
+    private var lastAf: List<Long> = emptyList()
+
+    /** Channel picked by the user: no following until a station plays there */
+    fun tuneDab(hz: Double) {
+        armed = false
+        lostSince = 0
+        tune(hz)
+    }
+
+    private fun saveDab() {
+        spacePrefs.edit()
+            .putString("dab_found", _dabFound.value.entries.joinToString(";") { "${it.key}=${it.value}" })
+            .putString("dab_services", dabServices.entries.joinToString(";") { "${it.key}=${it.value.joinToString(",")}" })
+            .apply()
+    }
+
+    /** Each poll in the DAB space: correct the multiplex list, and follow a lost station */
+    private fun dabWatch(d: DigitalState) {
+        if (scanJob?.isActive == true || followJob?.isActive == true) return
+        val now = System.currentTimeMillis()
+        val ch = app.littlesdr.engine.dabChannelAt(state.value.vfoFrequency)?.name
+        if (d.synced && d.ensemble.isNotBlank() && ch != null) {
+            // What is really here now (another country, another multiplex): the list follows
+            noSignalSince = 0
+            val sids = d.services.map { it.sid }.toSet()
+            if (_dabFound.value[ch] != d.ensemble || (sids.isNotEmpty() && dabServices[ch] != sids)) {
+                _dabFound.value = _dabFound.value + (ch to d.ensemble)
+                if (sids.isNotEmpty()) dabServices[ch] = sids
+                saveDab()
+            }
+        } else if (!d.synced && ch != null && ch in _dabFound.value) {
+            // Nothing here any more: an old entry (other region), out of the list after 10 s
+            if (noSignalSince == 0L) noSignalSince = now
+            else if (now - noSignalSince > 10_000) {
+                _dabFound.value = _dabFound.value - ch
+                dabServices.remove(ch)
+                saveDab()
+                noSignalSince = 0
+            }
+        }
+        if (d.synced && d.playing != null) {
+            armed = true
+            lostSince = 0
+            d.sid?.let { followSid = it }
+            if (d.af.isNotEmpty()) lastAf = d.af
+            return
+        }
+        if (!armed || !_dabAf.value || followSid == null) return
+        if (lostSince == 0L) lostSince = now
+        else if (now - lostSince > 4_000) followJob = viewModelScope.launch { follow() }
+    }
+
+    /** The multiplex is gone: try the frequencies it announced for the station, then the
+     *  channels where the station was heard before. The engine keeps the station asked for,
+     *  so it starts by itself wherever its SId is found. */
+    private suspend fun follow() {
+        val sid = followSid ?: return
+        val here = state.value.vfoFrequency
+        val candidates = (lastAf.map { it.toDouble() } +
+            dabServices.filter { sid in it.value }.keys.mapNotNull { n -> DAB_CHANNELS.firstOrNull { it.name == n }?.hz })
+            .filter { kotlin.math.abs(it - here) > 1_000 }
+            .distinct()
+        for (hz in candidates) {
+            tune(hz)
+            repeat(12) {
+                delay(500)
+                val d = Engine.digital()
+                if (d.synced && d.playing != null) {
+                    val where = app.littlesdr.engine.dabChannelAt(hz)?.name ?: String.format(java.util.Locale.FRANCE, "%.3f MHz", hz / 1e6)
+                    _error.value = "AF : « ${d.playing} » retrouvée sur $where"
+                    lostSince = 0
+                    return
+                }
+            }
+        }
+        // Nowhere for now: back where it was, try again in 20 s
+        if (candidates.isNotEmpty()) tune(here)
+        lostSince = System.currentTimeMillis() + 16_000
     }
 
     fun setLrptOqpsk(on: Boolean) = Engine.lrptSet("oqpsk", if (on) 1.0 else 0.0)
@@ -348,14 +451,20 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                             delay(400)
                             d = Engine.digital()
                         }
-                        if (d.ensemble.isNotBlank()) found[ch.name] = d.ensemble
+                        if (d.ensemble.isNotBlank()) {
+                            found[ch.name] = d.ensemble
+                            delay(1_500) // the service list follows the name
+                            dabServices[ch.name] = Engine.digital().services.map { it.sid }.toSet()
+                        }
                     }
                 }
             } finally {
                 _dabScan.value = null
                 if (found.isNotEmpty()) {
+                    // A scan replaces everything: no French multiplex left in Germany
                     _dabFound.value = found
-                    spacePrefs.edit().putString("dab_found", found.entries.joinToString(";") { "${it.key}=${it.value}" }).apply()
+                    dabServices.keys.retainAll(found.keys)
+                    saveDab()
                     DAB_CHANNELS.firstOrNull { it.name == found.keys.first() }?.let { tune(it.hz) }
                 }
             }
@@ -390,6 +499,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                     AppSpace.DAB, AppSpace.DRM -> {
                         val d = Engine.digital()
                         _digital.value = d
+                        if (sp == AppSpace.DAB) dabWatch(d)
                         if (d.slide != lastSlide) {
                             lastSlide = d.slide
                             _slide.value = if (d.slide == 0L) null else Engine.dabSlide().let { b ->

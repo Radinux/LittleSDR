@@ -21,6 +21,12 @@ data class DigitalState(
     val playing: String? = null,
     /** DAB: bit rate of the service being played, kbit/s (0: unknown) */
     val bitrate: Int = 0,
+    /** DAB: SId (hex) of the service played or asked for */
+    val sid: String? = null,
+    /** DAB: other frequencies (Hz) carrying that service, as the multiplex announces them */
+    val af: List<Long> = emptyList(),
+    /** DAB: FM frequencies (Hz) of the same programme */
+    val fm: List<Long> = emptyList(),
     /** DAB programme text (DLS), or DRM text message */
     val text: String = "",
     /** Slideshow picture counter (0: none yet) */

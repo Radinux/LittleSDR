@@ -449,8 +449,10 @@ impl Engine {
         match c {
             EngineCtl::Tune(f) => {
                 if (*f - self.freq).abs() > 50e3 {
-                    if let Back::Wfm { rds, .. } = &mut self.back {
-                        rds.reset(); // another station
+                    match &mut self.back {
+                        Back::Wfm { rds, .. } => rds.reset(), // another station
+                        Back::Dab(rx) => rx.retune(),          // another ensemble
+                        _ => {}
                     }
                 }
                 self.freq = *f;

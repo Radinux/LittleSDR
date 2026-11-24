@@ -367,6 +367,8 @@ fun DabTuner(
     onTune: (Double) -> Unit,
     onService: (DabService) -> Unit,
     onScan: () -> Unit,
+    af: Boolean = true,
+    onAf: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var grid by rememberSaveable { mutableStateOf(false) }
@@ -375,6 +377,12 @@ fun DabTuner(
         scan?.let { (i, n) ->
             LinearProgressIndicator(progress = { (i + 1f) / n }, modifier = Modifier.fillMaxWidth())
         }
+        // Service following: when the multiplex is lost, look for the station elsewhere
+        FilterChip(
+            selected = af,
+            onClick = { onAf(!af) },
+            label = { Text(if (d.af.isNotEmpty()) "AF · suivi de station (${d.af.size} fréq.)" else "AF · suivi de station") },
+        )
         StationList(d, onService, Modifier.weight(1f).fillMaxWidth())
         StatusLine(d.status)
     }

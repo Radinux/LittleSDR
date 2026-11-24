@@ -69,6 +69,23 @@ impl DabReceiver {
         services.into_iter().find(|s| s.label.to_lowercase().contains(&wl))
     }
 
+    /// Another channel: everything about the old ensemble goes (sync, services, audio), the
+    /// wanted service stays, so it resumes by itself if the new ensemble carries it (AF)
+    pub fn retune(&mut self) {
+        self.ofdm.reset();
+        self.fic = Fic::new();
+        self.playing = None;
+        self.frames.clear();
+        self.pcm.clear();
+        self.resampler = None;
+        self.bad_frames = 0;
+    }
+
+    /// SId of the service asked for (hex or name as given)
+    pub fn wanted_id(&self) -> Option<&str> {
+        self.want.as_deref()
+    }
+
     pub fn playing(&self) -> Option<&Service> {
         let sid = self.playing.as_ref()?.0;
         self.fic.ensemble.services.get(&sid)
