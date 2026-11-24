@@ -189,7 +189,7 @@ impl DabReceiver {
             let name = e.services.get(sid).map_or("?".into(), |s| s.label.clone());
             let st = &dp.stats;
             s += &format!(
-                " | playing \"{name}\" {} kbit/s {} | superframes {}, RS fixed {} / failed {}, AU ok {} / CRC {}, AAC errors {}",
+                " | playing \"{name}\" {} kbit/s {} | superframes {}, RS fixed {} / failed {}, AU ok {} / CRC {}, AAC errors {}, concealed {}",
                 dec.bitrate(),
                 dp.format.map_or("?".into(), |f| f.describe()),
                 st.superframes,
@@ -197,7 +197,8 @@ impl DabReceiver {
                 st.rs_failed,
                 st.au_ok,
                 st.au_crc,
-                st.aac_errors
+                st.aac_errors,
+                st.concealed
             );
         } else if let Some(w) = &self.want {
             s += &format!(" | waiting for \"{w}\"");
