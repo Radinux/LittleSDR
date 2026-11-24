@@ -90,6 +90,7 @@ import app.littlesdr.ui.components.DrmTuner
 import app.littlesdr.ui.components.LrptImagePanel
 import app.littlesdr.ui.components.LrptPanel
 import app.littlesdr.ui.components.SpaceSwitcher
+import app.littlesdr.ui.components.CarRadioScreen
 import app.littlesdr.ui.components.SpaceTitle
 import app.littlesdr.ui.theme.ReadoutStyle
 import kotlinx.coroutines.launch
@@ -143,6 +144,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val dabScan by vm.dabScan.collectAsStateWithLifecycle()
     val kiwiRefused by vm.kiwiRefused.collectAsStateWithLifecycle()
     val dabAf by vm.dabAf.collectAsStateWithLifecycle()
+    val dabCatalog by vm.catalog.collectAsStateWithLifecycle()
     // Outside the SDR space, the receiver chip opens the source settings in place
     var showSource by rememberSaveable { mutableStateOf(false) }
     // Digital space: audio settings open from the player card
@@ -198,7 +200,32 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
             // Margins keep everything clear of rounded screen corners, cutouts and the nav bar.
             val corners = rememberScreenCorners()
             val m = corners.margin
-            Row(
+            // DAB+: a car radio, upright or sideways (phone mounts are often upright); the
+            // other spaces stay landscape (spectrum + control panel)
+            val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+            LaunchedEffect(space) {
+                activity?.requestedOrientation = if (space == AppSpace.DAB) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+                else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            }
+            if (space == AppSpace.DAB) {
+                CarRadioScreen(
+                    d = digital, slide = slide, frequency = stateHolder.value.vfoFrequency,
+                    playing = playing, playEnabled = ready,
+                    found = dabFound, scan = dabScan, af = dabAf,
+                    source = selectedSource, usb = usb != null, space = space, cornerRadius = corners.innerRadius,
+                    catalog = dabCatalog, onCatalog = vm::playCatalog,
+                    onPlay = vm::togglePlay, onStep = vm::dabStep,
+                    onService = vm::dabSelect, onTune = vm::tuneDab, onScan = vm::scanDab, onAf = vm::setDabAf,
+                    onSource = { showSource = true }, onSettings = onOpenSettings,
+                    onSpace = { showSource = false; vm.setSpace(it) },
+                    modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets(m, m, m, m))),
+                )
+                if (showSource) {
+                    androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showSource = false }) {
+                        Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 24.dp).verticalScroll(rememberScrollState())) { sourcePanel() }
+                    }
+                }
+            } else Row(
                 Modifier
                     .fillMaxSize()
                     .windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets(m, m, m, m))),

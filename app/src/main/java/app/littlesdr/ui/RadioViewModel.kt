@@ -310,11 +310,39 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- DAB: multiplexes kept up to date, and service following (AF)
 
-    /** Services (SId) heard on each channel: where to look for a station elsewhere */
-    private val dabServices: MutableMap<String, Set<String>> =
-        spacePrefs.getString("dab_services", "")!!.split(';').mapNotNull { e ->
-            e.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1].split(',').filter(String::isNotBlank).toSet() }
-        }.toMap().toMutableMap()
+    /** Stations heard on each channel (SId -> name): to follow a station, and to find one by name */
+    private val dabCatalog: MutableMap<String, Map<String, String>> =
+        runCatching { kotlinx.serialization.json.Json.decodeFromString<Map<String, Map<String, String>>>(spacePrefs.getString("dab_catalog", "{}")!!) }
+            .getOrDefault(emptyMap()).toMutableMap()
+    /** SIds per channel, for following */
+    private val dabServices: Map<String, Set<String>> get() = dabCatalog.mapValues { it.value.keys }
+
+    /** One station known somewhere: its name, SId and channel */
+    data class CatalogStation(val name: String, val sid: String, val channel: String)
+    private val _catalog = MutableStateFlow(catalogList())
+    /** Every station heard on every channel, by name, for the search */
+    val catalog: StateFlow<List<CatalogStation>> = _catalog.asStateFlow()
+    private fun catalogList() = dabCatalog.flatMap { (ch, m) -> m.map { (sid, n) -> CatalogStation(n, sid, ch) } }
+        .sortedWith(compareBy({ it.name.lowercase() }, { it.channel }))
+
+    /** A station found by name: its channel, then the station (the engine starts it there) */
+    fun playCatalog(s: CatalogStation) {
+        val ch = DAB_CHANNELS.firstOrNull { it.name == s.channel } ?: return
+        _slide.value = null
+        followSid = s.sid
+        Engine.dabSelect(s.sid)
+        tuneDab(ch.hz)
+        if (!state.value.playing) togglePlay()
+    }
+
+    /** ⏮ ⏭: previous / next station of the multiplex, in name order */
+    fun dabStep(dir: Int) {
+        val list = _digital.value.services.filter { it.dabPlus }.sortedBy { it.label.lowercase() }
+        if (list.isEmpty()) return
+        val i = list.indexOfFirst { it.label == _digital.value.playing }
+        val next = if (i < 0) (if (dir > 0) list.first() else list.last()) else list[(i + dir).mod(list.size)]
+        dabSelect(next)
+    }
 
     private val _dabAf = MutableStateFlow(spacePrefs.getBoolean("dab_af", true))
     /** Follow the station to another frequency when its multiplex is lost */
@@ -357,9 +385,10 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun saveDab() {
+        _catalog.value = catalogList()
         spacePrefs.edit()
             .putString("dab_found", _dabFound.value.entries.joinToString(";") { "${it.key}=${it.value}" })
-            .putString("dab_services", dabServices.entries.joinToString(";") { "${it.key}=${it.value.joinToString(",")}" })
+            .putString("dab_catalog", kotlinx.serialization.json.Json.encodeToString(dabCatalog.toMap()))
             .apply()
     }
 
@@ -371,10 +400,10 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         if (d.synced && d.ensemble.isNotBlank() && ch != null) {
             // What is really here now (another country, another multiplex): the list follows
             noSignalSince = 0
-            val sids = d.services.map { it.sid }.toSet()
-            if (_dabFound.value[ch] != d.ensemble || (sids.isNotEmpty() && dabServices[ch] != sids)) {
+            val names = d.services.associate { it.sid to it.label }
+            if (_dabFound.value[ch] != d.ensemble || (names.isNotEmpty() && dabCatalog[ch] != names)) {
                 _dabFound.value = _dabFound.value + (ch to d.ensemble)
-                if (sids.isNotEmpty()) dabServices[ch] = sids
+                if (names.isNotEmpty()) dabCatalog[ch] = names
                 saveDab()
             }
         } else if (!d.synced && ch != null && ch in _dabFound.value) {
@@ -382,7 +411,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
             if (noSignalSince == 0L) noSignalSince = now
             else if (now - noSignalSince > 10_000) {
                 _dabFound.value = _dabFound.value - ch
-                dabServices.remove(ch)
+                dabCatalog.remove(ch)
                 saveDab()
                 noSignalSince = 0
             }
@@ -538,7 +567,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                         if (d.ensemble.isNotBlank()) {
                             found[ch.name] = d.ensemble
                             delay(1_500) // the service list follows the name
-                            dabServices[ch.name] = Engine.digital().services.map { it.sid }.toSet()
+                            dabCatalog[ch.name] = Engine.digital().services.associate { it.sid to it.label }
                         }
                     }
                 }
@@ -547,7 +576,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                 if (found.isNotEmpty()) {
                     // A scan replaces everything: no French multiplex left in Germany
                     _dabFound.value = found
-                    dabServices.keys.retainAll(found.keys)
+                    dabCatalog.keys.retainAll(found.keys)
                     saveDab()
                     DAB_CHANNELS.firstOrNull { it.name == found.keys.first() }?.let { tune(it.hz) }
                 }

@@ -178,7 +178,7 @@ private fun SignalBadge(playing: Boolean, d: DigitalState) {
 
 /** Logo of a station from the internet (null while loading, unknown, or not allowed now) */
 @Composable
-private fun stationLogo(name: String?): ImageBitmap? {
+internal fun stationLogo(name: String?): ImageBitmap? {
     val on by app.littlesdr.data.StationLogos.enabled.collectAsState()
     val mobile by app.littlesdr.data.StationLogos.mobileData.collectAsState()
     val logo by produceState<ImageBitmap?>(null, name, on, mobile) {
@@ -424,7 +424,7 @@ private fun StatusLine(status: String) {
  * Next / previous channel. Once a scan has found multiplexes the arrows jump between those
  * (that is what zapping means); before that they walk band III channel by channel.
  */
-private fun stepChannel(frequency: Double, found: Map<String, String>, dir: Int): DabChannel {
+internal fun stepChannel(frequency: Double, found: Map<String, String>, dir: Int): DabChannel {
     val pool = DAB_CHANNELS.filter { it.name in found }.ifEmpty { DAB_CHANNELS }
     return if (dir > 0) pool.firstOrNull { it.hz > frequency + 1_000 } ?: pool.first()
     else pool.lastOrNull { it.hz < frequency - 1_000 } ?: pool.last()
@@ -554,7 +554,7 @@ private fun StationRow(s: DabService, current: Boolean, onClick: () -> Unit) {
 /** Every band III channel, one row per block, the multiplexes found marked */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun ChannelGridSheet(frequency: Double, found: Map<String, String>, onPick: (DabChannel) -> Unit, onDismiss: () -> Unit) {
+internal fun ChannelGridSheet(frequency: Double, found: Map<String, String>, onPick: (DabChannel) -> Unit, onDismiss: () -> Unit) {
     val here = dabChannelAt(frequency)?.name
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
