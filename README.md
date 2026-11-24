@@ -47,7 +47,8 @@ Un bouton change d'interface selon l'usage :
 
 | Liaison | Récepteurs |
 |---|---|
-| USB (OTG) | RTL-SDR (dont Blog V4, bias-tee) |
+| USB (OTG) | RTL-SDR (dont Blog V4, bias-tee), Airspy R2 / Mini, Airspy HF+ |
+| USB, Linux | SDRplay RSP1, RSP1A / 1B, RSP2, RSPduo, RSPdx (avec l'API SDRplay 3 installée et son service lancé) |
 | Réseau | rtl_tcp, SpyServer, KiwiSDR (annuaire public, serveurs qui refusent les applications signalés) |
 | Fichier | enregistrements IQ en WAV |
 
@@ -71,7 +72,7 @@ Prérequis :
 ```sh
 git clone https://github.com/Radinux/LittleSDR.git
 cd LittleSDR
-kit/build-kit.sh                        # une fois : pilote RTL-SDR (librtlsdr, libusb)
+kit/build-kit.sh                        # une fois : pilotes RTL-SDR et Airspy (librtlsdr, libusb, libairspy, libairspyhf)
 engine/scripts/build-android-aac.sh     # une fois : décodeurs AAC (FAAD2 pour le DAB+, libxaac pour le DRM)
 ./gradlew assembleRelease               # app/build/outputs/apk/release/app-release.apk
 ```
@@ -121,7 +122,8 @@ Rust                                     engine/   (desktop/ : prototype Linux, 
 - [SDR++](https://github.com/AlexandreRouma/SDRPlusPlus) et [SDR++Brown](https://github.com/sannysanoff/SDRPlusPlusBrown) : premier moteur de l'app, base de données CTY des indicatifs
 - [Dream](https://sourceforge.net/projects/drm/) et [gr-drm](https://github.com/kit-cel/gr-drm) : références pour le décodeur DRM
 - [FAAD2](https://github.com/knik0/faad2) (AAC, HE-AAC) et [libxaac](https://github.com/ittiam-systems/libxaac) (xHE-AAC)
-- [librtlsdr](https://github.com/osmocom/rtl-sdr) et [libusb](https://libusb.info/)
+- [librtlsdr](https://github.com/osmocom/rtl-sdr), [libairspy](https://github.com/airspy/airspyone_host), [libairspyhf](https://github.com/airspy/airspyhf) et [libusb](https://libusb.info/)
+- API SDRplay 3 : propriétaire, non fournie ; chargée seulement si elle est installée
 - [radio-browser.info](https://www.radio-browser.info/) : logos des stations
 - [KiwiSDR](http://kiwisdr.com/public/) : annuaire public des récepteurs (via rx.linkfanel.net)
 - [EiBi](http://www.eibispace.de/) : horaires des stations ondes courtes (usage non commercial)
@@ -130,4 +132,4 @@ Rust                                     engine/   (desktop/ : prototype Linux, 
 
 ## 📄 Licence
 
-LittleSDR (app et moteur) est distribué sous **GPL-3.0-or-later**. Les bibliothèques liées gardent leur licence : FAAD2 (GPL-2.0-or-later), libxaac (Apache-2.0), librtlsdr (GPL-2.0), libusb (LGPL-2.1).
+LittleSDR (app et moteur) est distribué sous **GPL-3.0-or-later**. Les bibliothèques liées gardent leur licence : FAAD2 (GPL-2.0-or-later), libxaac (Apache-2.0), librtlsdr (GPL-2.0), libusb (LGPL-2.1), libairspy (BSD), libairspyhf (BSD ou GPL-2.0). L'API SDRplay, propriétaire, n'est ni liée ni distribuée : LittleSDR la charge à l'exécution si l'utilisateur l'a installée.

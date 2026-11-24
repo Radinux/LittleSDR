@@ -5,7 +5,9 @@ use crate::dsp::C32;
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::thread::JoinHandle;
 
+pub mod airspy;
 pub mod kiwisdr;
+pub mod sdrplay;
 pub mod rtltcp;
 pub mod spyserver;
 pub mod wavfile;

@@ -7,7 +7,15 @@
 use crate::source::{self, Source};
 use serde_json::{json, Value};
 
-pub const SOURCES: [&str; 5] = ["RTL-SDR", "RTL-TCP", "SpyServer", "KiwiSDR", "Fichier IQ"];
+pub const SOURCES: [&str; 8] = ["RTL-SDR", "Airspy", "Airspy HF+", "SDRplay", "RTL-TCP", "SpyServer", "KiwiSDR", "Fichier IQ"];
+
+/// Airspy R2 / Mini rates (the device keeps the closest it has: 2.5 / 10 MS/s on the R2,
+/// 3 / 6 MS/s on the Mini)
+pub const AIRSPY_RATES: [f64; 4] = [2.5e6, 3e6, 6e6, 10e6];
+/// Airspy HF+ rates (the closest the device has is used)
+pub const AIRSPYHF_RATES: [f64; 5] = [192e3, 256e3, 384e3, 768e3, 912e3];
+/// SDRplay rates: 2 - 10 MS/s from the ADC, below with the API's decimation
+pub const SDRPLAY_RATES: [f64; 9] = [250e3, 500e3, 1e6, 2e6, 3e6, 4e6, 6e6, 8e6, 10e6];
 
 /// RTL-SDR sample rates offered (the tuner's stable ones)
 pub const RTL_RATES: [f64; 10] = [250e3, 1.024e6, 1.536e6, 1.792e6, 1.92e6, 2.048e6, 2.16e6, 2.4e6, 2.56e6, 2.88e6];
@@ -36,6 +44,15 @@ pub struct SourceSettings {
     pub kiwi_gain: f32,
     pub file_path: String,
     pub file_loop: bool,
+    pub airspy_rate: f64,
+    pub airspy_gain: f32,
+    pub airspy_agc: bool,
+    pub hf_rate: f64,
+    pub hf_gain: f32,
+    pub hf_agc: bool,
+    pub sdrplay_rate: f64,
+    pub sdrplay_gain: f32,
+    pub sdrplay_agc: bool,
 }
 
 impl Default for SourceSettings {
@@ -56,6 +73,15 @@ impl Default for SourceSettings {
             kiwi_gain: 50.0,
             file_path: String::new(),
             file_loop: true,
+            airspy_rate: 2.5e6,
+            airspy_gain: 12.0,
+            airspy_agc: false,
+            hf_rate: 768e3,
+            hf_gain: 48.0,
+            hf_agc: true,
+            sdrplay_rate: 2e6,
+            sdrplay_gain: 20.0,
+            sdrplay_agc: true,
         }
     }
 }
@@ -68,6 +94,9 @@ impl SourceSettings {
             "spy_host": self.spy_host, "spy_rate": self.spy_rate, "spy_gain": self.spy_gain,
             "kiwi_site": self.kiwi_site, "kiwi_agc": self.kiwi_agc, "kiwi_gain": self.kiwi_gain,
             "file_path": self.file_path, "file_loop": self.file_loop,
+            "airspy_rate": self.airspy_rate, "airspy_gain": self.airspy_gain, "airspy_agc": self.airspy_agc,
+            "hf_rate": self.hf_rate, "hf_gain": self.hf_gain, "hf_agc": self.hf_agc,
+            "sdrplay_rate": self.sdrplay_rate, "sdrplay_gain": self.sdrplay_gain, "sdrplay_agc": self.sdrplay_agc,
         })
     }
 
@@ -92,6 +121,15 @@ impl SourceSettings {
             kiwi_gain: f("kiwi_gain", d.kiwi_gain as f64) as f32,
             file_path: s("file_path", ""),
             file_loop: b("file_loop", true),
+            airspy_rate: f("airspy_rate", d.airspy_rate),
+            airspy_gain: f("airspy_gain", d.airspy_gain as f64) as f32,
+            airspy_agc: b("airspy_agc", d.airspy_agc),
+            hf_rate: f("hf_rate", d.hf_rate),
+            hf_gain: f("hf_gain", d.hf_gain as f64) as f32,
+            hf_agc: b("hf_agc", d.hf_agc),
+            sdrplay_rate: f("sdrplay_rate", d.sdrplay_rate),
+            sdrplay_gain: f("sdrplay_gain", d.sdrplay_gain as f64) as f32,
+            sdrplay_agc: b("sdrplay_agc", d.sdrplay_agc),
         }
     }
 
@@ -102,6 +140,9 @@ impl SourceSettings {
             "RTL-TCP" => self.tcp_rate,
             "SpyServer" => self.spy_rate,
             "KiwiSDR" => 12_000.0,
+            "Airspy" => self.airspy_rate,
+            "Airspy HF+" => self.hf_rate,
+            "SDRplay" => self.sdrplay_rate,
             _ => 0.0,
         }
     }
@@ -112,6 +153,9 @@ impl SourceSettings {
             "RTL-SDR" | "RTL-TCP" if !self.rtl_agc => Some(self.rtl_gain),
             "SpyServer" => Some(self.spy_gain as f32),
             "KiwiSDR" if !self.kiwi_agc => Some(self.kiwi_gain),
+            "Airspy" if !self.airspy_agc => Some(self.airspy_gain),
+            "Airspy HF+" if !self.hf_agc => Some(self.hf_gain),
+            "SDRplay" if !self.sdrplay_agc => Some(self.sdrplay_gain),
             _ => None,
         }
     }
@@ -170,6 +214,33 @@ pub fn menu(kind: &str, s: &SourceSettings, i: &SourceInfo, usb_present: bool) -
             w.push(slider("rtl_gain", "Gain", "gain", s.rtl_gain, 0.0, 49.6, 0.1, "%.1f dB", s.rtl_agc));
             w.push(check("bias_tee", "Bias-tee (alimente une antenne active)", "bias_tee", s.bias_tee));
             w.push(combo("direct_sampling", "Échantillonnage direct (HF)", "direct_sampling", s.direct_sampling as usize, vec!["Non".into(), "Branche I".into(), "Branche Q".into()]));
+        }
+        "Airspy" => {
+            if !usb_present && cfg!(target_os = "android") {
+                w.push(info("Branchez l'Airspy (USB OTG) et autorisez l'accès."));
+            }
+            w.push(combo("airspy_rate", "Débit", "rate", nearest(&AIRSPY_RATES, s.airspy_rate), AIRSPY_RATES.iter().map(|&r| rate_label(r)).collect()));
+            w.push(check("airspy_agc", "AGC (LNA et mélangeur)", "agc", s.airspy_agc));
+            w.push(slider("airspy_gain", "Gain (linéarité)", "gain", s.airspy_gain, 0.0, 21.0, 1.0, "%.0f", s.airspy_agc));
+            w.push(check("bias_tee", "Bias-tee (alimente une antenne active)", "bias_tee", s.bias_tee));
+        }
+        "Airspy HF+" => {
+            if !usb_present && cfg!(target_os = "android") {
+                w.push(info("Branchez l'Airspy HF+ (USB OTG) et autorisez l'accès."));
+            }
+            w.push(combo("hf_rate", "Débit", "rate", nearest(&AIRSPYHF_RATES, s.hf_rate), AIRSPYHF_RATES.iter().map(|&r| rate_label(r)).collect()));
+            w.push(check("hf_agc", "AGC du récepteur", "agc", s.hf_agc));
+            w.push(slider("hf_gain", "Gain (atténuateur, pas de 6 dB)", "gain", s.hf_gain, 0.0, 48.0, 6.0, "%.0f dB", s.hf_agc));
+        }
+        "SDRplay" => {
+            if cfg!(target_os = "android") {
+                w.push(info("SDRplay ne fournit pas son pilote pour Android : disponible sur Linux seulement."));
+            }
+            w.push(combo("sdrplay_rate", "Débit", "rate", nearest(&SDRPLAY_RATES, s.sdrplay_rate), SDRPLAY_RATES.iter().map(|&r| rate_label(r)).collect()));
+            w.push(check("sdrplay_agc", "AGC", "agc", s.sdrplay_agc));
+            w.push(slider("sdrplay_gain", "Gain", "gain", s.sdrplay_gain, 0.0, 39.0, 1.0, "%.0f dB", s.sdrplay_agc));
+            w.push(check("bias_tee", "Bias-tee (RSP1A/1B, RSP2, RSPduo, RSPdx)", "bias_tee", s.bias_tee));
+            w.push(info("Pilote : API SDRplay 3 et son service (sudo systemctl start sdrplay)."));
         }
         "RTL-TCP" => {
             w.push(text("tcp_host", "Serveur (hôte:port)", "host", &s.tcp_host));
@@ -238,6 +309,42 @@ pub fn apply(kind: &str, s: &mut SourceSettings, i: &SourceInfo, id: &str, b: bo
             s.rtl_agc = b;
             Change::Gain(s.gain(kind))
         }
+        "airspy_rate" => {
+            s.airspy_rate = AIRSPY_RATES[(idx.max(0) as usize).min(AIRSPY_RATES.len() - 1)];
+            Change::Rate(s.airspy_rate)
+        }
+        "hf_rate" => {
+            s.hf_rate = AIRSPYHF_RATES[(idx.max(0) as usize).min(AIRSPYHF_RATES.len() - 1)];
+            Change::Rate(s.hf_rate)
+        }
+        "sdrplay_rate" => {
+            s.sdrplay_rate = SDRPLAY_RATES[(idx.max(0) as usize).min(SDRPLAY_RATES.len() - 1)];
+            Change::Rate(s.sdrplay_rate)
+        }
+        "airspy_agc" => {
+            s.airspy_agc = b;
+            Change::Gain(s.gain(kind))
+        }
+        "airspy_gain" => {
+            s.airspy_gain = f.round().clamp(0.0, 21.0);
+            Change::Gain(s.gain(kind))
+        }
+        "hf_agc" => {
+            s.hf_agc = b;
+            Change::Gain(s.gain(kind))
+        }
+        "hf_gain" => {
+            s.hf_gain = ((f / 6.0).round() * 6.0).clamp(0.0, 48.0);
+            Change::Gain(s.gain(kind))
+        }
+        "sdrplay_agc" => {
+            s.sdrplay_agc = b;
+            Change::Gain(s.gain(kind))
+        }
+        "sdrplay_gain" => {
+            s.sdrplay_gain = f.round().clamp(0.0, 39.0);
+            Change::Gain(s.gain(kind))
+        }
         "rtl_gain" => {
             // Snap to the tuner's steps
             s.rtl_gain = RTL_GAINS.iter().copied().min_by(|a, c| (a - f).abs().total_cmp(&(c - f).abs())).unwrap_or(f);
@@ -298,6 +405,19 @@ pub fn open(kind: &str, s: &SourceSettings, usb_fd: Option<i32>) -> Result<(Box<
             }
             Box::new(source::rtlsdr::RtlSdr { index: 0, fd: usb_fd })
         }
+        "Airspy" => {
+            if cfg!(target_os = "android") && usb_fd.is_none() {
+                return Err("aucun Airspy (USB)".into());
+            }
+            Box::new(source::airspy::Airspy { fd: usb_fd })
+        }
+        "Airspy HF+" => {
+            if cfg!(target_os = "android") && usb_fd.is_none() {
+                return Err("aucun Airspy HF+ (USB)".into());
+            }
+            Box::new(source::airspy::AirspyHf { fd: usb_fd })
+        }
+        "SDRplay" => Box::new(source::sdrplay::SdrPlay),
         "RTL-TCP" => {
             if s.tcp_host.is_empty() {
                 return Err("indiquez le serveur rtl_tcp".into());

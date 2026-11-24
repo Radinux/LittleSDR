@@ -319,7 +319,7 @@ impl Service {
             center: i.center as u64,
             gain: i.settings.gain(&kind),
             direct_sampling: if kind == "RTL-SDR" { i.settings.direct_sampling } else { 0 },
-            bias_tee: i.settings.bias_tee && (kind == "RTL-SDR" || kind == "RTL-TCP"),
+            bias_tee: i.settings.bias_tee && matches!(kind.as_str(), "RTL-SDR" | "RTL-TCP" | "Airspy" | "SDRplay"),
         };
         let (tx, rx) = sync_channel::<IqBlock>(64);
         let src = source::spawn(src, cfg, tx);

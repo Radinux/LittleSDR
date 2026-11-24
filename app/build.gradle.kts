@@ -59,7 +59,8 @@ android {
 }
 
 // Native layer, all Rust: the engine (engine/) built by cargo-ndk into liblittlesdr.so, next to
-// the prebuilt RTL-SDR driver it links (kit/jniLibs: librtlsdr + libusb, from kit/build-kit.sh)
+// the prebuilt receiver drivers (kit/jniLibs, from kit/build-kit.sh): librtlsdr + libusb, linked;
+// libairspy + libairspyhf, loaded when an Airspy is opened
 abstract class RustJniLibsTask : DefaultTask() {
     @get:Inject
     abstract val exec: ExecOperations
@@ -92,7 +93,8 @@ abstract class RustJniLibsTask : DefaultTask() {
             commandLine(listOf(cargo, "ndk") + abis.flatMap { listOf("-t", it) } + listOf("-P", "28", "-o", out.path, "build", "--release", "--lib", "--no-default-features", "--features", "rtlsdr"))
         }
         for (abi in abis) {
-            for (lib in listOf("librtlsdr.so", "libusb1.0.so")) {
+            // libairspy / libairspyhf are loaded by the engine when an Airspy is opened
+            for (lib in listOf("librtlsdr.so", "libusb1.0.so", "libairspy.so", "libairspyhf.so")) {
                 kitLibs.get().asFile.resolve("$abi/$lib").copyTo(out.resolve("$abi/$lib"), overwrite = true)
             }
         }

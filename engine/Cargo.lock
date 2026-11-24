@@ -375,6 +375,7 @@ dependencies = [
  "cc",
  "cpal",
  "jni",
+ "libloading",
  "rustfft",
  "serde_json",
 ]
