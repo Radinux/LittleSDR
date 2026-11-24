@@ -779,9 +779,9 @@ impl Service {
         self.with_engine(|e| e.save_lrpt(None)).join("\n")
     }
 
-    /// ADS-B: aircraft in view; `trails`: with their tracks (for the map)
-    pub fn adsb_json(&self, trails: bool) -> String {
-        self.with_engine(|e| e.adsb_json(trails))
+    /// ADS-B: aircraft in view, with their recent tracks (for the map)
+    pub fn adsb_json(&self) -> String {
+        self.with_engine(|e| e.adsb_json(true))
     }
 
     /// ADS-B setting: "clear"; "lat" / "lon" (receiver position, also set from the locator)

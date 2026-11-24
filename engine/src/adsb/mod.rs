@@ -35,6 +35,8 @@ const EXPIRE: f64 = 60.0;
 /// Even / odd position frames further apart than this cannot be combined (s)
 const CPR_PAIR: f64 = 10.0;
 const TRAIL_MAX: usize = 400;
+/// Track points sent to the app per aircraft
+const TRAIL_JSON: usize = 150;
 
 #[derive(Clone, Debug, Default)]
 pub struct Aircraft {
@@ -457,15 +459,13 @@ fn position(a: &mut Aircraft, odd: bool, lat: u32, lon: u32, surface: bool, now:
         None => None,
     };
     let Some(p) = new else { return };
-    // Sanity: a jump faster than ~Mach 2.5 since the last fix, or out of reception range
+    // Sanity: a jump faster than ~Mach 2.5 since the last fix. (No range check against the
+    // receiver: it may be far away, a network receiver, or the locator wrong; the global
+    // decoding of a CRC-checked pair is unambiguous.)
     if let Some(old) = a.pos {
         let dt = (now - a.pos_time).max(1.0);
         if cpr::distance_bearing(old, p).0 > 0.85 * dt + 2.0 {
             a.pos = None; // start again from a global pair
-            return;
-        }
-    } else if let Some(h) = home {
-        if cpr::distance_bearing(h, p).0 > 600.0 {
             return;
         }
     }
@@ -515,7 +515,9 @@ fn aircraft_json(a: &Aircraft, now: f64, home: Option<(f64, f64)>, trails: bool)
         o["bearing"] = json!(b.round());
     }
     if trails {
-        o["trail"] = json!(a.trail.iter().map(|t| json!([round(t.0, 1e5), round(t.1, 1e5), t.2])).collect::<Vec<_>>());
+        // The last ~10 minutes: enough for the map, keeps the app's polling light
+        let from = a.trail.len().saturating_sub(TRAIL_JSON);
+        o["trail"] = json!(a.trail[from..].iter().map(|t| json!([round(t.0, 1e5), round(t.1, 1e5), t.2])).collect::<Vec<_>>());
     }
     o
 }
@@ -570,6 +572,8 @@ mod tests {
         ];
         for (rate, off) in [(2.0e6, 0.0), (2.0e6, 0.25), (2.4e6, 0.0), (2.4e6, 0.3), (2.4e6, 0.6), (2.5e6, 0.7), (3.0e6, 0.4)] {
             let mut d = AdsbDecoder::new(rate);
+            // A receiver position far away (network receiver, wrong locator) blocks nothing
+            d.home = Some((39.23, -123.13));
             let iq = modulate(&msgs, 0.3, 0.06, rate, off);
             // In uneven blocks: frames straddle them
             for (k, c) in iq.chunks(777).enumerate() {

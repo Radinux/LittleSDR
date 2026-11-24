@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Flight
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Radio
@@ -64,17 +65,19 @@ enum class AppSpace(val label: String, val icon: ImageVector) {
     SDR("SDR", Icons.Default.GraphicEq),
     DAB("DAB+", Icons.Default.Radio),
     LRPT("LRPT", Icons.Default.SatelliteAlt),
-    DRM("DRM", Icons.Default.Public);
+    DRM("DRM", Icons.Default.Public),
+    ADSB("ADS-B", Icons.Default.Flight);
 
     fun accepts(m: Mode): Boolean = when (this) {
         SDR -> !m.isDigital
         DAB -> m == Mode.DAB
         DRM -> m == Mode.DRM
         LRPT -> m == Mode.LRPT
+        ADSB -> m == Mode.ADSB
     }
 
     companion object {
-        val menuOrder = listOf(SDR, DAB, DRM, LRPT)
+        val menuOrder = listOf(SDR, DAB, DRM, LRPT, ADSB)
     }
 }
 

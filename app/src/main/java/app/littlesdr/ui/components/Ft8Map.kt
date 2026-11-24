@@ -50,7 +50,7 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /** Country outlines from assets/world.bin (tools/make_world_map.py), as one Path in degrees. */
-private object WorldMap {
+internal object WorldMap {
     private var path: Path? = null
 
     /** x = lon + 180 (0..360), y = 90 - lat (0..180): equirectangular, north up. */

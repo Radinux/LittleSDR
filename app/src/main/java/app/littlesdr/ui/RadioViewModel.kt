@@ -4,6 +4,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import app.littlesdr.engine.DAB_CHANNELS
 import app.littlesdr.engine.DabService
 import app.littlesdr.engine.DigitalState
+import app.littlesdr.engine.ADSB_FREQUENCY
+import app.littlesdr.engine.AdsbState
 import app.littlesdr.engine.LRPT_SATELLITES
 import app.littlesdr.engine.LrptState
 import app.littlesdr.ui.components.AppSpace
@@ -260,6 +262,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         Mode.DAB -> DAB_CHANNELS.first { it.name == "11D" }.hz
         Mode.DRM -> 13_790_000.0
         Mode.LRPT -> LRPT_SATELLITES.first().hz
+        Mode.ADSB -> ADSB_FREQUENCY
         else -> 100_000_000.0
     }
 
@@ -279,6 +282,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
             AppSpace.DAB -> Mode.DAB
             AppSpace.DRM -> Mode.DRM
             AppSpace.LRPT -> Mode.LRPT
+            AppSpace.ADSB -> Mode.ADSB
         }
         val saved = Mode.of(spacePrefs.getInt("mode_${target.name}", -1))
         val mode = saved?.takeIf { target.accepts(it) } ?: fallback
@@ -300,6 +304,19 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     val lrpt: StateFlow<LrptState> = _lrpt.asStateFlow()
     private val _lrptImage = MutableStateFlow<androidx.compose.ui.graphics.ImageBitmap?>(null)
     val lrptImage: StateFlow<androidx.compose.ui.graphics.ImageBitmap?> = _lrptImage.asStateFlow()
+
+    // ---- ADS-B: aircraft on the map, the one picked for details
+    private val _adsb = MutableStateFlow(AdsbState())
+    val adsb: StateFlow<AdsbState> = _adsb.asStateFlow()
+    private val _adsbSelected = MutableStateFlow<String?>(null)
+    /** ICAO address of the aircraft shown in detail */
+    val adsbSelected: StateFlow<String?> = _adsbSelected.asStateFlow()
+    fun selectAircraft(icao: String?) { _adsbSelected.value = icao.takeIf { it != _adsbSelected.value } }
+    fun clearAircraft() {
+        Engine.adsbSet("clear", 0.0)
+        _adsbSelected.value = null
+        _adsb.value = _adsb.value.copy(aircraft = emptyList())
+    }
 
     fun dabSelect(s: DabService) {
         _slide.value = null
@@ -682,6 +699,12 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                                 else android.graphics.Bitmap.createBitmap(px, 2, w, w, h, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
                             }
                         }
+                    }
+                    AppSpace.ADSB -> {
+                        val a = Engine.adsb()
+                        _adsb.value = a
+                        // The picked aircraft went out of range: back to the list
+                        if (_adsbSelected.value != null && a.aircraft.none { it.icao == _adsbSelected.value }) _adsbSelected.value = null
                     }
                     AppSpace.SDR -> {}
                 }

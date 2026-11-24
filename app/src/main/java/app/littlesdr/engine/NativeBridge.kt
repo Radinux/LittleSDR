@@ -64,6 +64,8 @@ object NativeBridge {
     @JvmStatic external fun lrptSet(key: String, value: Double)
     @JvmStatic external fun lrptImage(): IntArray
     @JvmStatic external fun lrptSave(): String
+    @JvmStatic external fun adsbJson(): String
+    @JvmStatic external fun adsbSet(key: String, value: Double)
 
     // display (Vulkan renderer)
     @JvmStatic external fun setView(viewBandwidth: Double, viewOffset: Double)

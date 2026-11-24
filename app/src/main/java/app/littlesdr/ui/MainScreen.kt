@@ -87,6 +87,8 @@ import app.littlesdr.ui.components.DigitalNowPlaying
 import app.littlesdr.ui.components.DigitalHeader
 import app.littlesdr.ui.components.DabTuner
 import app.littlesdr.ui.components.DrmTuner
+import app.littlesdr.ui.components.AdsbMap
+import app.littlesdr.ui.components.AdsbPanel
 import app.littlesdr.ui.components.LrptImagePanel
 import app.littlesdr.ui.components.LrptPanel
 import app.littlesdr.ui.components.SpaceSwitcher
@@ -140,6 +142,8 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val slide by vm.slide.collectAsStateWithLifecycle()
     val lrpt by vm.lrpt.collectAsStateWithLifecycle()
     val lrptImage by vm.lrptImage.collectAsStateWithLifecycle()
+    val adsb by vm.adsb.collectAsStateWithLifecycle()
+    val adsbSelected by vm.adsbSelected.collectAsStateWithLifecycle()
     val dabFound by vm.dabFound.collectAsStateWithLifecycle()
     val dabScan by vm.dabScan.collectAsStateWithLifecycle()
     val kiwiRefused by vm.kiwiRefused.collectAsStateWithLifecycle()
@@ -258,7 +262,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         rds = rds,
                         eibi = eibi,
                         modifier = Modifier.weight(
-                            when (space) { AppSpace.SDR -> 1f; AppSpace.DRM -> 0.34f; else -> 0.38f },
+                            when (space) { AppSpace.SDR -> 1f; AppSpace.DRM -> 0.34f; AppSpace.ADSB -> 0.26f; else -> 0.38f },
                         ).fillMaxWidth(),
                     )
                     when (space) {
@@ -272,6 +276,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         )
                         AppSpace.LRPT -> LrptImagePanel(lrptImage, lrpt, playing, Modifier.weight(0.62f).fillMaxWidth())
                         AppSpace.DRM -> player(Modifier.weight(0.66f).fillMaxWidth())
+                        AppSpace.ADSB -> AdsbMap(adsb, adsbSelected, playing, vm::selectAircraft, Modifier.weight(0.74f).fillMaxWidth())
                         AppSpace.DAB -> Unit
                     }
                 }
@@ -348,6 +353,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                             if (space != AppSpace.SDR) {
                                 when {
                                     showSource -> sourcePanel()
+                                    space == AppSpace.ADSB -> AdsbPanel(adsb, adsbSelected, onSelect = vm::selectAircraft, onClear = vm::clearAircraft)
                                     else -> LrptPanel(
                                         frequency = stateHolder.value.vfoFrequency, l = lrpt,
                                         onTune = vm::tune, onOqpsk = vm::setLrptOqpsk, onSave = vm::saveLrpt,

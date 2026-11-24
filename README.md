@@ -3,7 +3,7 @@
 # 📻 LittleSDR
 
 **Un récepteur SDR pour Android, pensé pour le tactile, avec son propre moteur radio en Rust.**
-SDR, radio numérique DAB+ et DRM, images satellite Meteor : une seule app, une interface par usage.
+SDR, radio numérique DAB+ et DRM, images satellite Meteor, avions en ADS-B : une seule app, une interface par usage.
 
 ![Android 9+](https://img.shields.io/badge/Android-9%2B-3DDC84?logo=android&logoColor=white)
 ![Kotlin](https://img.shields.io/badge/Kotlin-Compose-7F52FF?logo=kotlin&logoColor=white)
@@ -42,6 +42,8 @@ Un bouton change d'interface selon l'usage :
 **DRM** : radio numérique en ondes courtes (xHE-AAC), bandes de radiodiffusion, gain et bias-tee à portée de main
 
 **LRPT** : images des satellites météo Meteor-M (137 MHz), affichées pendant le passage
+
+**ADS-B** : les avions autour de toi (1090 MHz) sur une carte, avec leur trace colorée selon l'altitude, cercles de distance depuis ton locator ; vol, compagnie (pays), altitude, vitesse, cap, vario, transpondeur et urgences
 
 ## 📡 Récepteurs
 
@@ -103,7 +105,7 @@ Options : `--file <iq.wav>`, `--mode <0-10>` (NFM, WFM, AM, DSB, USB, CW, LSB, R
 
 ```
 Kotlin / Compose Material 3              app/src/main/java/app/littlesdr
- ├─ ui/        écrans (SDR, autoradio DAB+, DRM, LRPT), réglages, carte FT8
+ ├─ ui/        écrans (SDR, autoradio DAB+, DRM, LRPT, ADS-B), réglages, cartes FT8 et ADS-B
  ├─ engine/    façade vers le moteur (JNI), modèles
  ├─ data/      mémoires, préférences, EiBi, logos, position
  ├─ usb/       détection, permission, descripteur USB → pilote
