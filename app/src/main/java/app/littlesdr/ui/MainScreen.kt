@@ -254,7 +254,8 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                 ) {
                     // Spectrum: big in SDR; a strip above the picture (LRPT) or the player (DRM),
                     // where a DRM block seen in the band can be tapped to tune it
-                    SpectrumPanel(
+                    // ADS-B: the map gets the whole height, the band has nothing to look at
+                    if (space != AppSpace.ADSB) SpectrumPanel(
                         state = stateHolder, view = viewHolder, display = data.display, step = step,
                         onTune = vm::tune, onView = vm::setView, onResetZoom = vm::resetZoom,
                         cornerRadius = corners.innerRadius,
@@ -262,7 +263,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         rds = rds,
                         eibi = eibi,
                         modifier = Modifier.weight(
-                            when (space) { AppSpace.SDR -> 1f; AppSpace.DRM -> 0.34f; AppSpace.ADSB -> 0.26f; else -> 0.38f },
+                            when (space) { AppSpace.SDR -> 1f; AppSpace.DRM -> 0.34f; else -> 0.38f },
                         ).fillMaxWidth(),
                     )
                     when (space) {
@@ -276,7 +277,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         )
                         AppSpace.LRPT -> LrptImagePanel(lrptImage, lrpt, playing, Modifier.weight(0.62f).fillMaxWidth())
                         AppSpace.DRM -> player(Modifier.weight(0.66f).fillMaxWidth())
-                        AppSpace.ADSB -> AdsbMap(adsb, adsbSelected, playing, vm::selectAircraft, Modifier.weight(0.74f).fillMaxWidth())
+                        AppSpace.ADSB -> AdsbMap(adsb, adsbSelected, playing, vm::selectAircraft, Modifier.weight(1f).fillMaxWidth())
                         AppSpace.DAB -> Unit
                     }
                 }
