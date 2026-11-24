@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 const MODES: [&str; 11] = ["NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW", "DAB+", "DRM", "LRPT"];
 const DAB: usize = 8;
+const LRPT: usize = 10;
 const WF_ROWS: usize = 360;
 // Palette of the Android app (Material 3 dark, amber accent)
 const AMBER: Color32 = Color32::from_rgb(246, 179, 85);
@@ -331,6 +332,12 @@ struct App {
     search: String,
     slide_id: u64,
     slide_tex: Option<TextureHandle>,
+    // Meteor LRPT
+    lrpt: Value,
+    lrpt_tex: Option<TextureHandle>,
+    lrpt_packets: u64,
+    lrpt_at: Instant,
+    note: Option<String>,
     // tests
     shot: Option<String>,
     started: Instant,
@@ -376,6 +383,11 @@ impl App {
             search: String::new(),
             slide_id: 0,
             slide_tex: None,
+            lrpt: Value::Null,
+            lrpt_tex: None,
+            lrpt_packets: u64::MAX,
+            lrpt_at: Instant::now(),
+            note: None,
             shot,
             started: Instant::now(),
             shot_asked: false,
@@ -608,6 +620,20 @@ impl App {
             ui.label("à");
             ui.add(egui::DragValue::new(&mut self.db_max).range(self.db_min + 10.0..=20.0).speed(1.0).suffix(" dB"));
         });
+        if mode == LRPT {
+            ui.add_space(8.0);
+            let mut oq = self.lrpt["oqpsk"].as_bool().unwrap_or(true);
+            if ui.checkbox(&mut oq, "OQPSK (Meteor-M N2-3 / N2-4)").changed() {
+                self.svc.lrpt_set("oqpsk", if oq { 1.0 } else { 0.0 });
+            }
+            if ui.add_enabled(self.lrpt["packets"].as_u64().unwrap_or(0) > 0, egui::Button::new("💾  Enregistrer les images")).clicked() {
+                let files = self.svc.lrpt_save();
+                self.note = Some(if files.is_empty() { "Pas encore d'image".into() } else { format!("Enregistré :\n{files}") });
+            }
+            if let Some(n) = &self.note {
+                ui.small(n);
+            }
+        }
         ui.add_space(8.0);
         self.info_panel(ui, st);
     }
@@ -651,6 +677,23 @@ impl App {
         };
         ui.label(RichText::new("Flux").strong().color(AMBER));
         grid(ui, "flow", &flow);
+        if st[6] as usize == LRPT && self.lrpt["active"].as_bool().unwrap_or(false) {
+            let l = &self.lrpt;
+            let chans: Vec<String> = l["channels"].as_array().map(|a| a.iter().map(|c| c.to_string()).collect()).unwrap_or_default();
+            let rows = vec![
+                ("Trames".to_string(), if l["locked"].as_bool().unwrap_or(false) { "accrochées".to_string() } else { "recherche".to_string() }),
+                ("Porteuse".to_string(), format!("{:+.0} Hz", l["carrier"].as_f64().unwrap_or(0.0))),
+                ("Ouverture de l'œil".to_string(), format!("{:.2}", l["eye"].as_f64().unwrap_or(0.0))),
+                ("Modulation".to_string(), if l["oqpsk"].as_bool().unwrap_or(true) { "OQPSK".to_string() } else { "QPSK".to_string() }),
+                ("Reed-Solomon".to_string(), format!("{} bonnes · {} ratées", l["framesOk"].as_u64().unwrap_or(0), l["framesBad"].as_u64().unwrap_or(0))),
+                ("Paquets image".to_string(), l["packets"].as_u64().unwrap_or(0).to_string()),
+                ("Canaux (APID)".to_string(), if chans.is_empty() { "—".to_string() } else { chans.join(", ") }),
+                ("Lignes".to_string(), l["lines"].as_u64().unwrap_or(0).to_string()),
+            ];
+            ui.add_space(10.0);
+            ui.label(RichText::new("Décodeur LRPT").strong().color(AMBER));
+            grid(ui, "lrpt", &rows);
+        }
         if let Some(status) = self.digital["status"].as_str().filter(|_| matches!(st[6] as usize, DAB | 9)) {
             ui.add_space(10.0);
             ui.label(RichText::new(if st[6] as usize == DAB { "Décodeur DAB+" } else { "Décodeur DRM" }).strong().color(AMBER));
@@ -1118,6 +1161,75 @@ impl App {
             });
     }
 
+    // ------------------------------------------------------------------ Meteor LRPT
+
+    /// New picture lines -> texture (at most every 2 s: the picture is big)
+    fn update_lrpt(&mut self, ctx: &egui::Context) {
+        self.lrpt = serde_json::from_str(&self.svc.lrpt_json()).unwrap_or(Value::Null);
+        let packets = self.lrpt["packets"].as_u64().unwrap_or(0);
+        if packets == self.lrpt_packets || self.lrpt_at.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        self.lrpt_packets = packets;
+        self.lrpt_at = Instant::now();
+        let px = self.svc.lrpt_image();
+        let (w, h) = (px.first().copied().unwrap_or(0) as usize, px.get(1).copied().unwrap_or(0) as usize);
+        if w == 0 || h == 0 || px.len() < 2 + w * h {
+            return;
+        }
+        let pixels = px[2..2 + w * h].iter().map(|&c| {
+            let c = c as u32;
+            Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
+        });
+        let img = ColorImage { size: [w, h], pixels: pixels.collect() };
+        match &mut self.lrpt_tex {
+            Some(t) => t.set(img, TextureOptions::LINEAR),
+            None => self.lrpt_tex = Some(ctx.load_texture("lrpt", img, TextureOptions::LINEAR)),
+        }
+    }
+
+    /// Spectrum strip on top, the picture as it comes down below (newest lines kept in view)
+    fn lrpt_view(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
+        card(ui, SURFACE, |ui| {
+            ui.allocate_ui(Vec2::new(ui.available_width(), 200.0), |ui| self.spectrum(ui, st));
+        });
+        ui.add_space(10.0);
+        card(ui, SURFACE, |ui| {
+            ui.set_width(ui.available_width());
+            let l = &self.lrpt;
+            let locked = l["locked"].as_bool().unwrap_or(false);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Meteor-M · LRPT").size(18.0).strong());
+                let (txt, col) = if st[7] == 0.0 {
+                    ("arrêté", DIM)
+                } else if locked {
+                    ("trames accrochées", AMBER)
+                } else {
+                    ("recherche du signal", DIM)
+                };
+                ui.label(RichText::new(txt).color(col));
+                ui.label(RichText::new(format!("{} lignes", l["lines"].as_u64().unwrap_or(0))).color(DIM));
+            });
+            match &self.lrpt_tex {
+                Some(t) => {
+                    let s = t.size_vec2();
+                    let w = ui.available_width();
+                    let h = s.y * w / s.x;
+                    egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
+                        ui.image((t.id(), Vec2::new(w, h)));
+                    });
+                }
+                None => {
+                    ui.add_space(30.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(RichText::new("🛰").size(48.0).color(AMBER));
+                        ui.label(RichText::new(if st[7] == 0.0 { "Appuie sur ▶ au début d'un passage" } else { "L'image apparaît dès que les trames sont accrochées" }).color(DIM));
+                    });
+                }
+            }
+        });
+    }
+
     // ------------------------------------------------------------------ side panel
 
     /// The source's settings, built from the engine's menu (combo, checkbox, slider, text)
@@ -1222,6 +1334,9 @@ impl eframe::App for App {
             self.run_scan();
             self.learn_multiplex(&st);
             self.update_slide(ctx);
+            if st[6] as usize == LRPT {
+                self.update_lrpt(ctx);
+            }
         }
         let dab = st[6] as usize == DAB;
         let car = dab && self.dab_view == DabView::Car;
@@ -1239,7 +1354,9 @@ impl eframe::App for App {
                 });
                 ui.add_space(8.0);
             }
-            if car {
+            if st[6] as usize == LRPT {
+                self.lrpt_view(ui, &st);
+            } else if car {
                 self.car_radio(ui, &st);
             } else {
                 card(ui, SURFACE, |ui| {
