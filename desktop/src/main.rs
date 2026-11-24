@@ -232,7 +232,12 @@ fn main() -> eframe::Result<()> {
         svc.set_mode(m);
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 780.0]).with_title("LittleSDR"),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 820.0])
+            .with_min_inner_size([900.0, 620.0])
+            .with_title("LittleSDR")
+            .with_decorations(false)
+            .with_transparent(true),
         ..Default::default()
     };
     let shot = args.shot.clone();
@@ -294,6 +299,93 @@ enum Tab {
     Technical,
 }
 
+/// The interfaces, as the Android app's spaces
+#[derive(PartialEq, Clone, Copy)]
+enum Space {
+    Sdr,
+    Dab,
+    Drm,
+    Lrpt,
+}
+
+impl Space {
+    const ALL: [(Space, &'static str); 4] = [(Space::Sdr, "SDR"), (Space::Dab, "DAB+"), (Space::Drm, "DRM"), (Space::Lrpt, "LRPT")];
+
+    fn of_mode(m: usize) -> Space {
+        match m {
+            DAB => Space::Dab,
+            9 => Space::Drm,
+            LRPT => Space::Lrpt,
+            _ => Space::Sdr,
+        }
+    }
+}
+
+/// Band name, wavelength and ITU range of a frequency, for the bar under the spectrum
+fn band_info(hz: f64) -> String {
+    const BANDS: [(f64, f64, &str); 33] = [
+        (148.5e3, 283.5e3, "Grandes ondes"),
+        (526.5e3, 1606.5e3, "Petites ondes"),
+        (1.81e6, 2.0e6, "Radioamateur 160 m"),
+        (2.3e6, 2.495e6, "Radiodiffusion 120 m"),
+        (3.2e6, 3.4e6, "Radiodiffusion 90 m"),
+        (3.5e6, 3.8e6, "Radioamateur 80 m"),
+        (3.9e6, 4.0e6, "Radiodiffusion 75 m"),
+        (4.75e6, 5.06e6, "Radiodiffusion 60 m"),
+        (5.3515e6, 5.3665e6, "Radioamateur 60 m"),
+        (5.9e6, 6.2e6, "Radiodiffusion 49 m"),
+        (7.0e6, 7.2e6, "Radioamateur 40 m"),
+        (7.2e6, 7.45e6, "Radiodiffusion 41 m"),
+        (9.4e6, 9.9e6, "Radiodiffusion 31 m"),
+        (10.1e6, 10.15e6, "Radioamateur 30 m"),
+        (11.6e6, 12.1e6, "Radiodiffusion 25 m"),
+        (13.57e6, 13.87e6, "Radiodiffusion 22 m"),
+        (14.0e6, 14.35e6, "Radioamateur 20 m"),
+        (15.1e6, 15.8e6, "Radiodiffusion 19 m"),
+        (17.48e6, 17.9e6, "Radiodiffusion 16 m"),
+        (18.068e6, 18.168e6, "Radioamateur 17 m"),
+        (21.0e6, 21.45e6, "Radioamateur 15 m"),
+        (21.45e6, 21.85e6, "Radiodiffusion 13 m"),
+        (24.89e6, 24.99e6, "Radioamateur 12 m"),
+        (26.965e6, 27.405e6, "CB"),
+        (28.0e6, 29.7e6, "Radioamateur 10 m"),
+        (50.0e6, 52.0e6, "Radioamateur 6 m"),
+        (87.5e6, 108.0e6, "FM"),
+        (108.0e6, 137.0e6, "Aviation"),
+        (137.0e6, 138.0e6, "Satellites météo"),
+        (144.0e6, 146.0e6, "Radioamateur 2 m"),
+        (156.0e6, 162.05e6, "Marine"),
+        (174.0e6, 240.0e6, "DAB (bande III)"),
+        (430.0e6, 440.0e6, "Radioamateur 70 cm"),
+    ];
+    let name = if (446.0e6..=446.2e6).contains(&hz) { "PMR446" } else { BANDS.iter().find(|b| (b.0..=b.1).contains(&hz)).map_or("", |b| b.2) };
+    let m = 299.792_458e6 / hz.max(1.0);
+    let lambda = if m >= 10.0 { format!("{m:.0} m") } else if m >= 1.0 { format!("{m:.1} m").replace(".0 m", " m") } else { format!("{:.0} cm", m * 100.0) };
+    let itu = match hz {
+        f if f < 300e3 => "LF",
+        f if f < 3e6 => "MF",
+        f if f < 30e6 => "HF",
+        f if f < 300e6 => "VHF",
+        f if f < 3e9 => "UHF",
+        _ => "SHF",
+    };
+    [name, &lambda, itu].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("  ·  ")
+}
+
+/// Vertical fade (a band of `color` going transparent), for the edges of a scrolled list
+fn fade(painter: &egui::Painter, rect: Rect, color: Color32, down: bool) {
+    let mut mesh = egui::Mesh::default();
+    let clear = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 0);
+    let (top, bottom) = if down { (color, clear) } else { (clear, color) };
+    mesh.colored_vertex(rect.left_top(), top);
+    mesh.colored_vertex(rect.right_top(), top);
+    mesh.colored_vertex(rect.left_bottom(), bottom);
+    mesh.colored_vertex(rect.right_bottom(), bottom);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 3, 2);
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 #[derive(PartialEq, Clone, Copy)]
 enum DabView {
     Car,
@@ -326,6 +418,7 @@ struct App {
     info_at: Instant,
     error: Option<String>,
     tab: Tab,
+    space: Space,
     squelch_on: bool,
     squelch: f32,
     // DAB car radio
@@ -379,6 +472,7 @@ impl App {
             info_at: Instant::now(),
             error: None,
             tab: Tab::Radio,
+            space: Space::of_mode(st[6] as usize),
             squelch_on: st[8] != 0.0,
             squelch: st[9] as f32,
             dab_view: DabView::Car,
@@ -513,76 +607,291 @@ impl App {
 
     // ------------------------------------------------------------------ top bar
 
-    // ------------------------------------------------------------------ right panel
+    // ------------------------------------------------------------------ window
 
-    fn right_panel(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
-        let playing = st[7] != 0.0;
-        // Receiver chip + round play button, as on the phone
-        ui.horizontal(|ui| {
-            let src = self.svc.selected_source();
-            if ui.add(egui::Button::new(RichText::new(format!("📶  {src}")).size(16.0)).fill(SURFACE_HIGH).corner_radius(18.0).min_size(Vec2::new(0.0, 40.0))).clicked() {
-                self.tab = Tab::Receiver;
+    /// The whole window: rounded frame (full screen: edge to edge), notch, window buttons,
+    /// the spectrum card with its band bar, the control panel and the spaces
+    fn draw_window(&mut self, ctx: &egui::Context, st: &[f64; 11]) {
+        if ctx.input(|i| i.key_pressed(egui::Key::F11)) {
+            let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+        }
+        let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false) || i.viewport().maximized.unwrap_or(false));
+        let radius = if full { 0.0 } else { 28.0 };
+        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
+            let win = ui.max_rect();
+            ui.painter().rect_filled(win, radius, BG);
+            if !full {
+                self.resize_edges(ui, win);
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let (fill, icon) = if playing { (PRIMARY_CONTAINER, "⏹") } else { (AMBER, "▶") };
-                let b = egui::Button::new(RichText::new(icon).size(24.0).color(if playing { ON_CONTAINER } else { Color32::BLACK })).fill(fill).corner_radius(28.0).min_size(Vec2::splat(56.0));
-                if ui.add(b).on_hover_text(if playing { "Arrêter" } else { "Écouter" }).clicked() {
-                    self.toggle_play(playing);
-                }
-            });
+            // Title strip: drag to move, double click to maximise; notch in the middle
+            let strip = Rect::from_min_size(win.min, Vec2::new(win.width(), 48.0));
+            let drag = ui.interact(strip, ui.id().with("titlebar"), Sense::click_and_drag());
+            if drag.drag_started() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            if drag.double_clicked() {
+                let max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+            }
+            self.notch(ui, strip, st);
+            self.window_buttons(ui, ctx, strip);
+
+            let inner = Rect::from_min_max(Pos2::new(win.left() + 16.0, strip.bottom() + 4.0), Pos2::new(win.right() - 16.0, win.bottom() - 16.0));
+            let top_h = (inner.height() * 0.56).max(240.0);
+            let top = Rect::from_min_size(inner.min, Vec2::new(inner.width(), top_h));
+            let bottom = Rect::from_min_max(Pos2::new(inner.left(), top.bottom() + 12.0), inner.max);
+            let pill_w = 112.0;
+            let control = Rect::from_min_max(bottom.min, Pos2::new(bottom.right() - pill_w - 12.0, bottom.bottom()));
+            let pill = Rect::from_min_max(Pos2::new(bottom.right() - pill_w, bottom.top()), bottom.max);
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(top), |ui| self.top_card(ui, st));
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(control), |ui| self.control_card(ui, st));
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(pill), |ui| self.spaces_pill(ui, st));
         });
-        ui.add_space(6.0);
-        // Frequency
-        card(ui, SURFACE, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(frequency_job(st[0], 34.0));
-            let mode = MODES.get(st[6] as usize).unwrap_or(&"?");
-            ui.label(RichText::new(format!("{mode} · {} · span {}", khz(st[4]), khz(st[2]))).color(DIM));
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Aller à").color(DIM));
-                let r = ui.add(egui::TextEdit::singleline(&mut self.freq_text).desired_width(120.0).font(egui::TextStyle::Monospace));
-                ui.label(RichText::new("MHz").color(DIM));
-                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    if let Ok(mhz) = self.freq_text.replace(',', ".").trim().parse::<f64>() {
-                        self.svc.tune(mhz * 1e6);
+    }
+
+    /// Edges of the borderless window: the cursor shows the direction, a drag resizes
+    fn resize_edges(&mut self, ui: &mut egui::Ui, win: Rect) {
+        use egui::viewport::ResizeDirection as D;
+        let e = 6.0;
+        let zones = [
+            (Rect::from_min_max(win.left_top(), Pos2::new(win.left() + e * 2.0, win.top() + e * 2.0)), D::NorthWest, egui::CursorIcon::ResizeNorthWest),
+            (Rect::from_min_max(Pos2::new(win.right() - e * 2.0, win.top()), Pos2::new(win.right(), win.top() + e * 2.0)), D::NorthEast, egui::CursorIcon::ResizeNorthEast),
+            (Rect::from_min_max(Pos2::new(win.left(), win.bottom() - e * 2.0), Pos2::new(win.left() + e * 2.0, win.bottom())), D::SouthWest, egui::CursorIcon::ResizeSouthWest),
+            (Rect::from_min_max(win.right_bottom() - Vec2::splat(e * 2.0), win.right_bottom()), D::SouthEast, egui::CursorIcon::ResizeSouthEast),
+            (Rect::from_min_max(win.left_top(), Pos2::new(win.right(), win.top() + e)), D::North, egui::CursorIcon::ResizeVertical),
+            (Rect::from_min_max(Pos2::new(win.left(), win.bottom() - e), win.right_bottom()), D::South, egui::CursorIcon::ResizeVertical),
+            (Rect::from_min_max(win.left_top(), Pos2::new(win.left() + e, win.bottom())), D::West, egui::CursorIcon::ResizeHorizontal),
+            (Rect::from_min_max(Pos2::new(win.right() - e, win.top()), win.right_bottom()), D::East, egui::CursorIcon::ResizeHorizontal),
+        ];
+        for (i, (rect, dir, cursor)) in zones.into_iter().enumerate() {
+            let r = ui.interact(rect, ui.id().with(("edge", i)), Sense::drag());
+            if r.hovered() || r.dragged() {
+                ui.ctx().set_cursor_icon(cursor);
+            }
+            if r.drag_started() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+            }
+        }
+    }
+
+    /// The notch at the top: RDS in FM, the station in DAB+ / DRM, else the frequency
+    fn notch(&self, ui: &mut egui::Ui, strip: Rect, st: &[f64; 11]) {
+        let mode = st[6] as usize;
+        let ps = self.rds["ps"].as_str().unwrap_or("").trim().to_string();
+        let rt = self.rds["rt"].as_str().unwrap_or("").trim().to_string();
+        let station = match mode {
+            DAB => self.digital["playing"].as_str().unwrap_or("").to_string(),
+            9 => self.digital["station"].as_str().unwrap_or("").to_string(),
+            _ => String::new(),
+        };
+        let freq = format!("{:.4} MHz  ·  {}", st[0] / 1e6, MODES.get(mode).unwrap_or(&""));
+        let (main, sub) = if mode == 1 && !ps.is_empty() {
+            (ps, if rt.is_empty() { freq } else { rt })
+        } else if !station.is_empty() {
+            (station, freq)
+        } else {
+            (freq, String::new())
+        };
+        let w = 520.0f32.min(strip.width() - 320.0).max(260.0);
+        let rect = Rect::from_center_size(Pos2::new(strip.center().x, strip.top() + 22.0), Vec2::new(w, 44.0));
+        let p = ui.painter();
+        p.rect_filled(rect, egui::CornerRadius { nw: 0, ne: 0, sw: 22, se: 22 }, SURFACE);
+        let galley = |t: &str, size: f32, color: Color32| p.layout_no_wrap(t.to_string(), egui::FontId::proportional(size), color);
+        if sub.is_empty() {
+            let g = galley(&main, 17.0, Color32::WHITE);
+            p.galley(rect.center() - g.size() / 2.0, g, Color32::WHITE);
+        } else {
+            let g1 = galley(&main, 15.0, Color32::WHITE);
+            let mut g2 = galley(&sub, 12.0, DIM);
+            if g2.size().x > w - 30.0 {
+                g2 = p.layout(sub.clone(), egui::FontId::proportional(12.0), DIM, w - 30.0);
+            }
+            p.galley(Pos2::new(rect.center().x - g1.size().x / 2.0, rect.top() + 4.0), g1, Color32::WHITE);
+            p.galley(Pos2::new(rect.center().x - g2.size().x.min(w - 30.0) / 2.0, rect.top() + 24.0), g2, DIM);
+        }
+    }
+
+    /// − ▢ × in a pill at the top right
+    fn window_buttons(&self, ui: &mut egui::Ui, ctx: &egui::Context, strip: Rect) {
+        let rect = Rect::from_min_size(Pos2::new(strip.right() - 150.0, strip.top() + 8.0), Vec2::new(134.0, 34.0));
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+            egui::Frame::default().fill(SURFACE).corner_radius(17.0).inner_margin(egui::Margin::symmetric(6, 2)).show(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let b = |t: &str| egui::Button::new(RichText::new(t).size(15.0)).frame(false).min_size(Vec2::new(36.0, 28.0));
+                    if ui.add(b("—")).on_hover_text("Réduire").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                     }
-                }
-                if !r.has_focus() {
-                    self.freq_text = format!("{:.6}", st[0] / 1e6);
-                }
+                    let fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                    if ui.add(b(if fs { "❐" } else { "▢" })).on_hover_text("Plein écran (F11)").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+                    }
+                    if ui.add(b("✕")).on_hover_text("Fermer").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
             });
         });
-        ui.add_space(6.0);
-        // Modes
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
-            let mode = st[6] as usize;
-            for (i, m) in MODES.iter().enumerate() {
-                if pill(ui, mode == i, m).clicked() {
-                    self.svc.set_mode(i as i32);
+    }
+
+    /// The big card: spectrum + waterfall + band bar; the car radio display in DAB+, the
+    /// picture in LRPT
+    fn top_card(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
+        match self.space {
+            Space::Dab if self.dab_view == DabView::Car => {
+                ui.horizontal(|ui| {
+                    if pill(ui, true, "🚗  Autoradio").clicked() {}
+                    if pill(ui, false, "〰  Spectre").clicked() {
+                        self.dab_view = DabView::Spectrum;
+                    }
+                });
+                ui.add_space(6.0);
+                self.car_head(ui, st);
+            }
+            Space::Lrpt => self.lrpt_view(ui, st),
+            _ => {
+                card(ui, SURFACE, |ui| {
+                    let h = ui.available_height() - 40.0;
+                    ui.allocate_ui(Vec2::new(ui.available_width(), h.max(120.0)), |ui| self.spectrum(ui, st));
+                    // Band bar: name, wavelength, ITU range
+                    ui.horizontal(|ui| {
+                        self.zoom_bar(ui, st);
+                        if self.space == Space::Dab && pill(ui, false, "🚗  Autoradio").clicked() {
+                            self.dab_view = DabView::Car;
+                        }
+                        ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
+                            ui.label(RichText::new(band_info(st[0])).size(15.0).color(ON_CONTAINER));
+                        });
+                    });
+                });
+            }
+        }
+    }
+
+    /// The control panel under the spectrum, by space
+    fn control_card(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
+        card(ui, SURFACE, |ui| {
+            ui.set_min_size(ui.available_size());
+            match self.space {
+                Space::Dab => self.car_stations(ui, st),
+                _ => {
+                    ui.columns(2, |cols| {
+                        // Frequency, play, modes
+                        let ui = &mut cols[0];
+                        ui.horizontal(|ui| {
+                            ui.label(frequency_job(st[0], 30.0));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let playing = st[7] != 0.0;
+                                let (fill, icon) = if playing { (PRIMARY_CONTAINER, "⏹") } else { (AMBER, "▶") };
+                                let b = egui::Button::new(RichText::new(icon).size(22.0).color(if playing { ON_CONTAINER } else { Color32::BLACK })).fill(fill).corner_radius(26.0).min_size(Vec2::splat(52.0));
+                                if ui.add(b).on_hover_text(if playing { "Arrêter" } else { "Écouter" }).clicked() {
+                                    self.toggle_play(playing);
+                                }
+                            });
+                        });
+                        let mode = MODES.get(st[6] as usize).unwrap_or(&"?");
+                        ui.label(RichText::new(format!("{mode} · {} · span {}", khz(st[4]), khz(st[2]))).color(DIM));
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Aller à").color(DIM));
+                            let r = ui.add(egui::TextEdit::singleline(&mut self.freq_text).desired_width(120.0).font(egui::TextStyle::Monospace));
+                            ui.label(RichText::new("MHz").color(DIM));
+                            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                if let Ok(mhz) = self.freq_text.replace(',', ".").trim().parse::<f64>() {
+                                    self.svc.tune(mhz * 1e6);
+                                }
+                            }
+                            if !r.has_focus() {
+                                self.freq_text = format!("{:.6}", st[0] / 1e6);
+                            }
+                        });
+                        if self.space == Space::Sdr {
+                            ui.add_space(4.0);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                                let m = st[6] as usize;
+                                for (i, name) in MODES.iter().enumerate().take(8) {
+                                    if pill(ui, m == i, name).clicked() {
+                                        self.svc.set_mode(i as i32);
+                                    }
+                                }
+                            });
+                        }
+                        // Tabs
+                        let ui = &mut cols[1];
+                        ui.horizontal(|ui| {
+                            for (t, name) in [(Tab::Radio, "Radio"), (Tab::Receiver, "Récepteur"), (Tab::Technical, "Technique")] {
+                                if pill(ui, self.tab == t, name).clicked() {
+                                    self.tab = t;
+                                }
+                            }
+                        });
+                        egui::ScrollArea::vertical().id_salt("tab").auto_shrink([false, false]).show(ui, |ui| match self.tab {
+                            Tab::Radio => self.radio_tab(ui, st),
+                            Tab::Receiver => self.source_panel(ui),
+                            Tab::Technical => self.technical_tab(ui, st),
+                        });
+                    });
                 }
             }
         });
-        ui.add_space(10.0);
-        // Tabs
-        ui.horizontal(|ui| {
-            for (t, name) in [(Tab::Radio, "Radio"), (Tab::Receiver, "Récepteur"), (Tab::Technical, "Technique")] {
-                if pill(ui, self.tab == t, name).clicked() {
-                    self.tab = t;
-                }
+    }
+
+    /// SDR / DAB+ / DRM / LRPT in a vertical pill; the list fades out at its edges
+    fn spaces_pill(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
+        let rect = ui.max_rect();
+        ui.painter().rect_filled(rect, 30.0, SURFACE);
+        let inner = rect.shrink2(Vec2::new(10.0, 14.0));
+        let mut chosen = None;
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+            let out = egui::ScrollArea::vertical().id_salt("spaces").auto_shrink([false, false]).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+                ui.vertical_centered_justified(|ui| {
+                    ui.add_space(6.0);
+                    for (sp, name) in Space::ALL {
+                        let on = self.space == sp;
+                        let b = egui::Button::new(RichText::new(name).size(15.0).strong().color(if on { ON_CONTAINER } else { Color32::from_gray(225) }))
+                            .fill(if on { PRIMARY_CONTAINER } else { SURFACE_HIGH })
+                            .corner_radius(18.0)
+                            .min_size(Vec2::new(0.0, 52.0));
+                        if ui.add(b).clicked() {
+                            chosen = Some(sp);
+                        }
+                        ui.add_space(4.0);
+                    }
+                    ui.add_space(6.0);
+                });
+            });
+            // Fades where the list goes on, and a chevron while there is more below
+            let (off, content, view) = (out.state.offset.y, out.content_size.y, out.inner_rect.height());
+            let p = ui.painter();
+            if off > 1.0 {
+                fade(p, Rect::from_min_size(inner.min, Vec2::new(inner.width(), 26.0)), SURFACE, true);
+            }
+            if off + view < content - 1.0 {
+                let r = Rect::from_min_max(Pos2::new(inner.left(), inner.bottom() - 30.0), inner.max);
+                fade(p, r, SURFACE, false);
+                p.text(Pos2::new(inner.center().x, inner.bottom() - 6.0), egui::Align2::CENTER_BOTTOM, "⌄", egui::FontId::proportional(20.0), DIM);
             }
         });
-        ui.add_space(4.0);
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            card(ui, SURFACE, |ui| {
-                ui.set_width(ui.available_width());
-                match self.tab {
-                    Tab::Radio => self.radio_tab(ui, st),
-                    Tab::Receiver => self.source_panel(ui),
-                    Tab::Technical => self.technical_tab(ui, st),
-                }
-            });
-        });
+        if let Some(sp) = chosen {
+            self.switch_space(sp, st);
+        }
+    }
+
+    /// Changes the interface and the receiver mode with it
+    fn switch_space(&mut self, sp: Space, st: &[f64; 11]) {
+        if sp == self.space {
+            return;
+        }
+        self.space = sp;
+        let mode = st[6] as usize;
+        match sp {
+            Space::Sdr if mode >= DAB => self.svc.set_mode(1),
+            Space::Dab => self.svc.set_mode(DAB as i32),
+            Space::Drm => self.svc.set_mode(9),
+            Space::Lrpt => self.svc.set_mode(LRPT as i32),
+            _ => {}
+        }
     }
 
     fn radio_tab(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
@@ -707,22 +1016,21 @@ impl App {
         }
     }
 
+    /// ➕ ➖ ⤢ and the width shown, at the left of the band bar
     fn zoom_bar(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
-        ui.horizontal(|ui| {
-            if pill(ui, false, "➕").on_hover_text("Zoomer (ou molette sur le spectre)").clicked() {
-                self.zoom(0.5, st[0], st);
-            }
-            if pill(ui, false, "➖").on_hover_text("Dézoomer").clicked() {
-                self.zoom(2.0, st[0], st);
-            }
-            if pill(ui, self.view_bw <= 0.0, "Toute la bande").clicked() {
-                self.view_bw = 0.0;
-                self.view_off = 0.0;
-            }
-            let rate = st[2].max(1.0);
-            let shown = if self.view_bw > 0.0 { self.view_bw.min(rate) } else { rate };
-            ui.label(RichText::new(format!("{} affichés · molette pour zoomer, glisser pour se déplacer, clic pour accorder", khz(shown))).color(DIM));
-        });
+        if pill(ui, false, "➕").on_hover_text("Zoomer (ou molette sur le spectre)").clicked() {
+            self.zoom(0.5, st[0], st);
+        }
+        if pill(ui, false, "➖").on_hover_text("Dézoomer").clicked() {
+            self.zoom(2.0, st[0], st);
+        }
+        if pill(ui, self.view_bw <= 0.0, "⤢").on_hover_text("Toute la bande").clicked() {
+            self.view_bw = 0.0;
+            self.view_off = 0.0;
+        }
+        let rate = st[2].max(1.0);
+        let shown = if self.view_bw > 0.0 { self.view_bw.min(rate) } else { rate };
+        ui.label(RichText::new(khz(shown)).color(DIM));
     }
 
     fn toggle_play(&mut self, playing: bool) {
@@ -965,20 +1273,6 @@ impl App {
             let rgba = img.to_rgba8();
             let ci = ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
             self.slide_tex = Some(ctx.load_texture("slide", ci, TextureOptions::LINEAR));
-        }
-    }
-
-    fn car_radio(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
-        // Wide: display left, stations right. Narrower: display on top, stations below
-        if ui.available_width() >= 1000.0 {
-            ui.columns(2, |cols| {
-                self.car_head(&mut cols[0], st);
-                self.car_stations(&mut cols[1], st);
-            });
-        } else {
-            self.car_head(ui, st);
-            ui.add_space(12.0);
-            self.car_stations(ui, st);
         }
     }
 
@@ -1321,6 +1615,10 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let st = self.svc.state();
+        let sp = Space::of_mode(st[6] as usize);
+        if sp != self.space && !(self.space == Space::Sdr && sp == Space::Sdr) {
+            self.space = sp;
+        }
         // A recording plays its own band: a frequency outside it comes back to its centre
         if st[7] != 0.0 && st[2] > 0.0 && (st[0] - st[1]).abs() > st[2] / 2.0 && self.svc.selected_source() == "Fichier IQ" {
             self.svc.tune(st[1]);
@@ -1344,35 +1642,7 @@ impl eframe::App for App {
                 self.update_lrpt(ctx);
             }
         }
-        let dab = st[6] as usize == DAB;
-        let car = dab && self.dab_view == DabView::Car;
-        let margin = egui::Frame::default().fill(BG).inner_margin(16.0);
-        egui::SidePanel::right("side").exact_width(390.0).resizable(false).frame(margin).show(ctx, |ui| self.right_panel(ui, &st));
-        egui::CentralPanel::default().frame(margin).show(ctx, |ui| {
-            if dab {
-                ui.horizontal(|ui| {
-                    if pill(ui, self.dab_view == DabView::Car, "🚗  Autoradio").clicked() {
-                        self.dab_view = DabView::Car;
-                    }
-                    if pill(ui, self.dab_view == DabView::Spectrum, "〰  Spectre").clicked() {
-                        self.dab_view = DabView::Spectrum;
-                    }
-                });
-                ui.add_space(8.0);
-            }
-            if st[6] as usize == LRPT {
-                self.lrpt_view(ui, &st);
-            } else if car {
-                self.car_radio(ui, &st);
-            } else {
-                card(ui, SURFACE, |ui| {
-                    let h = ui.available_height() - 56.0;
-                    ui.set_min_height(h.max(200.0));
-                    ui.allocate_ui(Vec2::new(ui.available_width(), h.max(200.0)), |ui| self.spectrum(ui, &st));
-                    self.zoom_bar(ui, &st);
-                });
-            }
-        });
+        self.draw_window(ctx, &st);
         if let Some(e) = self.error.clone() {
             egui::Window::new("Réception").collapsible(false).show(ctx, |ui| {
                 ui.label(e);
