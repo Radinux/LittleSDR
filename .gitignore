@@ -12,3 +12,9 @@ kit/out/
 kit/jniLibs/
 kit/build.log
 build.log
+
+# Signing keys never go in the repository
+*.jks
+*.keystore
+*.p12
+keystore.properties

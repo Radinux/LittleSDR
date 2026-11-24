@@ -4,7 +4,7 @@
 #   FAAD2  (GPL-2.0-or-later, AAC / HE-AAC v1 v2: DAB+)  -> third_party/faad2/<target>/libfaad.a
 #   libxaac (Apache-2.0, xHE-AAC / USAC: DRM)            -> third_party/libxaac/build-<target>/libxaacdec.a
 # Never FDK-AAC (its licence is incompatible with the GPL).
-# Needs: ANDROID_NDK_HOME (default: the app's NDK), cmake, ninja, curl.
+# Needs: ANDROID_NDK_HOME (default: the app's NDK), cmake, ninja, curl, git.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ENGINE=$PWD
@@ -20,7 +20,12 @@ if [ ! -f "$SRC/CMakeLists.txt" ]; then
     mkdir -p "$SRC"
     curl -fsSL "https://github.com/knik0/faad2/archive/refs/tags/$FAAD2_VERSION.tar.gz" | tar xz -C "$SRC" --strip-components=1
 fi
-[ -d "$ENGINE/third_party/libxaac/decoder" ] || { echo "libxaac sources missing in third_party/libxaac" >&2; exit 1; }
+# libxaac sources (once), at the revision the engine is tested with
+LIBXAAC_REV=2fbadd57bca46693b7a077bcf1513131106d960c
+if [ ! -d "$ENGINE/third_party/libxaac/decoder" ]; then
+    git clone https://github.com/ittiam-systems/libxaac "$ENGINE/third_party/libxaac"
+    git -C "$ENGINE/third_party/libxaac" checkout -q "$LIBXAAC_REV"
+fi
 
 for pair in arm64-v8a:aarch64-linux-android x86_64:x86_64-linux-android; do
     ABI=${pair%%:*}

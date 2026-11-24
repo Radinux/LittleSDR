@@ -24,13 +24,26 @@ android {
         }
     }
 
+    // Release key: kept OUTSIDE the repository. Its location and passwords come from
+    // ~/.gradle/gradle.properties (LITTLESDR_STORE_FILE, LITTLESDR_STORE_PASSWORD,
+    // LITTLESDR_KEY_ALIAS, LITTLESDR_KEY_PASSWORD). Without them (anyone building the public
+    // repo), releases are signed with the debug key so the build still works.
+    val releaseStore = providers.gradleProperty("LITTLESDR_STORE_FILE").orNull?.let { file(it) }?.takeIf { it.exists() }
+    signingConfigs {
+        if (releaseStore != null) create("release") {
+            storeFile = releaseStore
+            storePassword = providers.gradleProperty("LITTLESDR_STORE_PASSWORD").get()
+            keyAlias = providers.gradleProperty("LITTLESDR_KEY_ALIAS").get()
+            keyPassword = providers.gradleProperty("LITTLESDR_KEY_PASSWORD").get()
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signed with the debug key until a release key is configured
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 
