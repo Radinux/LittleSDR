@@ -185,6 +185,8 @@ struct Args {
     no_audio: bool,
     /// Tab opened at start: radio, recepteur, technique
     tab: Option<String>,
+    /// Seconds before the --shot screenshot (default 6)
+    shot_after: Option<u64>,
 }
 
 fn args() -> Args {
@@ -197,6 +199,7 @@ fn args() -> Args {
             "--shot" => a.shot = it.next(),
             "--no-audio" => a.no_audio = true,
             "--tab" => a.tab = it.next(),
+            "--shot-after" => a.shot_after = it.next().and_then(|v| v.parse().ok()),
             "-h" | "--help" => {
                 println!("littlesdr-desktop [--file iq.wav] [--mode 0-10] [--tab radio|recepteur|technique] [--no-audio] [--shot screenshot.png]");
                 std::process::exit(0);
@@ -244,6 +247,7 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             let mut app = App::new(cc, svc, root, shot);
             app.tab = tab;
+            app.shot_after = Duration::from_secs(args.shot_after.unwrap_or(6));
             Ok(Box::new(app))
         }),
     )
@@ -342,6 +346,7 @@ struct App {
     shot: Option<String>,
     started: Instant,
     shot_asked: bool,
+    shot_after: Duration,
 }
 
 impl App {
@@ -391,6 +396,7 @@ impl App {
             shot,
             started: Instant::now(),
             shot_asked: false,
+            shot_after: Duration::from_secs(6),
         }
     }
 
@@ -1377,7 +1383,7 @@ impl eframe::App for App {
         }
         // --shot: photograph the window after 6 s, save it as PNG, quit
         if let Some(path) = self.shot.clone() {
-            if !self.shot_asked && self.started.elapsed() > Duration::from_secs(6) {
+            if !self.shot_asked && self.started.elapsed() > self.shot_after {
                 self.shot_asked = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
             }
