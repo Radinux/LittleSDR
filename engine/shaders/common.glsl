@@ -41,6 +41,34 @@ layout(push_constant) uniform PC {
         }                                                                        \
     }
 
+// Waterfall version: zoomed out, the average POWER of the covered bins instead of the
+// highest. The highest of ~30 noise bins is a random bright speckle: the zoomed-out waterfall
+// turns to sand. The power average is smooth on noise and still shows a carrier (one bin 30 dB
+// up among 32 lifts the average by ~15 dB).
+#define SAMPLE_LINE_AVG(BUF, BASE, X, PIXELS, OUT)                               \
+    {                                                                            \
+        float b0_ = pc.binStart + (X) * pc.binCount;                             \
+        float span_ = pc.binCount / max(PIXELS, 1.0);                            \
+        if (span_ <= 1.0) {                                                      \
+            float bf_ = b0_ - 0.5;                                               \
+            int i0_ = clamp(int(floor(bf_)), 0, pc.bins - 1);                    \
+            int i1_ = min(i0_ + 1, pc.bins - 1);                                 \
+            OUT = mix(BUF[(BASE) + i0_], BUF[(BASE) + i1_], fract(bf_));         \
+        } else {                                                                 \
+            int i0_ = int(b0_);                                                  \
+            int n_ = int(ceil(span_));                                           \
+            int st_ = max(1, n_ / 32);                                           \
+            float p_ = 0.0;                                                      \
+            float c_ = 0.0;                                                      \
+            for (int k_ = 0; k_ < n_; k_ += st_) {                               \
+                float d_ = BUF[(BASE) + clamp(i0_ + k_, 0, pc.bins - 1)];        \
+                p_ += exp2(clamp(d_, -200.0, 50.0) * 0.33219281);                \
+                c_ += 1.0;                                                       \
+            }                                                                    \
+            OUT = 3.0103 * log2(max(p_ / c_, 1e-30));                            \
+        }                                                                        \
+    }
+
 float normDb(float v) { return clamp((v - pc.dbMin) / max(pc.dbMax - pc.dbMin, 1.0), 0.0, 1.0); }
 
 // Google "Turbo" colormap, polynomial approximation (Anton Mikhailov, Apache-2.0)

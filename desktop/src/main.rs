@@ -561,7 +561,9 @@ impl App {
         let n = h.bins as f64;
         let b0 = (left - (center - rate / 2.0)) / rate * n;
         let b1 = b0 + vb / rate * n;
-        let resample = |line: &[f32], out: &mut Vec<f32>| {
+        // Zoomed out: the trace keeps the highest bin per pixel (narrow carriers stay visible),
+        // the waterfall the average power (the highest of many noise bins is sand)
+        let resample = |line: &[f32], out: &mut Vec<f32>, avg: bool| {
             out.clear();
             let last = line.len() - 1;
             for x in 0..width {
@@ -575,7 +577,13 @@ impl App {
                     out.push(line[i] * (1.0 - t) + line[j] * t);
                 } else {
                     let (i, j) = ((a.floor() as usize).min(last), (b.ceil() as usize).clamp(1, line.len()));
-                    out.push(line[i..j.max(i + 1)].iter().copied().fold(f32::MIN, f32::max));
+                    let bins = &line[i..j.max(i + 1)];
+                    if avg {
+                        let p = bins.iter().map(|&d| 10f32.powf(d / 10.0)).sum::<f32>() / bins.len() as f32;
+                        out.push(10.0 * p.max(1e-30).log10());
+                    } else {
+                        out.push(bins.iter().copied().fold(f32::MIN, f32::max));
+                    }
                 }
             }
         };
@@ -584,7 +592,7 @@ impl App {
         let span = (self.db_max - self.db_min).max(1.0);
         for r in first..h.written {
             let off = (r % h.rows as u64) as usize * h.bins;
-            resample(&h.lines[off..off + h.bins], &mut row);
+            resample(&h.lines[off..off + h.bins], &mut row, true);
             self.wf_head = (self.wf_head + WF_ROWS - 1) % WF_ROWS;
             let base = self.wf_head * width;
             for (x, v) in row.iter().enumerate() {
@@ -592,7 +600,7 @@ impl App {
             }
         }
         self.seen = h.written;
-        resample(&h.latest, &mut self.trace);
+        resample(&h.latest, &mut self.trace, false);
     }
 
     fn waterfall_image(&self) -> ColorImage {

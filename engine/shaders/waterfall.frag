@@ -9,6 +9,6 @@ void main() {
     if (rowOff >= pc.filled) { discard; } // not filled yet: show the background
     int row = (pc.newest - rowOff + pc.rows * 4) % pc.rows;
     float v;
-    SAMPLE_LINE(lines, row * pc.bins, uv.x, pc.widthPx, v)
+    SAMPLE_LINE_AVG(lines, row * pc.bins, uv.x, pc.widthPx, v)
     outColor = vec4(colormap(normDb(v)), 1.0);
 }
