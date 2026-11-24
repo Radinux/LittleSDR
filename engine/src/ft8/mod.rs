@@ -61,11 +61,15 @@ struct Channel {
     t0: f64,
 }
 
+/// Lowest IQ rate a channel can be cut from: the slot (dial .. dial + 3 kHz) plus margins
+const MIN_RATE: f64 = 4_000.0;
+
 impl Channel {
     fn new(dial: f64, rate: f64) -> Option<Channel> {
         // Complex baseband centred on dial + 1500 Hz, +-1500 Hz, decimated to 24..48 kHz,
-        // resampled to 12 kHz, then shifted back up so the real part is the USB audio
-        if rate < RATE {
+        // resampled to 12 kHz, then shifted back up so the real part is the USB audio. The
+        // stream only has to hold the 3 kHz FT8 slot: KiwiSDR's ~11 999 Hz IQ is plenty
+        if rate < MIN_RATE {
             return None;
         }
         let total = ((rate / (2.0 * RATE)).floor() as usize).max(1);
@@ -225,7 +229,8 @@ impl Ft8Receiver {
                 self.ch[p] = None;
                 continue;
             };
-            if self.ch[p].as_ref().is_none_or(|c| c.dial != dial || c.rate != rate) {
+            // Measured rates wobble (KiwiSDR 11 999.01...): rebuild only on a real change
+            if self.ch[p].as_ref().is_none_or(|c| c.dial != dial || (c.rate - rate).abs() > 1.0) {
                 self.ch[p] = Channel::new(dial, rate);
                 if self.ch[p].is_none() {
                     st.error = format!("sample rate {rate} too low");
@@ -390,6 +395,13 @@ impl Ft8Receiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KiwiSDR streams ~11 999 Hz of IQ: just under 12 kHz, enough for the FT8 slot
+    #[test]
+    fn kiwi_rate_gives_a_channel() {
+        assert!(Channel::new(7_074_000.0, 11_999.012_764).is_some());
+        assert!(Channel::new(7_074_000.0, 3_000.0).is_none());
+    }
 
     /// IQ of an FT8 transmission on a 20 m channel, through the whole receiver
     fn run(rate: f64) -> Vec<Ft8Result> {
