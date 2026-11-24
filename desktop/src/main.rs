@@ -14,7 +14,146 @@ use std::time::{Duration, Instant};
 const MODES: [&str; 11] = ["NFM", "WFM", "AM", "DSB", "USB", "CW", "LSB", "RAW", "DAB+", "DRM", "LRPT"];
 const DAB: usize = 8;
 const WF_ROWS: usize = 360;
+// Palette of the Android app (Material 3 dark, amber accent)
 const AMBER: Color32 = Color32::from_rgb(246, 179, 85);
+const BG: Color32 = Color32::from_rgb(0x12, 0x12, 0x17);
+const SURFACE: Color32 = Color32::from_rgb(0x1c, 0x1b, 0x22);
+const SURFACE_HIGH: Color32 = Color32::from_rgb(0x2a, 0x29, 0x31);
+const PRIMARY_CONTAINER: Color32 = Color32::from_rgb(0x6b, 0x45, 0x14);
+const ON_CONTAINER: Color32 = Color32::from_rgb(0xff, 0xdd, 0xb3);
+const DIM: Color32 = Color32::from_rgb(0x9b, 0x99, 0xa3);
+
+/// Material-like dark theme, roomy spacing
+fn theme(ctx: &egui::Context) {
+    let mut v = egui::Visuals::dark();
+    v.panel_fill = BG;
+    v.window_fill = SURFACE;
+    v.extreme_bg_color = Color32::from_rgb(0x0d, 0x0d, 0x12);
+    v.faint_bg_color = SURFACE_HIGH;
+    v.selection.bg_fill = PRIMARY_CONTAINER;
+    v.selection.stroke = Stroke::new(1.0_f32, ON_CONTAINER);
+    v.hyperlink_color = AMBER;
+    v.window_corner_radius = 20.0.into();
+    v.window_stroke = Stroke::NONE;
+    for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+        w.corner_radius = 14.0.into();
+        w.bg_stroke = Stroke::NONE;
+    }
+    v.widgets.noninteractive.bg_fill = SURFACE;
+    v.widgets.inactive.bg_fill = SURFACE_HIGH;
+    v.widgets.inactive.weak_bg_fill = SURFACE_HIGH;
+    v.widgets.hovered.bg_fill = Color32::from_rgb(0x36, 0x34, 0x3d);
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x36, 0x34, 0x3d);
+    v.widgets.active.bg_fill = PRIMARY_CONTAINER;
+    v.widgets.active.weak_bg_fill = PRIMARY_CONTAINER;
+    v.widgets.open.weak_bg_fill = SURFACE_HIGH;
+    v.slider_trailing_fill = true;
+    ctx.set_visuals(v);
+    let mut st = (*ctx.style()).clone();
+    st.spacing.item_spacing = Vec2::new(10.0, 10.0);
+    st.spacing.button_padding = Vec2::new(14.0, 8.0);
+    st.spacing.interact_size.y = 34.0;
+    st.spacing.slider_width = 200.0;
+    use egui::{FontId, TextStyle};
+    st.text_styles.insert(TextStyle::Body, FontId::proportional(15.0));
+    st.text_styles.insert(TextStyle::Button, FontId::proportional(15.0));
+    st.text_styles.insert(TextStyle::Heading, FontId::proportional(20.0));
+    st.text_styles.insert(TextStyle::Small, FontId::proportional(12.5));
+    st.text_styles.insert(TextStyle::Monospace, FontId::monospace(14.0));
+    ctx.set_style(st);
+}
+
+/// A rounded card, as the Android panels
+fn card<R>(ui: &mut egui::Ui, fill: Color32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::default().fill(fill).corner_radius(24.0).inner_margin(18.0).show(ui, add).inner
+}
+
+/// A pill that can be selected (modes, tabs): amber container when on
+fn pill(ui: &mut egui::Ui, on: bool, text: &str) -> egui::Response {
+    let t = RichText::new(text).color(if on { ON_CONTAINER } else { Color32::from_gray(225) });
+    ui.add(egui::Button::new(t).fill(if on { PRIMARY_CONTAINER } else { SURFACE_HIGH }).corner_radius(18.0).min_size(Vec2::new(0.0, 36.0)))
+}
+
+/// The tuned frequency as on the phone: 0.100.000.000, leading zeros dimmed
+fn frequency_job(hz: f64, size: f32) -> egui::text::LayoutJob {
+    let digits = format!("{:010}", hz.max(0.0).round() as u64);
+    let mut job = egui::text::LayoutJob::default();
+    let first = digits.find(|c| c != '0').unwrap_or(9);
+    for (i, ch) in digits.chars().enumerate() {
+        if i == 1 || i == 4 || i == 7 {
+            job.append(".", 0.0, egui::TextFormat { font_id: egui::FontId::monospace(size * 0.6), color: if i <= first { DIM } else { AMBER }, ..Default::default() });
+        }
+        let color = if i < first { Color32::from_gray(80) } else { Color32::WHITE };
+        job.append(&ch.to_string(), 0.0, egui::TextFormat { font_id: egui::FontId::monospace(size), color, ..Default::default() });
+    }
+    job
+}
+
+/// The decoders' status line as labelled rows, in French
+fn status_rows(status: &str) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    let quoted = |s: &str| s.split('"').nth(1).unwrap_or("").to_string();
+    for group in status.split(" | ") {
+        for item in group.split(", ") {
+            let it = item.trim();
+            let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
+            let row = if let Some(v) = it.strip_prefix("DAB: ") {
+                pair("Synchro", if v == "synced" { "oui" } else { "recherche" })
+            } else if let Some(v) = it.strip_prefix("offset ") {
+                pair("Décalage", v)
+            } else if let Some(v) = it.strip_prefix("SNR ") {
+                pair("SNR", v)
+            } else if let Some(v) = it.strip_prefix("resyncs ") {
+                pair("Resynchros", v)
+            } else if it.starts_with("ensemble ") {
+                pair("Multiplex", &quoted(it))
+            } else if let Some(v) = it.strip_suffix(" services") {
+                pair("Services", v)
+            } else if let Some(v) = it.strip_prefix("FIC ") {
+                pair("FIC", v.trim_end_matches(" ok"))
+            } else if it.starts_with("playing ") {
+                let name = quoted(it);
+                let rest = it.rsplit('"').next().unwrap_or("").trim().to_string();
+                rows.push(pair("Station", &name));
+                pair("Flux", &rest)
+            } else if it.starts_with("waiting for ") {
+                pair("En attente de", &quoted(it))
+            } else if let Some(v) = it.strip_prefix("superframes ") {
+                pair("Superframes", v)
+            } else if let Some(v) = it.strip_prefix("RS fixed ") {
+                pair("Reed-Solomon", &(v.replace(" / failed ", " corrigés · ") + " échecs"))
+            } else if let Some(v) = it.strip_prefix("AU ok ") {
+                pair("Trames audio", &(v.replace(" / CRC ", " bonnes · ") + " CRC faux"))
+            } else if let Some(v) = it.strip_prefix("AAC errors ") {
+                pair("Erreurs AAC", v)
+            } else if let Some(v) = it.strip_prefix("concealed ") {
+                pair("Comblées", v)
+            } else if let Some(v) = it.strip_prefix("mode ") {
+                pair("Mode DRM", v)
+            } else if let Some(v) = it.strip_prefix("guard corr ") {
+                pair("Corrélation garde", v)
+            } else if let Some(v) = it.strip_prefix("clock ") {
+                pair("Horloge", v)
+            } else if let Some(v) = it.strip_prefix("frame sync ") {
+                pair("Synchro trame", if v == "yes" { "oui" } else { "non" })
+            } else if let Some(v) = it.strip_suffix(" frames") {
+                pair("Trames", v)
+            } else if let Some(v) = it.strip_prefix("FAC ") {
+                pair("FAC", &v.replace(" ok / ", " bons · ").replace(" bad", " mauvais"))
+            } else if let Some(v) = it.strip_prefix("SDC ") {
+                pair("SDC", &v.replace(" ok / ", " bons · ").replace(" bad", " mauvais"))
+            } else if let Some(v) = it.strip_prefix("audio frames ") {
+                pair("Trames audio", &v.replace(" ok / ", " bonnes · ").replace(" bad", " perdues"))
+            } else if it.ends_with(" Hz") && it.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                pair("Échantillonnage", it)
+            } else {
+                pair(it, "")
+            };
+            rows.push(row);
+        }
+    }
+    rows
+}
 
 /// Band III DAB channels (name, kHz)
 const DAB_CHANNELS: [(&str, u32); 38] = [
@@ -25,6 +164,10 @@ const DAB_CHANNELS: [(&str, u32); 38] = [
     ("11D", 222_064), ("12A", 223_936), ("12B", 225_648), ("12C", 227_360), ("12D", 229_072), ("13A", 230_784),
     ("13B", 232_496), ("13C", 234_208), ("13D", 235_776), ("13E", 237_488), ("13F", 239_200),
 ];
+
+fn khz(hz: f64) -> String {
+    if hz >= 1e6 { format!("{:.3} MHz", hz / 1e6) } else { format!("{:.1} kHz", hz / 1e3) }
+}
 
 fn channel_at(hz: f64) -> Option<usize> {
     DAB_CHANNELS.iter().position(|c| (c.1 as f64 * 1e3 - hz).abs() < 1e3)
@@ -39,6 +182,8 @@ struct Args {
     shot: Option<String>,
     /// No sound output at all
     no_audio: bool,
+    /// Tab opened at start: radio, recepteur, technique
+    tab: Option<String>,
 }
 
 fn args() -> Args {
@@ -50,8 +195,9 @@ fn args() -> Args {
             "--mode" => a.mode = it.next().and_then(|v| v.parse().ok()),
             "--shot" => a.shot = it.next(),
             "--no-audio" => a.no_audio = true,
+            "--tab" => a.tab = it.next(),
             "-h" | "--help" => {
-                println!("littlesdr-desktop [--file iq.wav] [--mode 0-10] [--no-audio] [--shot screenshot.png]");
+                println!("littlesdr-desktop [--file iq.wav] [--mode 0-10] [--tab radio|recepteur|technique] [--no-audio] [--shot screenshot.png]");
                 std::process::exit(0);
             }
             other => eprintln!("unknown option {other}"),
@@ -86,7 +232,20 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     let shot = args.shot.clone();
-    eframe::run_native("LittleSDR", options, Box::new(move |cc| Ok(Box::new(App::new(cc, svc, root, shot)))))
+    let tab = match args.tab.as_deref() {
+        Some("recepteur") => Tab::Receiver,
+        Some("technique") => Tab::Technical,
+        _ => Tab::Radio,
+    };
+    eframe::run_native(
+        "LittleSDR",
+        options,
+        Box::new(move |cc| {
+            let mut app = App::new(cc, svc, root, shot);
+            app.tab = tab;
+            Ok(Box::new(app))
+        }),
+    )
 }
 
 /// 48 kHz stereo output reading the engine's ring (it is resampled to 48 kHz already)
@@ -124,6 +283,13 @@ struct Scan {
 }
 
 #[derive(PartialEq, Clone, Copy)]
+enum Tab {
+    Radio,
+    Receiver,
+    Technical,
+}
+
+#[derive(PartialEq, Clone, Copy)]
 enum DabView {
     Car,
     Spectrum,
@@ -154,6 +320,9 @@ struct App {
     rds: Value,
     info_at: Instant,
     error: Option<String>,
+    tab: Tab,
+    squelch_on: bool,
+    squelch: f32,
     // DAB car radio
     dab_view: DabView,
     scan: Option<Scan>,
@@ -169,7 +338,8 @@ struct App {
 }
 
 impl App {
-    fn new(_cc: &eframe::CreationContext, svc: &'static Service, root: String, shot: Option<String>) -> App {
+    fn new(cc: &eframe::CreationContext, svc: &'static Service, root: String, shot: Option<String>) -> App {
+        theme(&cc.egui_ctx);
         let st = svc.state();
         let saved: Value = std::fs::read_to_string(format!("{root}/desktop_dab.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
         let found = serde_json::from_value(saved["found"].clone()).unwrap_or_default();
@@ -196,6 +366,9 @@ impl App {
             rds: Value::Null,
             info_at: Instant::now(),
             error: None,
+            tab: Tab::Radio,
+            squelch_on: st[8] != 0.0,
+            squelch: st[9] as f32,
             dab_view: DabView::Car,
             scan: None,
             found,
@@ -322,75 +495,184 @@ impl App {
 
     // ------------------------------------------------------------------ top bar
 
-    fn top_bar(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
-        ui.horizontal_wrapped(|ui| {
-            let playing = st[7] != 0.0;
-            if ui.add_sized([90.0, 30.0], egui::Button::new(if playing { "⏹ Arrêter" } else { "▶ Écouter" })).clicked() {
-                self.toggle_play(playing);
+    // ------------------------------------------------------------------ right panel
+
+    fn right_panel(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
+        let playing = st[7] != 0.0;
+        // Receiver chip + round play button, as on the phone
+        ui.horizontal(|ui| {
+            let src = self.svc.selected_source();
+            if ui.add(egui::Button::new(RichText::new(format!("📶  {src}")).size(16.0)).fill(SURFACE_HIGH).corner_radius(18.0).min_size(Vec2::new(0.0, 40.0))).clicked() {
+                self.tab = Tab::Receiver;
             }
-            ui.separator();
-            let sel = self.svc.selected_source();
-            egui::ComboBox::from_id_salt("source").selected_text(&sel).show_ui(ui, |ui| {
-                for name in self.svc.source_names() {
-                    if ui.selectable_label(name == sel, &name).clicked() {
-                        self.svc.select_source(&name);
-                        self.menu_at = Instant::now() - Duration::from_secs(10);
-                    }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (fill, icon) = if playing { (PRIMARY_CONTAINER, "⏹") } else { (AMBER, "▶") };
+                let b = egui::Button::new(RichText::new(icon).size(24.0).color(if playing { ON_CONTAINER } else { Color32::BLACK })).fill(fill).corner_radius(28.0).min_size(Vec2::splat(56.0));
+                if ui.add(b).on_hover_text(if playing { "Arrêter" } else { "Écouter" }).clicked() {
+                    self.toggle_play(playing);
                 }
             });
-            ui.separator();
-            ui.label("MHz");
-            let r = ui.add(egui::TextEdit::singleline(&mut self.freq_text).desired_width(110.0).font(egui::TextStyle::Monospace));
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                if let Ok(mhz) = self.freq_text.replace(',', ".").trim().parse::<f64>() {
-                    self.svc.tune(mhz * 1e6);
+        });
+        ui.add_space(6.0);
+        // Frequency
+        card(ui, SURFACE, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(frequency_job(st[0], 34.0));
+            let mode = MODES.get(st[6] as usize).unwrap_or(&"?");
+            ui.label(RichText::new(format!("{mode} · {} · span {}", khz(st[4]), khz(st[2]))).color(DIM));
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Aller à").color(DIM));
+                let r = ui.add(egui::TextEdit::singleline(&mut self.freq_text).desired_width(120.0).font(egui::TextStyle::Monospace));
+                ui.label(RichText::new("MHz").color(DIM));
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if let Ok(mhz) = self.freq_text.replace(',', ".").trim().parse::<f64>() {
+                        self.svc.tune(mhz * 1e6);
+                    }
                 }
-            }
-            if !r.has_focus() {
-                self.freq_text = format!("{:.6}", st[0] / 1e6);
-            }
-            ui.separator();
+                if !r.has_focus() {
+                    self.freq_text = format!("{:.6}", st[0] / 1e6);
+                }
+            });
+        });
+        ui.add_space(6.0);
+        // Modes
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
             let mode = st[6] as usize;
             for (i, m) in MODES.iter().enumerate() {
-                if ui.selectable_label(mode == i, *m).clicked() {
+                if pill(ui, mode == i, m).clicked() {
                     self.svc.set_mode(i as i32);
                 }
             }
-            ui.separator();
-            let mut vol = st[10] as f32;
-            ui.label("🔊");
-            if ui.add(egui::Slider::new(&mut vol, 0.0..=1.5).show_value(false)).changed() {
-                self.svc.set_volume(vol);
+        });
+        ui.add_space(10.0);
+        // Tabs
+        ui.horizontal(|ui| {
+            for (t, name) in [(Tab::Radio, "Radio"), (Tab::Receiver, "Récepteur"), (Tab::Technical, "Technique")] {
+                if pill(ui, self.tab == t, name).clicked() {
+                    self.tab = t;
+                }
             }
         });
+        ui.add_space(4.0);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            card(ui, SURFACE, |ui| {
+                ui.set_width(ui.available_width());
+                match self.tab {
+                    Tab::Radio => self.radio_tab(ui, st),
+                    Tab::Receiver => self.source_panel(ui),
+                    Tab::Technical => self.technical_tab(ui, st),
+                }
+            });
+        });
+    }
+
+    fn radio_tab(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
+        let mode = st[6] as usize;
+        ui.label(RichText::new("Volume").color(DIM));
+        let mut vol = st[10] as f32;
+        if ui.add(egui::Slider::new(&mut vol, 0.0..=1.5).show_value(false)).changed() {
+            self.svc.set_volume(vol);
+        }
+        // Channel width, for the modes that have one
+        let range = match mode {
+            2 => Some((1_000.0, 30_000.0)),
+            3 => Some((1_000.0, 20_000.0)),
+            4 | 6 => Some((500.0, 6_000.0)),
+            5 => Some((50.0, 1_000.0)),
+            _ => None,
+        };
+        if let Some((lo, hi)) = range {
+            ui.add_space(6.0);
+            ui.label(RichText::new(format!("Bande passante · {}", khz(st[4]))).color(DIM));
+            let mut bw = st[4] as f32;
+            if ui.add(egui::Slider::new(&mut bw, lo..=hi).show_value(false)).drag_stopped() {
+                self.svc.set_bandwidth(bw);
+            }
+        }
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(format!(
-                "{} · centre {:.4} MHz · span {:.0} kHz · bande {:.1} kHz · {:.0} dB",
-                MODES.get(st[6] as usize).unwrap_or(&"?"),
-                st[1] / 1e6,
-                st[2] / 1e3,
-                st[4] / 1e3,
-                st[5]
-            ));
-            ui.separator();
-            ui.label("Échelle dB");
-            ui.add(egui::DragValue::new(&mut self.db_min).range(-160.0..=self.db_max - 10.0).speed(1.0));
-            ui.add(egui::DragValue::new(&mut self.db_max).range(self.db_min + 10.0..=20.0).speed(1.0));
-            ui.separator();
-            ui.label("Zoom");
-            if ui.button("➕").on_hover_text("Zoomer (ou molette)").clicked() {
+            ui.label(RichText::new("Squelch").color(DIM));
+            if ui.checkbox(&mut self.squelch_on, "").changed() {
+                self.svc.set_squelch(self.squelch_on, self.squelch);
+            }
+            ui.label(RichText::new(format!("{:.0} dB", self.squelch)).color(DIM));
+        });
+        if ui.add_enabled(self.squelch_on, egui::Slider::new(&mut self.squelch, -130.0..=-20.0).show_value(false)).drag_stopped() {
+            self.svc.set_squelch(self.squelch_on, self.squelch);
+        }
+        ui.add_space(6.0);
+        ui.label(RichText::new("Échelle du spectre").color(DIM));
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut self.db_min).range(-160.0..=self.db_max - 10.0).speed(1.0).suffix(" dB"));
+            ui.label("à");
+            ui.add(egui::DragValue::new(&mut self.db_max).range(self.db_min + 10.0..=20.0).speed(1.0).suffix(" dB"));
+        });
+        ui.add_space(8.0);
+        self.info_panel(ui, st);
+    }
+
+    /// Everything measurable about the stream and the decoder
+    fn technical_tab(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
+        let (bins, written, rows) = {
+            let h = self.svc.history().lock().unwrap();
+            (h.bins, h.written, h.rows)
+        };
+        let ring = self.svc.audio();
+        let buffered = ring.ring.lock().map(|r| r.len()).unwrap_or(0);
+        let underruns = ring.underruns.load(std::sync::atomic::Ordering::Relaxed);
+        let rate = st[2].max(1.0);
+        let mut flow: Vec<(String, String)> = vec![
+            ("Source".into(), self.svc.selected_source()),
+            ("État".into(), if st[7] != 0.0 { "réception".into() } else { "arrêté".into() }),
+            ("Débit IQ".into(), format!("{:.3} MS/s", rate / 1e6)),
+            ("Centre".into(), format!("{:.6} MHz", st[1] / 1e6)),
+            ("Fréquence".into(), format!("{:.6} MHz", st[0] / 1e6)),
+            ("Écart au centre".into(), format!("{:+.1} kHz", st[3] / 1e3)),
+            ("Bande du canal".into(), khz(st[4])),
+            ("Niveau dans le canal".into(), format!("{:.1} dB", st[5])),
+            ("FFT".into(), format!("{bins} points · {:.1} Hz/case", rate / bins.max(1) as f64)),
+            ("Lignes de cascade".into(), format!("{written} reçues · {rows} gardées")),
+            ("Tampon audio".into(), format!("{:.0} ms", buffered as f64 / 48.0)),
+            ("Coupures audio".into(), underruns.to_string()),
+        ];
+        if st[6] as usize == 1 {
+            flow.push(("RDS PI".into(), self.rds["pi"].as_str().unwrap_or("—").to_string()));
+            flow.push(("RDS PTY".into(), self.rds["pty"].as_str().unwrap_or("—").to_string()));
+        }
+        let grid = |ui: &mut egui::Ui, id: &str, rows: &[(String, String)]| {
+            egui::Grid::new(id).num_columns(2).spacing([18.0, 4.0]).min_row_height(20.0).striped(false).show(ui, |ui| {
+                for (k, v) in rows {
+                    ui.label(RichText::new(k).color(DIM));
+                    ui.label(RichText::new(v).monospace());
+                    ui.end_row();
+                }
+            });
+        };
+        ui.label(RichText::new("Flux").strong().color(AMBER));
+        grid(ui, "flow", &flow);
+        if let Some(status) = self.digital["status"].as_str().filter(|_| matches!(st[6] as usize, DAB | 9)) {
+            ui.add_space(10.0);
+            ui.label(RichText::new(if st[6] as usize == DAB { "Décodeur DAB+" } else { "Décodeur DRM" }).strong().color(AMBER));
+            grid(ui, "decoder", &status_rows(status));
+        }
+    }
+
+    fn zoom_bar(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
+        ui.horizontal(|ui| {
+            if pill(ui, false, "➕").on_hover_text("Zoomer (ou molette sur le spectre)").clicked() {
                 self.zoom(0.5, st[0], st);
             }
-            if ui.button("➖").on_hover_text("Dézoomer").clicked() {
+            if pill(ui, false, "➖").on_hover_text("Dézoomer").clicked() {
                 self.zoom(2.0, st[0], st);
             }
-            if ui.button("⤢").on_hover_text("Toute la bande").clicked() {
+            if pill(ui, self.view_bw <= 0.0, "Toute la bande").clicked() {
                 self.view_bw = 0.0;
                 self.view_off = 0.0;
             }
             let rate = st[2].max(1.0);
             let shown = if self.view_bw > 0.0 { self.view_bw.min(rate) } else { rate };
-            ui.label(format!("{:.0} kHz affichés", shown / 1e3));
+            ui.label(RichText::new(format!("{} affichés · molette pour zoomer, glisser pour se déplacer, clic pour accorder", khz(shown))).color(DIM));
         });
     }
 
@@ -638,15 +920,27 @@ impl App {
     }
 
     fn car_radio(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
+        // Wide: display left, stations right. Narrower: display on top, stations below
+        if ui.available_width() >= 1000.0 {
+            ui.columns(2, |cols| {
+                self.car_head(&mut cols[0], st);
+                self.car_stations(&mut cols[1], st);
+            });
+        } else {
+            self.car_head(ui, st);
+            ui.add_space(12.0);
+            self.car_stations(ui, st);
+        }
+    }
+
+    /// The head unit: multiplex, signal, artwork, station, text, ⏮ ▶ ⏭
+    fn car_head(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
         let playing = st[7] != 0.0;
         let d = self.digital.clone();
         let station = d["playing"].as_str().unwrap_or("").to_string();
         let here = channel_at(st[0]);
-        ui.columns(2, |cols| {
-            // ----- the head unit
-            let ui = &mut cols[0];
-            egui::Frame::default().fill(ui.visuals().extreme_bg_color).corner_radius(18.0).inner_margin(18.0).show(ui, |ui| {
-                ui.set_min_height((ui.available_height() - 40.0).max(200.0));
+            egui::Frame::default().fill(SURFACE).corner_radius(24.0).inner_margin(24.0).show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     let where_ = format!("{} · {}", here.map(|i| DAB_CHANNELS[i].0).unwrap_or("—"), d["ensemble"].as_str().filter(|s| !s.is_empty()).unwrap_or("…"));
                     ui.label(RichText::new(where_).size(16.0).color(Color32::GRAY));
@@ -676,7 +970,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let side = 180.0;
                     let (r, p) = ui.allocate_painter(Vec2::splat(side), Sense::hover());
-                    p.rect_filled(r.rect, 16.0, Color32::from_gray(45));
+                    p.rect_filled(r.rect, 20.0, SURFACE_HIGH);
                     if let Some(t) = &self.slide_tex {
                         let s = t.size_vec2();
                         let k = (side / s.x).min(side / s.y);
@@ -686,7 +980,9 @@ impl App {
                         p.text(r.rect.center(), egui::Align2::CENTER_CENTER, "📻", egui::FontId::proportional(64.0), AMBER);
                     }
                     ui.add_space(16.0);
+                    let w = ui.available_width().max(160.0);
                     ui.vertical(|ui| {
+                        ui.set_width(w);
                         let title = if !playing {
                             "Radio à l'arrêt".to_string()
                         } else if station.is_empty() {
@@ -705,11 +1001,15 @@ impl App {
                 });
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
-                    let big = |t: &str| egui::Button::new(RichText::new(t).size(30.0)).min_size(Vec2::new(70.0, 56.0)).corner_radius(28.0);
+                    let big = |t: &str| egui::Button::new(RichText::new(t).size(28.0)).fill(SURFACE_HIGH).min_size(Vec2::new(76.0, 60.0)).corner_radius(30.0);
                     if ui.add_enabled(playing, big("⏮")).on_hover_text("Station précédente").clicked() {
                         self.step_station(-1);
                     }
-                    if ui.add(big(if playing { "⏹" } else { "▶" }).fill(AMBER.gamma_multiply(0.85))).clicked() {
+                    let play = egui::Button::new(RichText::new(if playing { "⏹" } else { "▶" }).size(30.0).color(if playing { ON_CONTAINER } else { Color32::BLACK }))
+                        .fill(if playing { PRIMARY_CONTAINER } else { AMBER })
+                        .min_size(Vec2::new(92.0, 60.0))
+                        .corner_radius(30.0);
+                    if ui.add(play).clicked() {
                         self.toggle_play(playing);
                     }
                     if ui.add_enabled(playing, big("⏭")).on_hover_text("Station suivante").clicked() {
@@ -718,8 +1018,13 @@ impl App {
                 });
             });
 
-            // ----- multiplex bar, search, stations
-            let ui = &mut cols[1];
+    }
+
+    /// Multiplex bar, search, station tiles
+    fn car_stations(&mut self, ui: &mut egui::Ui, st: &[f64; 11]) {
+        let playing = st[7] != 0.0;
+        let station = self.digital["playing"].as_str().unwrap_or("").to_string();
+        let here = channel_at(st[0]);
             ui.horizontal(|ui| {
                 if ui.add(egui::Button::new(RichText::new("◀").size(20.0)).min_size(Vec2::splat(40.0))).on_hover_text("Multiplex précédent").clicked() {
                     self.step_channel(st, -1);
@@ -786,7 +1091,7 @@ impl App {
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::splat(8.0);
+                    ui.spacing_mut().item_spacing = Vec2::splat(10.0);
                     for (sid, name, other, plus) in tiles {
                         let elsewhere = other.as_ref().filter(|c| Some(*c) != here_name.as_ref());
                         let current = elsewhere.is_none() && name == station;
@@ -794,8 +1099,10 @@ impl App {
                             Some(ch) => format!("{name}\n{ch} · {}", self.found.get(ch).cloned().unwrap_or_default()),
                             None => name.clone(),
                         };
-                        let b = egui::Button::new(RichText::new(text).size(16.0).strong()).min_size(Vec2::new(170.0, 64.0)).corner_radius(14.0);
-                        let b = if current { b.fill(AMBER.gamma_multiply(0.55)) } else { b };
+                        let b = egui::Button::new(RichText::new(text).size(16.0).strong().color(if current { ON_CONTAINER } else { Color32::from_gray(230) }))
+                            .min_size(Vec2::new(176.0, 70.0))
+                            .corner_radius(18.0)
+                            .fill(if current { PRIMARY_CONTAINER } else { SURFACE_HIGH });
                         if ui.add_enabled(plus, b).clicked() {
                             self.svc.dab_select(&sid);
                             if let Some(ch) = elsewhere.and_then(|c| DAB_CHANNELS.iter().find(|x| x.0 == c.as_str())) {
@@ -809,7 +1116,6 @@ impl App {
                     }
                 });
             });
-        });
     }
 
     // ------------------------------------------------------------------ side panel
@@ -918,29 +1224,30 @@ impl eframe::App for App {
             self.update_slide(ctx);
         }
         let dab = st[6] as usize == DAB;
-        egui::TopBottomPanel::top("top").show(ctx, |ui| self.top_bar(ui, &st));
         let car = dab && self.dab_view == DabView::Car;
-        if !car {
-            egui::SidePanel::right("side").default_width(300.0).show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    self.source_panel(ui);
-                    ui.separator();
-                    self.info_panel(ui, &st);
-                });
-            });
-        }
-        egui::CentralPanel::default().show(ctx, |ui| {
+        let margin = egui::Frame::default().fill(BG).inner_margin(16.0);
+        egui::SidePanel::right("side").exact_width(390.0).resizable(false).frame(margin).show(ctx, |ui| self.right_panel(ui, &st));
+        egui::CentralPanel::default().frame(margin).show(ctx, |ui| {
             if dab {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.dab_view, DabView::Car, RichText::new("🚗 Autoradio").size(16.0));
-                    ui.selectable_value(&mut self.dab_view, DabView::Spectrum, RichText::new("〰 Spectre").size(16.0));
+                    if pill(ui, self.dab_view == DabView::Car, "🚗  Autoradio").clicked() {
+                        self.dab_view = DabView::Car;
+                    }
+                    if pill(ui, self.dab_view == DabView::Spectrum, "〰  Spectre").clicked() {
+                        self.dab_view = DabView::Spectrum;
+                    }
                 });
-                ui.add_space(6.0);
+                ui.add_space(8.0);
             }
             if car {
                 self.car_radio(ui, &st);
             } else {
-                self.spectrum(ui, &st);
+                card(ui, SURFACE, |ui| {
+                    let h = ui.available_height() - 56.0;
+                    ui.set_min_height(h.max(200.0));
+                    ui.allocate_ui(Vec2::new(ui.available_width(), h.max(200.0)), |ui| self.spectrum(ui, &st));
+                    self.zoom_bar(ui, &st);
+                });
             }
         });
         if let Some(e) = self.error.clone() {
