@@ -9,10 +9,18 @@
 //! Some servers accept only their own web page: their admin allows no channel to other
 //! applications ("ext_api_nchans" = 0), and the server sends "too_busy=0" then closes about
 //! 10 s in. That is the admin's choice; such servers are reported as refusing applications.
+//!
+//! Playout, as SDR++ (Brown) does it: the network thread only fills a buffer; a feeder hands
+//! the engine 1/60 s of samples at a time on a steady clock, twice as fast while more than
+//! 2 s are buffered, starts again cleanly after an underflow, and the oldest samples go past
+//! 3 s. Network bursts and stalls no longer reach the sound. Each block carries a monotonic
+//! stream time (capture time, ~0.5 s before arrival) so FT8 slots fall on the right seconds.
 
 use super::ws::{Message, WebSocket};
 use super::{IqBlock, Source, SourceConfig, SourceCtl};
 use crate::dsp::C32;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -20,8 +28,83 @@ use std::time::{Duration, Instant};
 /// Start of the error when a KiwiSDR turns applications away (the app remembers those servers)
 pub const KIWI_REFUSED: &str = "Pas de place pour les applications";
 
-/// IQ passband requested from the server (Hz each side)
-const HALF_BAND: f64 = 6_000.0;
+/// IQ passband requested from the server (Hz each side), as SDR++
+const HALF_BAND: f64 = 7_000.0;
+/// Buffer the feeder aims below (s): above, it plays twice as fast to catch up
+const NETWORK_BUFFER_S: f64 = 2.0;
+/// Samples waited for before playing (after the start, a retune or an underflow): 1/4 s
+/// absorbs the usual jitter (SDR++ waits for 200 samples only, and stutters more)
+const PREBUFFER_S: f64 = 0.25;
+/// Time from capture on the server to arrival here, for the stream time (SDR++: 500 ms)
+const LATENCY_S: f64 = 0.5;
+
+/// What the network thread fills and the feeder empties
+struct Playout {
+    buf: VecDeque<C32>,
+    rate: f64,
+    center: f64,
+    /// Wall time (s) the newest samples arrived
+    arrived: f64,
+}
+
+fn wall_s() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// Hands the buffered samples to the engine on a steady clock (SDR++'s feeder thread)
+fn feeder(play: Arc<Mutex<Playout>>, out: SyncSender<IqBlock>, stop: Arc<AtomicBool>) {
+    let mut next: Option<Instant> = None;
+    // Stream time of the next sample to hand out (UTC s)
+    let mut stream_t: Option<f64> = None;
+    while !stop.load(Ordering::Relaxed) {
+        let (len, rate) = {
+            let p = play.lock().unwrap();
+            (p.buf.len(), p.rate)
+        };
+        let chunk = (rate / 60.0).round().max(1.0) as usize; // 200 samples at 12 kHz
+        match next {
+            None => {
+                if (len as f64) < PREBUFFER_S * rate {
+                    std::thread::sleep(Duration::from_millis(16));
+                    continue; // waiting for the initial batch
+                }
+                next = Some(Instant::now());
+            }
+            Some(t) => {
+                if let Some(d) = t.checked_duration_since(Instant::now()) {
+                    std::thread::sleep(d);
+                }
+            }
+        }
+        let (samples, left, center, est) = {
+            let mut p = play.lock().unwrap();
+            if p.buf.len() < chunk {
+                (Vec::new(), 0, p.center, 0.0)
+            } else {
+                // Capture time of this chunk's first sample, from when the buffer's end arrived
+                let est = p.arrived - LATENCY_S - p.buf.len() as f64 / rate;
+                let s: Vec<C32> = p.buf.drain(..chunk).collect();
+                (s, p.buf.len(), p.center, est)
+            }
+        };
+        if samples.is_empty() {
+            next = None; // underflow: wait for a new batch
+            continue;
+        }
+        let period = chunk as f64 / rate;
+        let step = if left as f64 > NETWORK_BUFFER_S * rate { period / 2.0 } else { period };
+        next = next.map(|t| t + Duration::from_secs_f64(step));
+        // Stream time only moves forward (SDR++): jumps ahead after a gap, never back
+        let t = match stream_t {
+            Some(t) if t >= est => t,
+            _ => est,
+        };
+        stream_t = Some(t + period);
+        if out.send(IqBlock { samples, rate, center, settle_ms: 0.0, time: Some(t) }).is_err() {
+            return;
+        }
+    }
+}
 
 #[derive(Default, Debug, Clone)]
 pub struct KiwiStatus {
@@ -69,7 +152,7 @@ impl Source for KiwiSdr {
         set_msg("connexion…");
         let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
         let mut ws = WebSocket::connect(&host, port, &format!("/kiwi/{ms}/SND"), Duration::from_secs(8))?;
-        let mut center = cfg.center as f64;
+        let center = cfg.center as f64;
         for c in [
             format!("SET auth t=kiwi p={}", if self.password.is_empty() { "#" } else { &self.password }),
             "SET AR OK in=12000 out=48000".to_string(),
@@ -84,19 +167,38 @@ impl Source for KiwiSdr {
         }
         st.lock().unwrap().connected = true;
         set_msg("connecté, en attente des données");
-        let mut rate = 12_000.0;
+        let play = Arc::new(Mutex::new(Playout { buf: VecDeque::new(), rate: 12_000.0, center, arrived: wall_s() }));
+        let stop = Arc::new(AtomicBool::new(false));
+        let feed = {
+            let (play, stop) = (play.clone(), stop.clone());
+            std::thread::Builder::new().name("kiwi feeder".into()).spawn(move || feeder(play, out, stop)).map_err(|e| e.to_string())?
+        };
+        let r = self.receive(&mut ws, &ctl, &play, center);
+        stop.store(true, Ordering::Relaxed);
+        let _ = feed.join();
+        st.lock().unwrap().connected = false;
+        r
+    }
+}
+
+impl KiwiSdr {
+    /// Network side: commands, server messages, sound packets into the playout buffer
+    fn receive(&self, ws: &mut WebSocket, ctl: &Receiver<SourceCtl>, play: &Mutex<Playout>, mut center: f64) -> Result<(), String> {
+        let st = &self.status;
+        let set_msg = |m: &str| st.lock().unwrap().message = m.to_string();
         let mut last_keepalive = Instant::now();
-        let mut buf: Vec<C32> = Vec::with_capacity(2048);
+        let mut receiving = false;
         loop {
             loop {
                 match ctl.try_recv() {
-                    Ok(SourceCtl::Stop) | Err(TryRecvError::Disconnected) => {
-                        st.lock().unwrap().connected = false;
-                        return Ok(());
-                    }
+                    Ok(SourceCtl::Stop) | Err(TryRecvError::Disconnected) => return Ok(()),
                     Ok(SourceCtl::Center(f)) => {
                         center = f as f64;
                         ws.send_text(&tune_cmd(center))?;
+                        // The old frequency's buffered sound would play on for up to 2 s
+                        let mut p = play.lock().unwrap();
+                        p.buf.clear();
+                        p.center = center;
                     }
                     Ok(SourceCtl::Gain(g)) => {
                         // The server's manual gain (dB), or its AGC
@@ -117,7 +219,6 @@ impl Source for KiwiSdr {
             let m = match ws.recv() {
                 Ok(m) => m,
                 Err(e) => {
-                    st.lock().unwrap().connected = false;
                     set_msg(&format!("déconnecté : {e}"));
                     return Err(e);
                 }
@@ -130,7 +231,7 @@ impl Source for KiwiSdr {
                 b"MSG" => {
                     let text = String::from_utf8_lossy(&b[4.min(b.len())..]).into_owned();
                     if let Some(r) = msg_value(&text, "sample_rate").and_then(|v| v.parse::<f64>().ok()) {
-                        rate = r;
+                        play.lock().unwrap().rate = r;
                         st.lock().unwrap().rate = r;
                     }
                     // "too_busy=N": N = channels its admin allows to applications (not to its web
@@ -140,14 +241,13 @@ impl Source for KiwiSdr {
                     match msg_value(&text, "too_busy") {
                         Some("0") => {
                             set_msg("refuse les applications");
-                            return Err(format!("{KIWI_REFUSED} : ce KiwiSDR n'accepte que sa propre page web. Choisis-en un autre.").into());
+                            return Err(format!("{KIWI_REFUSED} : ce KiwiSDR n'accepte que sa propre page web. Choisis-en un autre."));
                         }
                         Some(n) => {
                             set_msg("places pour applications prises");
                             return Err(format!(
                                 "{KIWI_REFUSED} : ce KiwiSDR ne laisse que {n} connexion(s) aux applications et elles sont prises, souvent par ses propres décodeurs automatiques. Choisis-en un autre."
-                            )
-                            .into());
+                            ));
                         }
                         None => {}
                     }
@@ -163,20 +263,23 @@ impl Source for KiwiSdr {
                 b"SND" if b.len() >= 20 && b[3] & 0x08 != 0 => {
                     let smeter = u16::from_be_bytes([b[8], b[9]]);
                     st.lock().unwrap().rssi = 0.1 * smeter as f32 - 127.0;
-                    for p in b[20..].chunks_exact(4) {
-                        let i = i16::from_be_bytes([p[0], p[1]]) as f32 / 32768.0;
-                        let q = i16::from_be_bytes([p[2], p[3]]) as f32 / 32768.0;
-                        buf.push(C32::new(i, q));
+                    let mut p = play.lock().unwrap();
+                    p.buf.extend(b[20..].as_chunks::<4>().0.iter().map(|q| {
+                        C32::new(i16::from_be_bytes([q[0], q[1]]) as f32 / 32768.0, i16::from_be_bytes([q[2], q[3]]) as f32 / 32768.0)
+                    }));
+                    p.arrived = wall_s();
+                    // Past 3 s, the oldest go (SDR++: 1.5 x the 2 s buffer)
+                    let cap = (1.5 * NETWORK_BUFFER_S * p.rate) as usize;
+                    if p.buf.len() > cap {
+                        let extra = p.buf.len() - cap;
+                        p.buf.drain(..extra);
                     }
-                    if buf.len() >= 1024 {
-                        if st.lock().unwrap().message != "receiving" {
-                            set_msg("réception");
-                            eprintln!("[source] KiwiSDR {}: receiving, {:.3} kS/s around {:.3} kHz", self.site, rate / 1e3, center / 1e3);
-                        }
-                        let samples = std::mem::replace(&mut buf, Vec::with_capacity(2048));
-                        if out.send(IqBlock { samples, rate, center, settle_ms: 0.0, time: None }).is_err() {
-                            return Ok(());
-                        }
+                    let rate = p.rate;
+                    drop(p);
+                    if !receiving {
+                        receiving = true;
+                        set_msg("réception");
+                        eprintln!("[source] KiwiSDR {}: receiving, {:.3} kS/s around {:.3} kHz", self.site, rate / 1e3, center / 1e3);
                     }
                 }
                 _ => {}
