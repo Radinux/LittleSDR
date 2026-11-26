@@ -41,6 +41,15 @@ for pair in arm64-v8a:aarch64-linux-android x86_64:x86_64-linux-android; do
     mkdir -p "$ENGINE/third_party/faad2/$TARGET"
     cp "$(find "$B" -name 'libfaad.a' | head -1)" "$ENGINE/third_party/faad2/$TARGET/libfaad.a"
 
+    # FAAD2's DRM build (ER AAC 960-sample frames, DRM SBR / PS): DRM AAC stations. A shared
+    # library the engine loads at run time, beside the ordinary FAAD2 linked for DAB+
+    echo "== FAAD2 DRM $ABI"
+    B=$ENGINE/third_party/faad2-build/$TARGET-drm
+    cmake -S "$SRC" -B "$B" "${COMMON[@]}" -DBUILD_SHARED_LIBS=ON -DFAAD_BUILD_CLI=OFF -DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON > "$B.log" 2>&1 || { cat "$B.log"; exit 1; }
+    cmake --build "$B" --target faad_drm >> "$B.log" 2>&1 || { tail -40 "$B.log"; exit 1; }
+    mkdir -p "$ENGINE/../kit/jniLibs/$ABI"
+    cp "$(find "$B" -name 'libfaad_drm.so' | head -1)" "$ENGINE/../kit/jniLibs/$ABI/libfaad_drm.so"
+
     echo "== libxaac $ABI"
     B=$ENGINE/third_party/libxaac/build-$TARGET
     cmake -S "$ENGINE/third_party/libxaac" -B "$B" "${COMMON[@]}" > "$B.log" 2>&1 || { cat "$B.log"; exit 1; }

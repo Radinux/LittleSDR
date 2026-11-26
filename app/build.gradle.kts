@@ -94,7 +94,8 @@ abstract class RustJniLibsTask : DefaultTask() {
         }
         for (abi in abis) {
             // libairspy / libairspyhf are loaded by the engine when an Airspy is opened
-            for (lib in listOf("librtlsdr.so", "libusb1.0.so", "libairspy.so", "libairspyhf.so")) {
+            // libfaad_drm: FAAD2's DRM build (DRM AAC stations), loaded by the engine too
+            for (lib in listOf("librtlsdr.so", "libusb1.0.so", "libairspy.so", "libairspyhf.so", "libfaad_drm.so")) {
                 kitLibs.get().asFile.resolve("$abi/$lib").copyTo(out.resolve("$abi/$lib"), overwrite = true)
             }
         }

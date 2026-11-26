@@ -1,6 +1,7 @@
 //! DRM (Digital Radio Mondiale) receiver: OFDM sync and channel estimation, FAC, then (next
 //! steps) SDC, MSC and audio.
 
+pub mod aac;
 pub mod audio;
 pub mod cellmap;
 pub mod fac;
@@ -13,6 +14,7 @@ use crate::dsp::{Frame as AudioFrame, Interp, C32};
 use std::collections::VecDeque;
 use fac::{FacDecoder, FacInfo};
 use ofdm::{Frame, Ofdm};
+use aac::AacAudio;
 use audio::{TextDecoder, XheAudio};
 use msc::MscDecoder;
 use sdc::{SdcDecoder, SdcInfo};
@@ -25,6 +27,10 @@ pub struct DrmReceiver {
     /// MSC frames (400 ms of the multiplex) decoded and not yet taken
     pub msc_frames: Vec<Vec<u8>>,
     pub audio: XheAudio,
+    /// AAC / HE-AAC stations (most of them): FAAD2's DRM build
+    pub aac: AacAudio,
+    /// The station's audio is AAC (else xHE-AAC)
+    aac_on: bool,
     pub text: TextDecoder,
     /// New text message, not yet taken
     pub text_news: Option<String>,
@@ -43,7 +49,7 @@ pub struct DrmReceiver {
 impl DrmReceiver {
     /// `rate`: 12, 24 or 48 kHz of complex baseband centred on the DRM channel
     pub fn new(rate: f64) -> DrmReceiver {
-        DrmReceiver { ofdm: Ofdm::new(rate), fac: FacDecoder::new(), sdc: SdcDecoder::new(), msc: MscDecoder::new(), msc_frames: Vec::new(), audio: XheAudio::new(), text: TextDecoder::default(), text_news: None, pcm: Vec::new(), last_fac: None, sdc_info: None, frames: 0, rs: None, reserve: VecDeque::new(), playing: false }
+        DrmReceiver { ofdm: Ofdm::new(rate), fac: FacDecoder::new(), sdc: SdcDecoder::new(), msc: MscDecoder::new(), msc_frames: Vec::new(), audio: XheAudio::new(), aac: AacAudio::default(), aac_on: false, text: TextDecoder::default(), text_news: None, pcm: Vec::new(), last_fac: None, sdc_info: None, frames: 0, rs: None, reserve: VecDeque::new(), playing: false }
     }
 
     pub fn process(&mut self, iq: &[C32]) {
@@ -69,15 +75,20 @@ impl DrmReceiver {
                     }
                     if let Some(sdc) = &self.sdc_info {
                         let got = self.msc.push(map, &f, &info, sdc);
-                        // Audio of the first service, from its stream
-                        if let Some(a) = sdc.audio.iter().find(|a| a.coding == 3) {
+                        // Audio of the first service, from its stream: xHE-AAC or AAC
+                        if let Some(a) = sdc.audio.iter().find(|a| a.coding == 3 || a.coding == 0) {
                             let s = a.stream as usize;
                             if let Some(&(la, lb)) = sdc.streams.get(s) {
                                 let off: usize = sdc.streams[..s].iter().map(|x| (x.0 + x.1) as usize).sum();
                                 let len = (la + lb) as usize - if a.text { 4 } else { 0 };
                                 for m in &got {
                                     if off + len <= m.len() {
-                                        self.audio.push(a, &m[off..off + len], &mut self.pcm);
+                                        self.aac_on = a.coding == 0;
+                                        if self.aac_on {
+                                            self.aac.push(a, la as usize, &m[off..off + len], &mut self.pcm);
+                                        } else {
+                                            self.audio.push(a, &m[off..off + len], &mut self.pcm);
+                                        }
                                         if a.text && off + len + 4 <= m.len() {
                                             if let Some(t) = self.text.push(&m[off + len..off + len + 4]) {
                                                 self.text_news = Some(t);
@@ -99,8 +110,7 @@ impl DrmReceiver {
     /// (so the sound card is fed steadily), audio delayed by a small reserve
     pub fn process_audio(&mut self, iq: &[C32], if_rate: f64, out: &mut Vec<AudioFrame>) {
         self.process(iq);
-        let ch = self.audio.channels.max(1) as usize;
-        let rate = self.audio.rate;
+        let (ch, rate) = if self.aac_on { (self.aac.channels.max(1) as usize, self.aac.rate) } else { (self.audio.channels.max(1) as usize, self.audio.rate) };
         if rate > 0 && !self.pcm.is_empty() {
             if self.rs.as_ref().is_none_or(|r| r.0 != rate) {
                 self.rs = Some((rate, Interp::new(rate as f64, 48_000.0)));
@@ -176,9 +186,9 @@ impl DrmReceiver {
             self.fac.bad,
             self.sdc.ok,
             self.sdc.bad,
-            self.audio.frames_ok,
-            self.audio.frames_bad,
-            self.audio.rate
+            if self.aac_on { self.aac.frames_ok } else { self.audio.frames_ok },
+            if self.aac_on { self.aac.frames_bad } else { self.audio.frames_bad },
+            if self.aac_on { self.aac.rate } else { self.audio.rate }
         )
     }
 }
