@@ -1,6 +1,9 @@
 package app.littlesdr.ui
 
 import android.content.res.Configuration
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.platform.LocalConfiguration
 
 import androidx.compose.animation.AnimatedContent
@@ -226,11 +229,6 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                     onSpace = { showSource = false; vm.setSpace(it) },
                     modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets(m, m, m, m))),
                 )
-                if (showSource) {
-                    androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showSource = false }) {
-                        Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 24.dp).verticalScroll(rememberScrollState())) { sourcePanel() }
-                    }
-                }
             } else {
                 // Landscape: the view (spectrum, map, picture) on the left, the control panel on
                 // the right. Portrait: the view on top, the panel under it.
@@ -307,12 +305,11 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                             // No outer scroll here: the station list owns all the height left
                             DigitalHeader(
                                 source = selectedSource, usb = usb != null, sourceOpen = showSource,
-                                onSource = { showSource = !showSource }, onSettings = onOpenSettings,
+                                onSource = { showSource = true }, onSettings = onOpenSettings,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             Spacer(Modifier.height(10.dp))
-                            if (showSource) Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) { sourcePanel() }
-                            else if (space == AppSpace.DRM) DrmTuner(
+                            if (space == AppSpace.DRM) DrmTuner(
                                 frequency = stateHolder.value.vfoFrequency, d = digital, onTune = vm::tune,
                                 controls = receiverControls, onControl = { vm.sourceAction(it) },
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -336,7 +333,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                 playing = playing,
                                 playEnabled = ready,
                                 onPlay = vm::togglePlay,
-                                onSource = { if (space == AppSpace.SDR) tab = ControlTab.Source else showSource = !showSource },
+                                onSource = { if (space == AppSpace.SDR) tab = ControlTab.Source else showSource = true },
                                 onSettings = onOpenSettings,
                                 onFt8 = onOpenFt8,
                                 ft8Active = ft8Active,
@@ -350,7 +347,6 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                             Spacer(Modifier.height(8.dp))
                             if (space != AppSpace.SDR) {
                                 when {
-                                    showSource -> sourcePanel()
                                     space == AppSpace.ADSB -> AdsbPanel(adsb, adsbSelected, adsbRoutes, airframe, airframePhoto, onSelect = vm::selectAircraft, onClear = vm::clearAircraft)
                                     else -> LrptPanel(
                                         frequency = stateHolder.value.vfoFrequency, l = lrpt,
@@ -422,6 +418,37 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                     viewPane(Modifier.weight(1f).fillMaxHeight())
                     // 330 dp: just what the widest rows need, the rest goes to the waterfall
                     controlPane(Modifier.width(330.dp).fillMaxHeight())
+                }
+            }
+
+            // Receiver settings outside the SDR space: a floating card over the page, whatever
+            // the page (car radio, DRM, LRPT, ADS-B), closed by ✕ or a tap outside
+            if (showSource && space != AppSpace.SDR) {
+                androidx.compose.ui.window.Dialog(
+                    onDismissRequest = { showSource = false },
+                    properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+                ) {
+                    val conf = LocalConfiguration.current
+                    Surface(
+                        shape = RoundedCornerShape(28.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        tonalElevation = 6.dp,
+                        shadowElevation = 16.dp,
+                        modifier = Modifier
+                            .widthIn(max = 460.dp)
+                            .fillMaxWidth(0.92f)
+                            .heightIn(max = (conf.screenHeightDp * 0.85f).dp),
+                    ) {
+                        Column(Modifier.padding(top = 8.dp, bottom = 16.dp)) {
+                            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(if (usb != null) Icons.Default.Usb else Icons.Default.Router, null, tint = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.width(10.dp))
+                                Text("Récepteur", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                                IconButton(onClick = { showSource = false }) { Icon(Icons.Default.Close, "Fermer") }
+                            }
+                            Column(Modifier.padding(horizontal = 20.dp).verticalScroll(rememberScrollState())) { sourcePanel() }
+                        }
+                    }
                 }
             }
 
