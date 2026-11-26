@@ -1,5 +1,7 @@
 package app.littlesdr.ui
 
+import androidx.compose.ui.platform.LocalConfiguration
+import android.content.res.Configuration
 import androidx.compose.material3.RadioButton
 import app.littlesdr.ui.components.color
 import app.littlesdr.engine.BandPlan
@@ -100,32 +102,42 @@ fun SettingsScreen(vm: RadioViewModel, onBack: () -> Unit) {
         containerColor = MaterialTheme.colorScheme.surface,
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
-            // Landscape: two columns, appearance + about | spectrum & waterfall
-            Row(
-                Modifier
-                    .widthIn(max = 1200.dp)
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(horizontal = 24.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(20.dp),
-            ) {
+            // Landscape: two columns, appearance + display | receiver; portrait: one column
+            val portrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
+            val left = @Composable {
+                AppearanceSection(appearance) { vm.setAppearance(it) }
+                SpectrumSection(display) { vm.setDisplay(it) }
+                BandPlanSection(display) { vm.setDisplay(it) }
+                FftSection(adv.fft, vm::setOption, vm::setOption)
+            }
+            val right = @Composable {
+                DemodSection(adv.demod, vm::setOption, vm::setOption)
+                InputSection(adv.input, playing, vm::setOption, vm::setOption)
+                val eibiStatus by vm.eibiStatus.collectAsStateWithLifecycle()
+                EiBiSection(eibiStatus.season, eibiStatus.count, eibiStatus.updated, eibiStatus.updating) { vm.updateEibi() }
+                val locating by vm.locating.collectAsStateWithLifecycle()
+                OperatorSection(adv.operator, data.operator.autoLocator, locating, vm::setOptionString, vm::setAutoLocator)
+                LogosSection()
+                AboutSection()
+            }
+            val frame = Modifier
+                .widthIn(max = 1200.dp)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(horizontal = if (portrait) 16.dp else 24.dp, vertical = 8.dp)
+            if (portrait) Column(frame, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                // The receiver's settings first: those are the ones changed while listening
+                right()
+                left()
+                Spacer(Modifier.height(16.dp))
+            } else Row(frame, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    AppearanceSection(appearance) { vm.setAppearance(it) }
-                    SpectrumSection(display) { vm.setDisplay(it) }
-                    BandPlanSection(display) { vm.setDisplay(it) }
-                    FftSection(adv.fft, vm::setOption, vm::setOption)
+                    left()
                     Spacer(Modifier.height(16.dp))
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    DemodSection(adv.demod, vm::setOption, vm::setOption)
-                    InputSection(adv.input, playing, vm::setOption, vm::setOption)
-                    val eibiStatus by vm.eibiStatus.collectAsStateWithLifecycle()
-                    EiBiSection(eibiStatus.season, eibiStatus.count, eibiStatus.updated, eibiStatus.updating) { vm.updateEibi() }
-                    val locating by vm.locating.collectAsStateWithLifecycle()
-                    OperatorSection(adv.operator, data.operator.autoLocator, locating, vm::setOptionString, vm::setAutoLocator)
-                    LogosSection()
-                    AboutSection()
+                    right()
                     Spacer(Modifier.height(16.dp))
                 }
             }

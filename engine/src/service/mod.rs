@@ -110,7 +110,7 @@ fn default_options() -> Value {
         "audio": {"device": 0, "latency": 4},
         "operator": {"location": "", "callsign": ""},
         "recorder": {"path": ""},
-        "demod": {"nb": false, "nbLevel": 8.0, "stereo": true, "snapInterval": 1000.0},
+        "demod": {"nb": false, "nbLevel": 8.0, "nr": false, "nrLevel": 12.0, "anotch": false, "stereo": true, "snapInterval": 1000.0},
     })
 }
 
@@ -543,6 +543,8 @@ impl Service {
         o["demod"]["demod"] = json!(format!("{:?}", e.mode()));
         o["demod"]["stereoAllowed"] = json!(e.mode() == Mode::Wfm);
         o["demod"]["nbAllowed"] = json!(true);
+        // Noise reduction and automatic notch work on the sound: analogue modes only
+        o["demod"]["nrAllowed"] = json!(!matches!(e.mode(), Mode::Lrpt | Mode::Dab | Mode::Drm | Mode::Adsb));
         o["demod"]["deempAllowed"] = json!(false);
         o["demod"]["ifnrAllowed"] = json!(false);
         o["fft"]["peakHold"] = json!(self.shared.hist.lock().unwrap().peak_hold);
@@ -556,6 +558,10 @@ impl Service {
         e.control(&EngineCtl::Stereo(o["demod"]["stereo"].as_bool().unwrap_or(true)));
         let nb = o["demod"]["nb"].as_bool().unwrap_or(false);
         e.control(&EngineCtl::Blanker(nb, o["demod"]["nbLevel"].as_f64().map(|v| v as f32)));
+        // NR: spectral noise reduction of the sound; AN: automatic notch (whistles, carriers)
+        e.control(&EngineCtl::Param("nr".into(), "db".into(), o["demod"]["nrLevel"].as_f64().unwrap_or(12.0) as f32));
+        e.control(&EngineCtl::Filter("nr".into(), o["demod"]["nr"].as_bool().unwrap_or(false)));
+        e.control(&EngineCtl::Filter("anotch".into(), o["demod"]["anotch"].as_bool().unwrap_or(false)));
         let loc = o["operator"]["location"].as_str().unwrap_or("");
         e.ft8.home = crate::ft8::message::grid_latlon(loc);
         match e.ft8.home {
@@ -581,7 +587,7 @@ impl Service {
             return;
         }
         let val = match (group, name) {
-            ("fft", "peakHold") | ("input", "dcBlocking") | ("input", "invertIQ") | ("demod", "nb") | ("demod", "stereo") => json!(v != 0.0),
+            ("fft", "peakHold") | ("input", "dcBlocking") | ("input", "invertIQ") | ("demod", "nb") | ("demod", "nr") | ("demod", "anotch") | ("demod", "stereo") => json!(v != 0.0),
             // Whole numbers stay integers: the app reads size, window, latency... as Int
             _ if v.fract() == 0.0 && v.abs() < 1e15 => json!(v as i64),
             _ => json!(v),

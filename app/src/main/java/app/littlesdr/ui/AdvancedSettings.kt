@@ -147,12 +147,24 @@ fun DemodSection(d: DemodOptions, setNum: SetNum, setBool: SetBool) {
         if (d.nbAllowed) {
             if (any) Divider()
             any = true
-            SwitchRow("Noise blanker", "Supprime les parasites impulsionnels", d.nb) { setBool("demod.nb", it) }
+            SwitchRow("Noise blanker (NB)", "Supprime les parasites impulsionnels", d.nb) { setBool("demod.nb", it) }
             if (d.nb) {
                 SliderRow("Niveau", d.nbLevel, 1f..10f, { String.format(Locale.ROOT, "%.1f", it) }) {
                     setNum("demod.nbLevel", it.toDouble())
                 }
             }
+        }
+        if (d.nrAllowed) {
+            if (any) Divider()
+            any = true
+            SwitchRow("Réduction de bruit (NR)", "Atténue le souffle de fond du son", d.nr) { setBool("demod.nr", it) }
+            if (d.nr) {
+                SliderRow("Réduction maximale", d.nrLevel, 3f..30f, { "${it.roundToInt()} dB" }) {
+                    setNum("demod.nrLevel", it.roundToInt().toDouble())
+                }
+            }
+            Divider()
+            SwitchRow("Notch automatique (AN)", "Efface les sifflements et porteuses dans le son", d.anotch) { setBool("demod.anotch", it) }
         }
         if (d.agc) {
             if (any) Divider()

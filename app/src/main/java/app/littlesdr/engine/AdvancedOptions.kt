@@ -68,6 +68,11 @@ data class DemodOptions(
     val nbAllowed: Boolean = false,
     val nb: Boolean = false,
     val nbLevel: Float = 10f,
+    /** Noise reduction (NR) and automatic notch (AN) of the sound: analogue modes */
+    val nrAllowed: Boolean = false,
+    val nr: Boolean = false,
+    val nrLevel: Float = 12f,
+    val anotch: Boolean = false,
     val agc: Boolean = false,
     val agcAttack: Float = 50f,
     val agcDecay: Float = 5f,
