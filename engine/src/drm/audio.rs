@@ -187,10 +187,10 @@ pub struct XheAudio {
     pub frames_bad: u64,
     pub rate: u32,
     pub channels: u8,
-    /// Samples (all channels) of the last decoded access unit: the length of a lost one
+    /// Lost access units: the last good one replayed with a fade, as in DAB+
+    conceal: crate::dab::dabplus::Concealer,
+    /// Samples (all channels) of the last decoded access unit
     last_len: usize,
-    /// Fade-in position after a gap (0 = none)
-    fade: usize,
 }
 
 impl Default for XheAudio {
@@ -201,7 +201,7 @@ impl Default for XheAudio {
 
 impl XheAudio {
     pub fn new() -> XheAudio {
-        XheAudio { dec: None, config: Vec::new(), payload: VecDeque::new(), synced: false, frames_ok: 0, frames_bad: 0, rate: 0, channels: 0, last_len: 0, fade: 0 }
+        XheAudio { dec: None, config: Vec::new(), payload: VecDeque::new(), synced: false, frames_ok: 0, frames_bad: 0, rate: 0, channels: 0, conceal: Default::default(), last_len: 0 }
     }
 
     /// One audio super frame (the stream's bytes of one MSC frame); PCM appended to `pcm`
@@ -214,9 +214,11 @@ impl XheAudio {
         }
         let aus = self.split(sf);
         if aus.is_empty() && !self.synced && self.last_len > 0 && self.rate > 0 {
-            // A whole super frame lost: its 400 ms as silence, so playback keeps time
-            pcm.extend(std::iter::repeat_n(0.0, (0.4 * self.rate as f32) as usize * self.channels.max(1) as usize));
-            self.fade = 1;
+            // A whole super frame lost: its 400 ms made up, so playback keeps time
+            let n = ((0.4 * self.rate as f32) as usize * self.channels.max(1) as usize).div_ceil(self.last_len);
+            for _ in 0..n {
+                self.conceal.lost(pcm);
+            }
         }
         for au in aus {
             match au {
@@ -228,22 +230,14 @@ impl XheAudio {
                             self.rate = r;
                             self.channels = c;
                             self.last_len = pcm.len() - start;
-                            // Back after a gap: 10 ms ramp instead of a click
-                            if self.fade > 0 {
-                                let n = (r as usize / 100 * c as usize).min(pcm.len() - start);
-                                for (i, x) in pcm[start..start + n].iter_mut().enumerate() {
-                                    *x *= i as f32 / n as f32;
-                                }
-                                self.fade = 0;
-                            }
+                            self.conceal.good(pcm, start, r, c);
                         }
                     }
                 }
                 None => {
-                    // A lost access unit: silence of its length keeps the timing
+                    // A lost access unit: made up from the last one, the timing kept
                     self.frames_bad += 1;
-                    pcm.extend(std::iter::repeat_n(0.0, self.last_len));
-                    self.fade = 1;
+                    self.conceal.lost(pcm);
                 }
             }
         }

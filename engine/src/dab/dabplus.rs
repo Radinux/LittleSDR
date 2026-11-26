@@ -67,9 +67,9 @@ pub struct DabPlusStats {
 
 /// Loss concealment: a lost audio frame is replaced by the last good one replayed with a
 /// fade (an isolated loss is barely heard), runs of losses fade to silence, and the next
-/// good frame fades in (no click)
+/// good frame fades in (no click). Shared with DRM (AAC and xHE-AAC).
 #[derive(Default)]
-struct Concealer {
+pub(crate) struct Concealer {
     /// Last good frame's samples (interleaved)
     last: Vec<f32>,
     channels: usize,
@@ -85,7 +85,7 @@ impl Concealer {
     }
 
     /// One made-up frame appended to `pcm`; None until a good frame has been heard
-    fn lost(&mut self, pcm: &mut Vec<f32>) -> Option<(u32, u8)> {
+    pub(crate) fn lost(&mut self, pcm: &mut Vec<f32>) -> Option<(u32, u8)> {
         if self.last.is_empty() || self.channels == 0 {
             return None;
         }
@@ -100,7 +100,7 @@ impl Concealer {
     }
 
     /// A good frame was decoded into pcm[start..]: fade it in after losses, keep it
-    fn good(&mut self, pcm: &mut [f32], start: usize, rate: u32, channels: u8) {
+    pub(crate) fn good(&mut self, pcm: &mut [f32], start: usize, rate: u32, channels: u8) {
         let ch = channels.max(1) as usize;
         let frame = &mut pcm[start..];
         if self.run > 0 {

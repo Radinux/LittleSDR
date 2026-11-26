@@ -202,9 +202,8 @@ pub struct AacAudio {
     pub frames_bad: u64,
     pub rate: u32,
     pub channels: u8,
-    /// Samples (all channels) of the last good frame: the length of a lost one
-    last_len: usize,
-    fade: bool,
+    /// Lost frames: the last good one replayed with a fade, as in DAB+
+    conceal: crate::dab::dabplus::Concealer,
     /// The DRM build of FAAD2 is missing: said once
     pub missing: bool,
 }
@@ -228,10 +227,11 @@ impl AacAudio {
         }
         let Some(dec) = &mut self.dec else { return };
         let Some(list) = split(sf, frames, len_a) else {
-            // Super frame unreadable: its 400 ms as silence, playback keeps time
+            // Super frame unreadable: its frames made up, playback keeps time
             self.frames_bad += frames as u64;
-            pcm.extend(std::iter::repeat_n(0.0, self.last_len * frames));
-            self.fade = true;
+            for _ in 0..frames {
+                self.conceal.lost(pcm);
+            }
             return;
         };
         for mut f in list {
@@ -241,21 +241,12 @@ impl AacAudio {
                     self.frames_ok += 1;
                     self.rate = r;
                     self.channels = c;
-                    self.last_len = pcm.len() - start;
-                    if self.fade {
-                        // Back after a gap: 10 ms ramp instead of a click
-                        let n = (r as usize / 100 * c as usize).min(pcm.len() - start);
-                        for (i, x) in pcm[start..start + n].iter_mut().enumerate() {
-                            *x *= i as f32 / n as f32;
-                        }
-                        self.fade = false;
-                    }
+                    self.conceal.good(pcm, start, r, c);
                 }
                 None => {
                     self.frames_bad += 1;
                     pcm.truncate(start);
-                    pcm.extend(std::iter::repeat_n(0.0, self.last_len));
-                    self.fade = true;
+                    self.conceal.lost(pcm);
                 }
             }
         }
