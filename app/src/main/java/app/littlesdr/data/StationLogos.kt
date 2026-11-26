@@ -36,6 +36,8 @@ object StationLogos {
     private val SERVERS = listOf("de1.api.radio-browser.info", "nl1.api.radio-browser.info", "at1.api.radio-browser.info")
     private const val MISS_TTL_MS = 7L * 24 * 3600 * 1000
     private const val MAX_BYTES = 512 * 1024
+    /** Written in the "no logo" files: bump it when the search improves, so misses are retried */
+    private const val MISS_VERSION = "2"
 
     private lateinit var app: Context
     private lateinit var dir: File
@@ -142,11 +144,13 @@ object StationLogos {
         // The logo the station itself sent on the multiplex, when the directory has none
         val mux = File(dir, "$k.mux").takeIf { it.exists() }?.let { decode(it.readBytes()) }
         val none = File(dir, "$k.none")
-        if (none.exists() && System.currentTimeMillis() - none.lastModified() < MISS_TTL_MS) return mux
+        // A miss found by the current search only ("2"): those of the old search (empty file)
+        // are looked up again
+        if (none.exists() && none.readText() == MISS_VERSION && System.currentTimeMillis() - none.lastModified() < MISS_TTL_MS) return mux
         if (!mayDownload()) return mux
         val bytes = lookup(name, cc)
         val bmp = bytes?.let { decode(it) }
-        if (bmp != null) img.writeBytes(bytes) else none.writeText("")
+        if (bmp != null) img.writeBytes(bytes) else none.writeText(MISS_VERSION)
         return bmp ?: mux
     }
 

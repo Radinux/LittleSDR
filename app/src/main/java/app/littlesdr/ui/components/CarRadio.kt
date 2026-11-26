@@ -183,12 +183,14 @@ private fun CarDisplay(
         SlideBackdrop(slide.takeIf { playing })
         Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // Top bar: receiver, AF, signal, settings, space
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Surface(onClick = onSource, shape = RoundedCornerShape(50), color = cs.surfaceContainerHigh) {
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            // The buttons on the right keep their size; on a narrow screen or with large text,
+            // the receiver's name gives way (ellipsis) instead of crushing the space switcher
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Surface(onClick = onSource, shape = RoundedCornerShape(50), color = cs.surfaceContainerHigh, modifier = Modifier.weight(1f, fill = false)) {
+                    Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (usb) Icons.Default.Usb else Icons.Default.Router, null, Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(source, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                        Text(source, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 Surface(
@@ -197,9 +199,9 @@ private fun CarDisplay(
                     color = if (af) cs.primary else cs.surfaceContainerHigh,
                     contentColor = if (af) cs.onPrimary else cs.onSurfaceVariant,
                 ) {
-                    Text("AF", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
+                    Text("AF", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp))
                 }
-                Spacer(Modifier.weight(1f))
+                Spacer(Modifier.weight(0.001f))
                 SignalBars(playing, d, Modifier.clip(RoundedCornerShape(8.dp)).padding(4.dp), onClick = { status = true })
                 IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Réglages") }
                 SpaceSwitcher(space = space, onSpace = onSpace, shape = CircleShape, modifier = Modifier.size(48.dp))
@@ -227,9 +229,10 @@ private fun CarDisplay(
                                 d.services.isEmpty() -> "Chargement des stations…"
                                 else -> "Choisis une station"
                             },
-                            style = MaterialTheme.typography.headlineMedium,
+                            // A notch under the station's name: long words don't break mid-word
+                            style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
-                            maxLines = 2,
+                            maxLines = 3,
                         )
                     }
                     if (playing && d.text.isNotBlank()) {
@@ -306,7 +309,7 @@ private fun CarArtwork(slide: ImageBitmap?, station: String?, modifier: Modifier
             if (img != null) {
                 // The slideshow fills the square (zoomed, no margin); a logo keeps a margin
                 if (img === slide) Image(img, "Diaporama de la station", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                else Image(img, "Logo de la station", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(14.dp))
+                else LogoFill(img, description = "Logo de la station")
             } else {
                 Icon(Icons.Rounded.Radio, null, Modifier.fillMaxSize(0.45f), tint = cs.primary.copy(alpha = 0.7f))
             }
@@ -471,21 +474,19 @@ private fun PresetTile(s: DabService, current: Boolean, where: String? = null, o
         border = if (current) BorderStroke(2.dp, cs.primary) else null,
         modifier = Modifier.fillMaxWidth().height(84.dp),
     ) {
-        Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             val logo = stationLogo(s.label)
-            Box(Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)).background(cs.surfaceContainerHighest), contentAlignment = Alignment.Center) {
-                if (logo != null) Image(logo, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(4.dp))
+            Box(Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)).background(cs.surfaceContainerHighest), contentAlignment = Alignment.Center) {
+                if (logo != null) LogoFill(logo)
                 else Text(s.label.take(2).uppercase(Locale.ROOT), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = cs.primary)
             }
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text(
+                WordFitText(
                     s.label,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = if (current) FontWeight.Bold else FontWeight.Medium,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = if (current) FontWeight.Bold else FontWeight.Medium),
                     color = if (!s.dabPlus) cs.onSurfaceVariant else if (current) cs.onPrimaryContainer else cs.onSurface,
                     maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 if (!s.dabPlus) Text("MP2 : non pris en charge", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                 where?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = cs.primary, maxLines = 1, overflow = TextOverflow.Ellipsis) }

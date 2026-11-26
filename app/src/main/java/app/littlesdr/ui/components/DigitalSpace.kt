@@ -251,7 +251,7 @@ private fun Artwork(slide: ImageBitmap?, station: String?, modifier: Modifier = 
             if (s != null) {
                 // The slideshow fills the square (zoomed, no margin); a logo keeps a margin
                 if (s === slide) Image(s, "Diaporama de la station", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                else Image(s, "Logo de la station", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(12.dp))
+                else LogoFill(s, description = "Logo de la station")
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Icon(Icons.Rounded.Radio, null, Modifier.fillMaxSize(0.42f), tint = cs.primary.copy(alpha = 0.7f))
@@ -529,7 +529,7 @@ private fun StationRow(s: DabService, current: Boolean, onClick: () -> Unit) {
     ) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             stationLogo(s.label)?.let { logo ->
-                Image(logo, null, contentScale = ContentScale.Fit, modifier = Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)))
+                Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp))) { LogoFill(logo) }
                 Spacer(Modifier.width(12.dp))
             }
             Column(Modifier.weight(1f)) {
