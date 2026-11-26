@@ -378,6 +378,9 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     private var lastAf: List<Long> = emptyList()
     private var lastFm: List<Long> = emptyList()
     private var lastStation: String? = null
+    /** ▶ pressed in DAB+ with no station chosen: once the multiplex lists its stations, play
+     *  the last one listened to if it is there, else the first (a car radio's ▶) */
+    private var dabAutoPick = false
 
     /** FM fallback in progress: where on FM, and the DAB channel it came from */
     data class FmBackup(val fmHz: Double, val dabHz: Double, val sid: String, val station: String?)
@@ -433,7 +436,18 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                 noSignalSince = 0
             }
         }
+        if (dabAutoPick && d.synced && d.playing == null) {
+            val list = d.services.filter { it.dabPlus }
+            if (list.isNotEmpty()) {
+                dabAutoPick = false
+                val last = spacePrefs.getString("dab_last_sid", null)
+                dabSelect(list.firstOrNull { it.sid == last } ?: list.minBy { it.label.lowercase() })
+                return
+            }
+        }
         if (d.synced && d.playing != null) {
+            dabAutoPick = false
+            d.sid?.takeIf { it != spacePrefs.getString("dab_last_sid", null) }?.let { spacePrefs.edit().putString("dab_last_sid", it).apply() }
             armed = true
             followRounds = 0
             lostSince = 0
@@ -587,6 +601,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         }
         // A scan is not "losing the station": no following during it or after it
         followJob?.cancel()
+        dabAutoPick = false
         armed = false
         lostSince = 0
         scanJob = viewModelScope.launch {
@@ -728,9 +743,11 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                 scanJob?.cancel()
                 followJob?.cancel()
                 armed = false
+                dabAutoPick = false
                 Engine.stop()
             } else {
                 if (Engine.start()) {
+                    if (_space.value == AppSpace.DAB && _fmBackup.value == null) dabAutoPick = true
                     RadioService.start(getApplication())
                 } else {
                     _error.value = "Impossible de démarrer « ${selectedSource.value} ». Vérifie les réglages de la source."

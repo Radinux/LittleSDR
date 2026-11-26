@@ -222,7 +222,7 @@ private fun CarDisplay(
                         Text(
                             when {
                                 !playing -> "Radio à l'arrêt"
-                                d.services.isEmpty() -> "Recherche…"
+                                d.services.isEmpty() -> "Chargement des stations…"
                                 else -> "Choisis une station"
                             },
                             style = MaterialTheme.typography.headlineMedium,
