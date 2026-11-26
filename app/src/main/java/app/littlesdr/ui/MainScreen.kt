@@ -95,6 +95,7 @@ import app.littlesdr.ui.components.DabTuner
 import app.littlesdr.ui.components.DrmTuner
 import app.littlesdr.ui.components.AdsbMap
 import app.littlesdr.ui.components.DrmRadioScreen
+import app.littlesdr.ui.components.IqFilePicker
 import app.littlesdr.ui.components.AdsbPanel
 import app.littlesdr.ui.components.LrptImagePanel
 import app.littlesdr.ui.components.LrptPanel
@@ -170,6 +171,15 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
             sources = sources, selected = selectedSource, playing = playing, usbDevice = usb, menu = menu,
             onSelect = { vm.selectSource(it) }, onAction = { vm.sourceAction(it) }, onWatch = vm::watchSourceMenu,
             extra = {
+                if (selectedSource == "Fichier IQ") {
+                    val iqFiles by vm.iqFiles.collectAsStateWithLifecycle()
+                    val iqImport by vm.iqImport.collectAsStateWithLifecycle()
+                    val current = menu.filterIsInstance<app.littlesdr.engine.SmWidget.InputText>().firstOrNull { it.id == "file_path" }?.value ?: ""
+                    IqFilePicker(
+                        files = iqFiles, current = current, importing = iqImport, enabled = !playing,
+                        onRefresh = vm::refreshIqFiles, onImport = vm::importIq, onPick = { vm.pickIqFile(it) },
+                    )
+                }
                 if (selectedSource == "KiwiSDR") {
                     KiwiServerButton(
                         servers = kiwiServers, loading = kiwiLoading, position = vm.operatorPosition(), refused = kiwiRefused,
@@ -233,11 +243,12 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
             } else if (space == AppSpace.DRM) {
                 // DRM: a shortwave receiver of its own (station, schedule, received stations)
                 val drmHeard by vm.drmHeard.collectAsStateWithLifecycle()
+                val drmSchedule by vm.drmSchedule.collectAsStateWithLifecycle()
                 DrmRadioScreen(
                     d = digital, slide = slide, frequency = stateHolder.value.vfoFrequency,
                     playing = playing, playEnabled = ready,
                     source = selectedSource, usb = usb != null, space = space, cornerRadius = corners.innerRadius,
-                    eibi = eibi, heard = drmHeard, controls = receiverControls,
+                    eibi = eibi, heard = drmHeard, schedule = drmSchedule, controls = receiverControls,
                     spectrum = { mod ->
                         SpectrumPanel(
                             state = stateHolder, view = viewHolder, display = data.display, step = step,

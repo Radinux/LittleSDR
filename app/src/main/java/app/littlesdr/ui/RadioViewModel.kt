@@ -319,10 +319,21 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         spacePrefs.edit().putString("drm_heard", kotlinx.serialization.json.Json.encodeToString(_drmHeard.value)).apply()
     }
 
-    /** ⏮ ⏭ in DRM: the next station received here or known, below / above the frequency */
+    // ---- DRM schedule of the season (drm.org), bundled and refreshed weekly
+    private val _drmSchedule = MutableStateFlow<List<app.littlesdr.data.DrmBroadcast>>(emptyList())
+    val drmSchedule: StateFlow<List<app.littlesdr.data.DrmBroadcast>> = _drmSchedule.asStateFlow()
+
+    private fun loadDrmSchedule() = viewModelScope.launch {
+        _drmSchedule.value = app.littlesdr.data.DrmSchedule.load(getApplication())
+        if (app.littlesdr.data.DrmSchedule.refresh(getApplication())) _drmSchedule.value = app.littlesdr.data.DrmSchedule.load(getApplication())
+    }
+
+    /** ⏮ ⏭ in DRM: the next station on air now (schedule) or received here, below / above the frequency */
     fun drmStep(dir: Int) {
         val f = state.value.vfoFrequency
-        val all = (_drmHeard.value.map { it.hz } + app.littlesdr.engine.DRM_PRESETS.map { it.hz }).distinct().sorted()
+        val now = java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC)
+        val onAir = _drmSchedule.value.filter { it.onAir(now) }.map { it.hz }
+        val all = (onAir + _drmHeard.value.map { it.hz }).ifEmpty { app.littlesdr.engine.DRM_PRESETS.map { it.hz } }.distinct().sorted()
         if (all.isEmpty()) return
         val next = if (dir > 0) all.firstOrNull { it > f + 500 } ?: all.first() else all.lastOrNull { it < f - 500 } ?: all.last()
         tune(next)
@@ -719,6 +730,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
 
     // After the fields above: init blocks run in declaration order
     init {
+        loadDrmSchedule()
         viewModelScope.launch { pollSpaces() }
         // The engine restores its last mode: bring the interface to the space that owns it
         // (e.g. DRM saved from the old shared DAB+ / DRM space)
@@ -1098,6 +1110,51 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     /** Where the files go, as the user sees it in a file manager ("Documents/LittleSDR"). */
     fun storageLabel(): String = Storage.root(getApplication()).path
         .removePrefix(android.os.Environment.getExternalStorageDirectory().path).trimStart('/')
+
+    // ---- IQ files to play: imported ones (copied into Documents/LittleSDR/IQ under their own
+    // name, which tells the frequency) and the baseband recordings
+    private val _iqFiles = MutableStateFlow<List<File>>(emptyList())
+    val iqFiles: StateFlow<List<File>> = _iqFiles.asStateFlow()
+    private val _iqImport = MutableStateFlow<String?>(null)
+    /** Name of the file being imported, null when none */
+    val iqImport: StateFlow<String?> = _iqImport.asStateFlow()
+
+    fun refreshIqFiles() = viewModelScope.launch {
+        _iqFiles.value = withContext(Dispatchers.IO) {
+            listOf(Storage.dir(getApplication(), "IQ"), recDir(false))
+                .flatMap { d -> d.listFiles { f -> f.extension.equals("wav", ignoreCase = true) }.orEmpty().toList() }
+                .sortedByDescending { it.lastModified() }
+        }
+    }
+
+    fun pickIqFile(f: File) = sourceAction(app.littlesdr.engine.SmGui.text("file_path", f.path))
+
+    /** Copies a file chosen in the system picker, then plays it from there */
+    fun importIq(uri: android.net.Uri) = viewModelScope.launch {
+        val ctx = getApplication<Application>()
+        val name = withContext(Dispatchers.IO) {
+            ctx.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            }
+        } ?: "iq-${System.currentTimeMillis()}.wav"
+        _iqImport.value = name
+        val dest = File(Storage.dir(ctx, "IQ"), name.replace('/', '_'))
+        val ok = withContext(Dispatchers.IO) {
+            runCatching {
+                ctx.contentResolver.openInputStream(uri)!!.use { input -> dest.outputStream().use { input.copyTo(it, 1 shl 20) } }
+                true
+            }.getOrDefault(false)
+        }
+        _iqImport.value = null
+        if (!ok) {
+            dest.delete()
+            _error.value = "Impossible de lire « $name »"
+            return@launch
+        }
+        Storage.scan(ctx, dest)
+        refreshIqFiles()
+        pickIqFile(dest)
+    }
 
     fun refreshRecordings() = viewModelScope.launch {
         _recordings.value = withContext(Dispatchers.IO) {

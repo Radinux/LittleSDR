@@ -308,6 +308,15 @@ impl Service {
         let kind = i.kind.clone();
         let (src, handles) = sources::open(&kind, &i.settings, i.usb_fd)?;
         let mode = mode_of(i.mode_idx);
+        // A recording covers only its own band: tuned outside it, nothing would be heard.
+        // Into the band (its centre) unless the frequency is already in it.
+        if let Some((_, info)) = &handles.file {
+            i.center = info.center;
+            if (i.freq - info.center).abs() > 0.45 * info.rate {
+                i.freq = info.center;
+                self.shared.engine.lock().unwrap().control(&EngineCtl::Tune(info.center));
+            }
+        }
         let mut rate = i.settings.rate(&kind);
         if let (Some(r), true) = (mode.own_rate(), own_rate_source(&kind)) {
             rate = r;

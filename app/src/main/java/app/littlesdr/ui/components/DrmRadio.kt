@@ -1,5 +1,10 @@
 package app.littlesdr.ui.components
 
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.delay
+import java.time.ZoneOffset
+import java.time.ZonedDateTime
+import app.littlesdr.data.DrmBroadcast
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -63,7 +68,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.littlesdr.data.EiBiEntry
-import app.littlesdr.engine.DRM_PRESETS
 import app.littlesdr.engine.DigitalState
 import app.littlesdr.engine.DrmHeard
 import app.littlesdr.engine.SmAction
@@ -90,6 +94,7 @@ fun DrmRadioScreen(
     cornerRadius: Dp,
     eibi: List<EiBiEntry>,
     heard: List<DrmHeard>,
+    schedule: List<DrmBroadcast>,
     controls: List<SmWidget>,
     spectrum: @Composable (Modifier) -> Unit,
     onPlay: () -> Unit,
@@ -102,13 +107,26 @@ fun DrmRadioScreen(
     onSpace: (AppSpace) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // The clock for "on air now": the schedule changes on the hour, a minute is precise enough
+    val now by produceState(ZonedDateTime.now(ZoneOffset.UTC)) {
+        while (true) {
+            delay(30_000)
+            value = ZonedDateTime.now(ZoneOffset.UTC)
+        }
+    }
+    // What is scheduled on this frequency now: the schedule of DRM broadcasts, else the EiBi one
+    val here = schedule.firstOrNull { abs(it.hz - frequency) < 1_000 && it.onAir(now) }
+    val scheduled = here?.let { listOfNotNull(it.name, it.audience.ifBlank { null }, it.site.ifBlank { null }).joinToString(" · ") }
+        ?: eibi.firstOrNull()?.let { e ->
+            listOfNotNull(e.station, listOfNotNull(e.languageText.ifBlank { null }, e.target.ifBlank { null }).joinToString(" → ").ifBlank { null }, e.country.ifBlank { null }).joinToString(" · ")
+        }
     BoxWithConstraints(modifier) {
         val portrait = maxHeight > maxWidth
         val display = @Composable { m: Modifier ->
-            DrmDisplay(d, slide, frequency, playing, playEnabled, source, usb, space, cornerRadius, eibi.firstOrNull(), onPlay, onStep, onSource, onSettings, onSpace, m)
+            DrmDisplay(d, slide, frequency, playing, playEnabled, source, usb, space, cornerRadius, scheduled, here?.name, onPlay, onStep, onSource, onSettings, onSpace, m)
         }
         val tuning = @Composable { m: Modifier ->
-            DrmTuning(frequency, cornerRadius, heard, controls, spectrum, onTune, onForget, onControl, portrait, m)
+            DrmTuning(frequency, cornerRadius, heard, schedule, now, controls, spectrum, onTune, onForget, onControl, portrait, m)
         }
         if (portrait) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -135,7 +153,8 @@ private fun DrmDisplay(
     usb: Boolean,
     space: AppSpace,
     cornerRadius: Dp,
-    schedule: EiBiEntry?,
+    scheduled: String?,
+    scheduledName: String?,
     onPlay: () -> Unit,
     onStep: (Int) -> Unit,
     onSource: () -> Unit,
@@ -164,7 +183,7 @@ private fun DrmDisplay(
             }
             // The display
             Row(Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                DrmArtwork(slide, d.station.takeIf { playing && it.isNotBlank() }, Modifier.fillMaxHeight().aspectRatio(1f, matchHeightConstraintsFirst = true))
+                DrmArtwork(slide, d.station.takeIf { playing && it.isNotBlank() } ?: scheduledName, Modifier.fillMaxHeight().aspectRatio(1f, matchHeightConstraintsFirst = true))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
                         listOfNotNull(khz(frequency), hfBandAt(frequency)?.name).joinToString(" · "),
@@ -190,14 +209,10 @@ private fun DrmDisplay(
                     if (playing && d.text.isNotBlank()) {
                         Text(d.text, style = MaterialTheme.typography.titleMedium, color = cs.primary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
-                    // What the shortwave schedule says is on this frequency now
-                    schedule?.let { e ->
+                    // What the schedule says is on this frequency now
+                    scheduled?.let { line ->
                         Text(
-                            listOf(
-                                e.station.takeIf { !onAir },
-                                listOfNotNull(e.languageText.ifBlank { null }, e.target.ifBlank { null }).joinToString(" → ").ifBlank { null },
-                                e.country.ifBlank { null },
-                            ).filterNotNull().joinToString(" · "),
+                            line,
                             style = MaterialTheme.typography.labelLarge,
                             color = cs.onSurfaceVariant,
                             maxLines = 1,
@@ -261,6 +276,8 @@ private fun DrmTuning(
     frequency: Double,
     cornerRadius: Dp,
     heard: List<DrmHeard>,
+    schedule: List<DrmBroadcast>,
+    now: ZonedDateTime,
     controls: List<SmWidget>,
     spectrum: @Composable (Modifier) -> Unit,
     onTune: (Double) -> Unit,
@@ -272,52 +289,56 @@ private fun DrmTuning(
     val cs = MaterialTheme.colorScheme
     var bands by rememberSaveable { mutableStateOf(false) }
     Surface(color = cs.surfaceContainerLow, shape = RoundedCornerShape(cornerRadius), modifier = modifier) {
-        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(if (portrait) 10.dp else 6.dp)) {
             // The band around the frequency: a DRM block is a flat 10 kHz rectangle
-            spectrum(Modifier.fillMaxWidth().height(if (portrait) 96.dp else 120.dp))
+            // Landscape is short: a slim strip, so the stations keep most of the height
+            spectrum(Modifier.fillMaxWidth().height(if (portrait) 96.dp else 64.dp))
             BandSelector(frequency, onTune, onOpenGrid = { bands = true })
             // Fine tuning, 5 kHz steps (the broadcast raster)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                FilledTonalIconButton(onClick = { onTune(frequency - 5_000) }) { Icon(Icons.Default.Remove, "5 kHz plus bas") }
+                FilledTonalIconButton(onClick = { onTune(frequency - 5_000) }, modifier = Modifier.size(if (portrait) 48.dp else 40.dp)) { Icon(Icons.Default.Remove, "5 kHz plus bas") }
                 Text(
                     khz(frequency),
-                    style = MaterialTheme.typography.headlineSmall,
+                    style = if (portrait) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     modifier = Modifier.weight(1f),
                 )
-                FilledTonalIconButton(onClick = { onTune(frequency + 5_000) }) { Icon(Icons.Default.Add, "5 kHz plus haut") }
+                FilledTonalIconButton(onClick = { onTune(frequency + 5_000) }, modifier = Modifier.size(if (portrait) 48.dp else 40.dp)) { Icon(Icons.Default.Add, "5 kHz plus haut") }
             }
-            // Stations received here, then the known DRM frequencies
-            val known = DRM_PRESETS.filter { p -> heard.none { abs(it.hz - p.hz) < 1_000 } }
+            // On air now (Europe, Africa first: what can be heard here), later today, received here
+            val onAir = schedule.filter { it.onAir(now) }.sortedWith(compareBy({ it.region != "region_1" }, { it.hz }))
+            val later = schedule.mapNotNull { b -> b.startsIn(now)?.takeIf { !b.onAir(now) }?.let { b to it } }
+                .sortedWith(compareBy({ it.first.region != "region_1" }, { it.second }))
+            val local = java.time.ZonedDateTime.now()
+            fun at(minutes: Int) = local.plusMinutes(minutes.toLong()).let { "à %02d:%02d".format(it.hour, it.minute) }
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(150.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             ) {
+                item(span = { GridItemSpan(maxLineSpan) }) { SectionTitle("À l'antenne maintenant") }
+                if (onAir.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text("Aucune émission DRM prévue en ce moment.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                }
+                items(onAir, key = { "a${it.hz}${it.name}" }) { b ->
+                    DrmTile(b.name, b.hz, abs(frequency - b.hz) < 1_000, Modifier.combinedClickable(onClick = { onTune(b.hz) }), b.audience)
+                }
+                if (later.isNotEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) { SectionTitle("Plus tard") }
+                    items(later.take(12), key = { "l${it.first.hz}${it.first.name}" }) { (b, inMin) ->
+                        DrmTile(b.name, b.hz, abs(frequency - b.hz) < 1_000, Modifier.combinedClickable(onClick = { onTune(b.hz) }), "${at(inMin)} · ${b.audience}")
+                    }
+                }
                 if (heard.isNotEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) { SectionTitle("Stations reçues ici") }
                     items(heard, key = { "h${it.hz}" }) { h ->
-                        DrmTile(h.name, h.hz, abs(frequency - h.hz) < 1_000, Modifier.combinedClickable(onClick = { onTune(h.hz) }, onLongClick = { onForget(h) }))
+                        DrmTile(h.name, h.hz, abs(frequency - h.hz) < 1_000, Modifier.combinedClickable(onClick = { onTune(h.hz) }, onLongClick = { onForget(h) }), "appui long : oublier")
                     }
-                }
-                if (known.isNotEmpty()) {
-                    item(span = { GridItemSpan(maxLineSpan) }) { SectionTitle("Fréquences DRM connues") }
-                    items(known, key = { "k${it.hz}" }) { p ->
-                        DrmTile(p.name, p.hz, abs(frequency - p.hz) < 1_000, Modifier.combinedClickable(onClick = { onTune(p.hz) }))
-                    }
-                }
-                if (heard.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        "Les stations DRM que tu reçois s'ajoutent ici d'elles-mêmes. Appui long pour en retirer une.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = cs.onSurfaceVariant,
-                    )
                 }
             }
-            // Gain and bias-tee (active loop, preamp) without going into the source settings
-            if (controls.isNotEmpty()) GainControls(controls, onControl)
+            // Gain, AGC, bias-tee: in the receiver window (source chip), not repeated here
         }
     }
     if (bands) {
@@ -332,13 +353,13 @@ private fun SectionTitle(text: String) {
 
 /** A DRM station or frequency: its logo when there is one, the name, the frequency and band */
 @Composable
-private fun DrmTile(name: String, hz: Double, current: Boolean, clicks: Modifier) {
+private fun DrmTile(name: String, hz: Double, current: Boolean, clicks: Modifier, detail: String = "") {
     val cs = MaterialTheme.colorScheme
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = if (current) cs.primaryContainer else cs.surfaceContainerHigh,
         border = if (current) BorderStroke(2.dp, cs.primary) else null,
-        modifier = Modifier.fillMaxWidth().height(76.dp).clip(RoundedCornerShape(16.dp)).then(clicks),
+        modifier = Modifier.fillMaxWidth().height(if (detail.isBlank()) 76.dp else 92.dp).clip(RoundedCornerShape(16.dp)).then(clicks),
     ) {
         Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             val logo = stationLogo(name)
@@ -358,6 +379,13 @@ private fun DrmTile(name: String, hz: Double, current: Boolean, clicks: Modifier
                     style = MaterialTheme.typography.labelMedium,
                     color = if (current) cs.onPrimaryContainer else cs.onSurfaceVariant,
                     maxLines = 1,
+                )
+                if (detail.isNotBlank()) Text(
+                    detail,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (current) cs.onPrimaryContainer else cs.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
