@@ -1,5 +1,8 @@
 package app.littlesdr.ui
 
+import android.content.res.Configuration
+import androidx.compose.ui.platform.LocalConfiguration
+
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -201,17 +204,12 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
         containerColor = MaterialTheme.colorScheme.surface,
     ) { _ ->
         Box(Modifier.fillMaxSize()) {
-            // Landscape only: spectrum + waterfall on the left, control panel on the right.
             // Margins keep everything clear of rounded screen corners, cutouts and the nav bar.
             val corners = rememberScreenCorners()
             val m = corners.margin
-            // DAB+: a car radio, upright or sideways (phone mounts are often upright); the
-            // other spaces stay landscape (spectrum + control panel)
-            val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
-            LaunchedEffect(space) {
-                activity?.requestedOrientation = if (space == AppSpace.DAB) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_USER
-                else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            }
+            // Every space upright or sideways, as the phone is held (no rotation forced when
+            // switching: a space laid out for the other orientation, then turned, broke the
+            // spectrum's surface)
             if (space == AppSpace.DAB) {
                 CarRadioScreen(
                     d = digital, slide = slide, frequency = stateHolder.value.vfoFrequency,
@@ -230,12 +228,10 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 24.dp).verticalScroll(rememberScrollState())) { sourcePanel() }
                     }
                 }
-            } else Row(
-                Modifier
-                    .fillMaxSize()
-                    .windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets(m, m, m, m))),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
+            } else {
+                // Landscape: the view (spectrum, map, picture) on the left, the control panel on
+                // the right. Portrait: the view on top, the panel under it.
+                val portrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
                 val r = corners.innerRadius
                 // Head-unit player card, shared by DAB+ (whole height) and DRM (under the spectrum)
                 val player = @Composable { m: Modifier ->
@@ -247,11 +243,8 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         modifier = m,
                     )
                 }
-                if (space == AppSpace.DAB) player(Modifier.weight(1f).fillMaxHeight())
-                else Column(
-                    Modifier.weight(1f).fillMaxHeight(),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
+                val viewPane = @Composable { mod: Modifier ->
+                    Column(mod, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     // Spectrum: big in SDR; a strip above the picture (LRPT) or the player (DRM),
                     // where a DRM block seen in the band can be tapped to tune it
                     // ADS-B: the map gets the whole height, the band has nothing to look at
@@ -280,11 +273,12 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         AppSpace.ADSB -> AdsbMap(adsb, adsbSelected, playing, vm::selectAircraft, Modifier.weight(1f).fillMaxWidth())
                         AppSpace.DAB -> Unit
                     }
+                    }
                 }
                 // Right "pill" cut in three: the top bar is split (tabs or title | space
                 // switcher), the selected tab's controls below.
-                // 330 dp: just what the widest rows need, the rest goes to the waterfall
-                Column(Modifier.width(330.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                val controlPane = @Composable { mod: Modifier ->
+                    Column(mod, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(Modifier.fillMaxWidth().height(64.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -413,6 +407,18 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                             }
                         }
                     }
+                    }
+                }
+                val frame = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets(m, m, m, m)))
+                if (portrait) Column(frame, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // SDR: the controls need more room than the spectrum
+                    val top = if (space == AppSpace.SDR) 0.42f else 0.5f
+                    viewPane(Modifier.weight(top).fillMaxWidth())
+                    controlPane(Modifier.weight(1f - top).fillMaxWidth())
+                } else Row(frame, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    viewPane(Modifier.weight(1f).fillMaxHeight())
+                    // 330 dp: just what the widest rows need, the rest goes to the waterfall
+                    controlPane(Modifier.width(330.dp).fillMaxHeight())
                 }
             }
 
