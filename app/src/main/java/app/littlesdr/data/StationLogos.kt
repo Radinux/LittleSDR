@@ -144,53 +144,158 @@ object StationLogos {
         val none = File(dir, "$k.none")
         if (none.exists() && System.currentTimeMillis() - none.lastModified() < MISS_TTL_MS) return mux
         if (!mayDownload()) return mux
-        val url = find(name, cc) ?: find(name, null)
-        val bytes = url?.let { download(it) }
+        val bytes = lookup(name, cc)
         val bmp = bytes?.let { decode(it) }
         if (bmp != null) img.writeBytes(bytes) else none.writeText("")
         return bmp ?: mux
     }
 
-    /** Best favicon URL for a name: exact name first, then a name starting with it; country first */
-    private fun find(name: String, cc: String?): String? {
-        val q = URLEncoder.encode(name.trim(), "UTF-8")
-        val path = "/json/stations/search?name=$q&limit=20&hidebroken=true&order=clickcount&reverse=true" +
-            (cc?.let { "&countrycode=$it" } ?: "")
-        val body = SERVERS.firstNotNullOfOrNull { host -> runCatching { http("https://$host$path") }.getOrNull() } ?: return null
-        val list = runCatching { json.parseToJsonElement(String(body)) as JsonArray }.getOrNull() ?: return null
-        val want = norm(name)
-        val candidates = list.mapNotNull { e ->
-            val o = e.jsonObject
-            val n = o["name"]?.jsonPrimitive?.content ?: return@mapNotNull null
-            val fav = o["favicon"]?.jsonPrimitive?.content?.takeIf { it.startsWith("http") } ?: return@mapNotNull null
-            norm(n) to fav
+    /** Words that are not part of a station's name: "FUN RADIO DAB+", "LATINA dab+" */
+    private val NOISE = setOf("dab", "dabplus", "hd", "digital", "numerique", "numérique")
+
+    private fun clean(name: String): String =
+        name.trim().split(Regex("\\s+")).filter { w -> norm(w).let { it.isNotEmpty() && it !in NOISE } }.joinToString(" ")
+
+    private class Station(val name: String, val favicon: String?, val homepage: String?, val clicks: Long)
+
+    /**
+     * A logo for a station name, as bytes that decode:
+     * - the directory's entries named like it (exact name first, then names starting with
+     *   it; the country of the network first, then anywhere), most listened first;
+     * - each candidate's favicon, else the icons of its website (apple-touch-icon first);
+     *   several are tried, as many favicons are broken links or SVG;
+     * - the brand last ("NOSTALGIE 60/70" -> Nostalgie), its exact name only.
+     * Small icons (under 64 px) are kept only if nothing better turns up.
+     */
+    private fun lookup(name: String, cc: String): ByteArray? {
+        val c = clean(name).ifBlank { name.trim() }
+        val words = c.split(' ')
+        val brand = if (words[0].equals("radio", ignoreCase = true) && words.size > 1) words.take(2).joinToString(" ") else words[0]
+        val stages = buildList {
+            add(Triple(c, cc, true))
+            add(Triple(c, null, true))
+            if (norm(brand) != norm(c) && norm(brand).length >= 3) {
+                add(Triple(brand, cc, false))
+                add(Triple(brand, null, false))
+            }
         }
-        return candidates.firstOrNull { it.first == want }?.second
-            ?: candidates.firstOrNull { it.first.startsWith(want) }?.second
+        val tried = HashSet<String>()
+        var small: ByteArray? = null
+        var fetches = 0
+        fun attempt(url: String): ByteArray? {
+            if (fetches >= 16 || !tried.add(url)) return null
+            fetches++
+            val b = download(url) ?: return null
+            val px = pixels(b) ?: return null
+            if (px >= 64) return b
+            if (small == null) small = b
+            return null
+        }
+        for ((q, ccq, byName) in stages) {
+            val want = norm(q)
+            val found = search(q, ccq)
+                .mapNotNull { st ->
+                    val n = norm(st.name)
+                    val score = when {
+                        n == want -> 2
+                        byName && n.startsWith(want) -> 1
+                        else -> 0
+                    }
+                    if (score > 0) score to st else null
+                }
+                .sortedWith(compareByDescending<Pair<Int, Station>> { it.first }.thenByDescending { it.second.clicks })
+                .take(6)
+                .map { it.second }
+            for (st in found) st.favicon?.let { attempt(it) }?.let { return it }
+            // No usable favicon: the stations' own websites
+            for (home in found.mapNotNull { it.homepage }.distinct().take(2)) {
+                for (u in siteIcons(home).take(4)) attempt(u)?.let { return it }
+            }
+        }
+        return small
     }
 
-    private fun http(url: String): ByteArray? {
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 6_000
-        c.readTimeout = 8_000
-        c.instanceFollowRedirects = true
-        c.setRequestProperty("User-Agent", UA)
-        return try {
-            if (c.responseCode !in 200..299) return null
-            c.inputStream.use { s ->
-                val out = java.io.ByteArrayOutputStream()
-                val buf = ByteArray(16_384)
-                while (true) {
-                    val n = s.read(buf)
-                    if (n < 0) break
-                    out.write(buf, 0, n)
-                    if (out.size() > MAX_BYTES) return null
-                }
-                out.toByteArray()
-            }
-        } finally {
-            c.disconnect()
+    /** Directory entries for a name (the directory matches names containing it) */
+    private fun search(q: String, cc: String?): List<Station> {
+        val path = "/json/stations/search?name=${URLEncoder.encode(q, "UTF-8")}&limit=30&hidebroken=true&order=clickcount&reverse=true" +
+            (cc?.let { "&countrycode=$it" } ?: "")
+        val body = SERVERS.firstNotNullOfOrNull { host -> runCatching { http("https://$host$path") }.getOrNull() } ?: return emptyList()
+        val list = runCatching { json.parseToJsonElement(String(body)) as JsonArray }.getOrNull() ?: return emptyList()
+        return list.mapNotNull { e ->
+            val o = e.jsonObject
+            val n = o["name"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            fun url(k: String) = o[k]?.jsonPrimitive?.content?.trim()?.takeIf { it.startsWith("http") }
+            Station(n, url("favicon"), url("homepage"), o["clickcount"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0)
         }
+    }
+
+    /** Icons a website declares (apple-touch-icon, large icons, other icons), then the usual path */
+    private fun siteIcons(home: String): List<String> {
+        val (html, base) = runCatching { httpWithUrl(home, 400_000, truncate = true) }.getOrNull() ?: return emptyList()
+        val page = String(html)
+        val found = ArrayList<Pair<Int, String>>()
+        for (m in Regex("<link\\b[^>]*>", RegexOption.IGNORE_CASE).findAll(page)) {
+            val tag = m.value
+            val rel = Regex("rel\\s*=\\s*[\"']([^\"']+)", RegexOption.IGNORE_CASE).find(tag)?.groupValues?.get(1)?.lowercase(Locale.ROOT) ?: continue
+            val href = Regex("href\\s*=\\s*[\"']([^\"']+)", RegexOption.IGNORE_CASE).find(tag)?.groupValues?.get(1) ?: continue
+            val size = Regex("sizes\\s*=\\s*[\"'](\\d+)", RegexOption.IGNORE_CASE).find(tag)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val rank = when {
+                "apple-touch-icon" in rel -> 0
+                "icon" in rel && size >= 96 -> 1
+                "icon" in rel -> 2
+                else -> continue
+            }
+            found += rank to href
+        }
+        found += 3 to "/apple-touch-icon.png"
+        return found.sortedBy { it.first }.mapNotNull { runCatching { URL(base, it.second.replace("&amp;", "&")).toString() }.getOrNull() }.distinct()
+    }
+
+    /** Smallest side in pixels if the bytes decode as a picture, else null (SVG, HTML...) */
+    private fun pixels(b: ByteArray): Int? {
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(b, 0, b.size, o)
+        return if (o.outWidth > 0 && o.outHeight > 0) minOf(o.outWidth, o.outHeight) else null
+    }
+
+    private fun http(url: String): ByteArray? = httpWithUrl(url, MAX_BYTES)?.first
+
+    /**
+     * GET with redirects followed by hand (HttpURLConnection does not go from http to https,
+     * which most station sites do); the body and the final URL
+     */
+    private fun httpWithUrl(start: String, maxBytes: Int, truncate: Boolean = false): Pair<ByteArray, URL>? {
+        var url = URL(start)
+        repeat(5) {
+            val c = url.openConnection() as HttpURLConnection
+            c.connectTimeout = 6_000
+            c.readTimeout = 8_000
+            c.instanceFollowRedirects = false
+            c.setRequestProperty("User-Agent", UA)
+            try {
+                val code = c.responseCode
+                if (code in 300..399) {
+                    url = URL(url, c.getHeaderField("Location") ?: return null)
+                    return@repeat
+                }
+                if (code !in 200..299) return null
+                c.inputStream.use { s ->
+                    val out = java.io.ByteArrayOutputStream()
+                    val buf = ByteArray(16_384)
+                    while (true) {
+                        val n = s.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        // A web page: its head is enough. A picture that big: refused
+                        if (out.size() > maxBytes) return if (truncate) out.toByteArray() to url else null
+                    }
+                    return out.toByteArray() to url
+                }
+            } finally {
+                c.disconnect()
+            }
+        }
+        return null
     }
 
     private fun download(url: String): ByteArray? = runCatching { http(url) }.getOrNull()
