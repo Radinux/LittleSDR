@@ -43,7 +43,7 @@ Un bouton change d'interface selon l'usage :
 
 **LRPT** : images des satellites météo Meteor-M (137 MHz), affichées pendant le passage
 
-**ADS-B** : les avions autour de toi (1090 MHz) sur une carte, avec leur trace colorée selon l'altitude, cercles de distance depuis ton locator ; vol, compagnie (pays), altitude, vitesse, cap, vario, transpondeur et urgences
+**ADS-B** : les avions autour de toi (1090 MHz) sur une carte, avec leur trace colorée selon l'altitude, cercles de distance depuis ton locator ; vol, départ et arrivée, compagnie, appareil et sa photo, altitude, vitesse, cap, vario, transpondeur et urgences
 
 ## 📡 Récepteurs
 
@@ -127,6 +127,7 @@ Rust                                     engine/   (desktop/ : prototype Linux, 
 - [librtlsdr](https://github.com/osmocom/rtl-sdr), [libairspy](https://github.com/airspy/airspyone_host), [libairspyhf](https://github.com/airspy/airspyhf) et [libusb](https://libusb.info/)
 - API SDRplay 3 : propriétaire, non fournie ; chargée seulement si elle est installée
 - [radio-browser.info](https://www.radio-browser.info/) : logos des stations
+- [adsbdb.com](https://www.adsbdb.com/) : routes des vols et fiches des avions (ADS-B)
 - [KiwiSDR](http://kiwisdr.com/public/) : annuaire public des récepteurs (via rx.linkfanel.net)
 - [EiBi](http://www.eibispace.de/) : horaires des stations ondes courtes (usage non commercial)
 - [Natural Earth](https://www.naturalearthdata.com/) : fond de carte (domaine public)
