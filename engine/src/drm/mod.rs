@@ -31,6 +31,9 @@ pub struct DrmReceiver {
     pub aac: AacAudio,
     /// The station's audio is AAC (else xHE-AAC)
     aac_on: bool,
+    /// FACs failed in a row since the lock (or the last good one); any good one this lock
+    fac_misses: u32,
+    fac_seen: bool,
     pub text: TextDecoder,
     /// New text message, not yet taken
     pub text_news: Option<String>,
@@ -49,7 +52,7 @@ pub struct DrmReceiver {
 impl DrmReceiver {
     /// `rate`: 12, 24 or 48 kHz of complex baseband centred on the DRM channel
     pub fn new(rate: f64) -> DrmReceiver {
-        DrmReceiver { ofdm: Ofdm::new(rate), fac: FacDecoder::new(), sdc: SdcDecoder::new(), msc: MscDecoder::new(), msc_frames: Vec::new(), audio: XheAudio::new(), aac: AacAudio::default(), aac_on: false, text: TextDecoder::default(), text_news: None, pcm: Vec::new(), last_fac: None, sdc_info: None, frames: 0, rs: None, reserve: VecDeque::new(), playing: false }
+        DrmReceiver { ofdm: Ofdm::new(rate), fac: FacDecoder::new(), sdc: SdcDecoder::new(), msc: MscDecoder::new(), msc_frames: Vec::new(), audio: XheAudio::new(), aac: AacAudio::default(), aac_on: false, fac_misses: 0, fac_seen: false, text: TextDecoder::default(), text_news: None, pcm: Vec::new(), last_fac: None, sdc_info: None, frames: 0, rs: None, reserve: VecDeque::new(), playing: false }
     }
 
     pub fn process(&mut self, iq: &[C32]) {
@@ -60,11 +63,31 @@ impl DrmReceiver {
             if let Some(map) = self.ofdm.map() {
                 // A frame whose FAC fails keeps its place: the next one after the last known
                 let fac = match self.fac.decode(map, &f) {
-                    Some(info) => Some(info),
-                    None => self.last_fac.clone().map(|mut i| {
-                        i.frame_id = (i.frame_id + 1) % 3;
-                        i
-                    }),
+                    Some(info) => {
+                        self.fac_misses = 0;
+                        self.fac_seen = true;
+                        Some(info)
+                    }
+                    None => {
+                        self.fac_misses += 1;
+                        // Locked on the wrong robustness mode (no FAC at all in 4 s): search
+                        // again without it. Lost for good (16 s without one): search afresh.
+                        if (!self.fac_seen && self.fac_misses >= 10) || self.fac_misses >= 40 {
+                            if self.fac_seen {
+                                self.ofdm.reset();
+                            } else {
+                                self.ofdm.relock_without_mode();
+                            }
+                            self.fac_misses = 0;
+                            self.fac_seen = false;
+                            self.last_fac = None;
+                            continue;
+                        }
+                        self.last_fac.clone().map(|mut i| {
+                            i.frame_id = (i.frame_id + 1) % 3;
+                            i
+                        })
+                    }
                 };
                 if let Some(info) = fac {
                     // The SDC opens each superframe (frame 0)

@@ -67,6 +67,8 @@ pub struct Ofdm {
     ph: f64,
     lock: Option<Locked>,
     pub info: SyncInfo,
+    /// A robustness mode that was locked but never gave a FAC: left out of the next search
+    exclude: Option<RobMode>,
 }
 
 fn guard_profile(z: &[C32], tu: usize, tg: usize, from: usize, nsym: usize) -> Vec<(C32, f32)> {
@@ -97,7 +99,7 @@ fn guard_profile(z: &[C32], tu: usize, tg: usize, from: usize, nsym: usize) -> V
 
 impl Ofdm {
     pub fn new(rate: f64) -> Ofdm {
-        Ofdm { rate, buf: Vec::new(), base: 0, freq: 0.0, ph_n: 0, ph: 0.0, lock: None, info: SyncInfo::default() }
+        Ofdm { rate, buf: Vec::new(), base: 0, freq: 0.0, ph_n: 0, ph: 0.0, lock: None, info: SyncInfo::default(), exclude: None }
     }
 
     pub fn map(&self) -> Option<&CellMap> {
@@ -106,6 +108,14 @@ impl Ofdm {
 
     pub fn reset(&mut self) {
         *self = Ofdm::new(self.rate);
+    }
+
+    /// The lock gave nothing decodable (wrong robustness mode: on a weak signal the guard
+    /// correlation of another mode can win): search again without that mode
+    pub fn relock_without_mode(&mut self) {
+        let failed = self.lock.as_ref().map(|l| l.mode);
+        *self = Ofdm::new(self.rate);
+        self.exclude = failed;
     }
 
     /// New samples; complete frames are appended to `out`
@@ -134,6 +144,9 @@ impl Ofdm {
         let z = &self.buf[self.buf.len() - need..];
         let mut best: Option<(f32, RobMode, usize, C32)> = None;
         for m in ALL_MODES {
+            if Some(m) == self.exclude {
+                continue;
+            }
             let p = params(m);
             let (tu, tg) = (p.tu(self.rate), p.tg(self.rate));
             let nsym = need / (tu + tg) - 2;
