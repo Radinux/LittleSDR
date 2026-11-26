@@ -30,8 +30,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.filled.ZoomOutMap
-import androidx.compose.material.icons.filled.ZoomOut
-import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.size
@@ -285,13 +283,18 @@ fun SpectrumPanel(
             else if (eibi.isNotEmpty()) EiBiNotch(eibi, Modifier.fillMaxWidth(0.62f))
         }
 
-        ZoomButtons(
-            onZoomIn = { zoomAroundVfo(st, vw, 0.5, setView) },
-            onZoomOut = { zoomAroundVfo(st, vw, 2.0, setView) },
-            onReset = onResetZoom,
+        // Zoom is done with the fingers (pinch, double tap); one button brings the whole band
+        // back, shown only while zoomed in
+        val zoomed = vw.bandwidth > 0 && st.sampleRate > 0 && vw.bandwidth < st.sampleRate * 0.98
+        AnimatedVisibility(
+            visible = zoomed,
+            enter = fadeIn(),
+            exit = fadeOut(),
             modifier = Modifier.align(Alignment.BottomStart)
                 .padding(start = 14.dp, bottom = if (display.bandPlan) BAND_STRIP_HEIGHT + 8.dp else 12.dp),
-        )
+        ) {
+            ResetZoomButton(onResetZoom)
+        }
 
         // Rounded corners: the Vulkan SurfaceView can't be clipped by Compose,
         // so paint the outside of a rounded rect in the background color on top of it.
@@ -315,30 +318,16 @@ private fun freqAt(x: Float, width: Float, s: RadioState, v: ViewState): Double 
 }
 
 
-/** Zoom by [factor] (0.5 = in) keeping the VFO where it is on screen when it's visible. */
-private fun zoomAroundVfo(s: RadioState, v: ViewState, factor: Double, setView: (Double, Double) -> Unit) {
-    val bw = v.bandwidth.takeIf { it > 0 } ?: s.sampleRate
-    val newBw = bw * factor
-    val vfo = s.vfoOffset
-    val visible = vfo >= v.offset - bw / 2 && vfo <= v.offset + bw / 2
-    val anchor = if (visible) vfo else v.offset
-    val u = (anchor - v.offset) / bw // anchor position in the view, -0.5..0.5
-    setView(newBw, anchor - u * newBw)
-}
-
 @Composable
-private fun ZoomButtons(onZoomIn: () -> Unit, onZoomOut: () -> Unit, onReset: () -> Unit, modifier: Modifier = Modifier) {
+private fun ResetZoomButton(onReset: () -> Unit) {
     Surface(
-        modifier = modifier,
+        onClick = onReset,
         shape = RoundedCornerShape(50),
         color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f),
         tonalElevation = 2.dp,
+        modifier = Modifier.size(44.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onZoomIn, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ZoomIn, "Zoomer") }
-            IconButton(onClick = onZoomOut, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ZoomOut, "Dézoomer") }
-            IconButton(onClick = onReset, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ZoomOutMap, "Toute la bande") }
-        }
+        Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.ZoomOutMap, "Toute la bande") }
     }
 }
 
