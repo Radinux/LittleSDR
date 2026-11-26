@@ -296,6 +296,38 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         tune(lastFreq(mode, defaultFreq(mode)))
     }
 
+    // ---- DRM: the stations received here, remembered (name, frequency, last heard)
+    private val _drmHeard = MutableStateFlow(
+        runCatching { kotlinx.serialization.json.Json.decodeFromString<List<app.littlesdr.engine.DrmHeard>>(spacePrefs.getString("drm_heard", "[]")!!) }
+            .getOrDefault(emptyList()),
+    )
+    val drmHeard: StateFlow<List<app.littlesdr.engine.DrmHeard>> = _drmHeard.asStateFlow()
+
+    private fun drmWatch(d: DigitalState) {
+        if (!d.synced || d.station.isBlank()) return
+        val hz = Math.round(state.value.vfoFrequency / 1_000.0) * 1_000.0
+        val now = System.currentTimeMillis()
+        val old = _drmHeard.value.firstOrNull { it.hz == hz }
+        // Written at most once a minute per station
+        if (old != null && old.name == d.station && now - old.last < 60_000) return
+        _drmHeard.value = (_drmHeard.value.filter { it.hz != hz } + app.littlesdr.engine.DrmHeard(d.station, hz, now)).sortedBy { it.hz }
+        spacePrefs.edit().putString("drm_heard", kotlinx.serialization.json.Json.encodeToString(_drmHeard.value)).apply()
+    }
+
+    fun forgetDrm(h: app.littlesdr.engine.DrmHeard) {
+        _drmHeard.value = _drmHeard.value - h
+        spacePrefs.edit().putString("drm_heard", kotlinx.serialization.json.Json.encodeToString(_drmHeard.value)).apply()
+    }
+
+    /** ⏮ ⏭ in DRM: the next station received here or known, below / above the frequency */
+    fun drmStep(dir: Int) {
+        val f = state.value.vfoFrequency
+        val all = (_drmHeard.value.map { it.hz } + app.littlesdr.engine.DRM_PRESETS.map { it.hz }).distinct().sorted()
+        if (all.isEmpty()) return
+        val next = if (dir > 0) all.firstOrNull { it > f + 500 } ?: all.first() else all.lastOrNull { it < f - 500 } ?: all.last()
+        tune(next)
+    }
+
     private val _digital = MutableStateFlow(DigitalState())
     val digital: StateFlow<DigitalState> = _digital.asStateFlow()
     private val _slide = MutableStateFlow<androidx.compose.ui.graphics.ImageBitmap?>(null)
@@ -728,6 +760,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                         val d = Engine.digital()
                         _digital.value = d
                         if (sp == AppSpace.DAB) dabWatch(d)
+                        if (sp == AppSpace.DRM) drmWatch(d)
                         if (d.slide != lastSlide) {
                             lastSlide = d.slide
                             _slide.value = if (d.slide == 0L) null else Engine.dabSlide().let { b ->

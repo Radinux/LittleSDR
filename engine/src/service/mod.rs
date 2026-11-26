@@ -719,7 +719,7 @@ impl Service {
                     "text": d.label, "slide": if d.slide.is_empty() { 0 } else { d.slide_id }, "slideName": d.slide_name, "status": rx.describe(),
                 })
             } else if let Some(rx) = e.drm() {
-                json!({"kind": "drm", "synced": rx.synced(), "station": rx.label(), "info": rx.station(), "text": d.drm_text, "status": rx.status()})
+                json!({"kind": "drm", "synced": rx.synced(), "quality": rx.quality(), "station": rx.label(), "info": rx.station(), "text": d.drm_text, "status": rx.status()})
             } else {
                 json!({"kind": "none"})
             }

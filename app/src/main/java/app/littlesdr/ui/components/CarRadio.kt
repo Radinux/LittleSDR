@@ -276,12 +276,18 @@ private fun CarDisplay(
     }
 }
 
-/** 0-4 bars from the SNR, as on a car radio; tap for the details */
+/** 0-4 bars from the SNR (DAB) or the share of frames decoded (DRM), as on a car radio; tap for the details */
 @Composable
-private fun SignalBars(playing: Boolean, d: DigitalState, modifier: Modifier, onClick: () -> Unit) {
+internal fun SignalBars(playing: Boolean, d: DigitalState, modifier: Modifier, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val bars = when {
         !playing || !d.synced -> 0
+        d.kind == "drm" -> when {
+            d.quality < 0.3f -> 1
+            d.quality < 0.6f -> 2
+            d.quality < 0.85f -> 3
+            else -> 4
+        }
         d.snr < 6 -> 1
         d.snr < 10 -> 2
         d.snr < 15 -> 3

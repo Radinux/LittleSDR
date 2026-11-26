@@ -166,6 +166,8 @@ pub struct FacDecoder {
     deint: Vec<usize>,
     pub ok: u64,
     pub bad: u64,
+    /// Share of recent FAC blocks decoded (0..1, smoothed over ~10 frames): reception quality
+    pub quality: f32,
 }
 
 impl Default for FacDecoder {
@@ -176,7 +178,7 @@ impl Default for FacDecoder {
 
 impl FacDecoder {
     pub fn new() -> FacDecoder {
-        FacDecoder { viterbi: Viterbi::new(), deint: interleaver(130, 21), ok: 0, bad: 0 }
+        FacDecoder { viterbi: Viterbi::new(), deint: interleaver(130, 21), ok: 0, bad: 0, quality: 0.0 }
     }
 
     /// The FAC of one frame (cells in table order)
@@ -213,9 +215,11 @@ impl FacDecoder {
         }
         if crc(&bits[..64], 8) != bits_to_u32(&bits[64..72]) {
             self.bad += 1;
+            self.quality *= 0.9;
             return None;
         }
         self.ok += 1;
+        self.quality = 0.9 * self.quality + 0.1;
         let g = |a: usize, n: usize| bits_to_u32(&bits[a..a + n]);
         Some(FacInfo {
             frame_id: match g(1, 2) {

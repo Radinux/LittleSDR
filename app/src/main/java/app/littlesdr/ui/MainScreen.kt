@@ -94,6 +94,7 @@ import app.littlesdr.ui.components.DigitalHeader
 import app.littlesdr.ui.components.DabTuner
 import app.littlesdr.ui.components.DrmTuner
 import app.littlesdr.ui.components.AdsbMap
+import app.littlesdr.ui.components.DrmRadioScreen
 import app.littlesdr.ui.components.AdsbPanel
 import app.littlesdr.ui.components.LrptImagePanel
 import app.littlesdr.ui.components.LrptPanel
@@ -225,6 +226,31 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                     catalog = dabCatalog, onCatalog = vm::playCatalog, afSearching = afSearching,
                     onPlay = vm::togglePlay, onStep = vm::dabStep,
                     onService = vm::dabSelect, onTune = vm::tuneDab, onScan = vm::scanDab, onAf = vm::setDabAf,
+                    onSource = { showSource = true }, onSettings = onOpenSettings,
+                    onSpace = { showSource = false; vm.setSpace(it) },
+                    modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets(m, m, m, m))),
+                )
+            } else if (space == AppSpace.DRM) {
+                // DRM: a shortwave receiver of its own (station, schedule, received stations)
+                val drmHeard by vm.drmHeard.collectAsStateWithLifecycle()
+                DrmRadioScreen(
+                    d = digital, slide = slide, frequency = stateHolder.value.vfoFrequency,
+                    playing = playing, playEnabled = ready,
+                    source = selectedSource, usb = usb != null, space = space, cornerRadius = corners.innerRadius,
+                    eibi = eibi, heard = drmHeard, controls = receiverControls,
+                    spectrum = { mod ->
+                        SpectrumPanel(
+                            state = stateHolder, view = viewHolder, display = data.display, step = step,
+                            onTune = vm::tune, onView = vm::setView, onResetZoom = vm::resetZoom,
+                            cornerRadius = 16.dp,
+                            maskColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                            rds = rds,
+                            eibi = emptyList(),
+                            modifier = mod,
+                        )
+                    },
+                    onPlay = vm::togglePlay, onStep = vm::drmStep, onTune = vm::tune, onForget = vm::forgetDrm,
+                    onControl = { vm.sourceAction(it) },
                     onSource = { showSource = true }, onSettings = onOpenSettings,
                     onSpace = { showSource = false; vm.setSpace(it) },
                     modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets(m, m, m, m))),

@@ -16,6 +16,8 @@ data class DigitalState(
     val kind: String = "none",
     val synced: Boolean = false,
     val snr: Float = 0f,
+    /** DRM: reception quality 0..1 (share of recent frames decoded) */
+    val quality: Float = 0f,
     val ensemble: String = "",
     val services: List<DabService> = emptyList(),
     val playing: String? = null,
@@ -82,6 +84,10 @@ fun dabChannelAt(hz: Double): DabChannel? = DAB_CHANNELS.firstOrNull { kotlin.ma
 
 /** A shortwave DRM frequency to try */
 data class DrmPreset(val name: String, val hz: Double)
+
+/** A DRM station received here: its name, frequency, and when (ms) it was last heard */
+@Serializable
+data class DrmHeard(val name: String, val hz: Double, val last: Long)
 
 /** CNR-1 (China National Radio) broadcasts DRM most of the UTC day on these */
 val DRM_PRESETS: List<DrmPreset> = listOf(6_030, 9_655, 13_790, 15_290, 15_760, 17_700, 21_590)

@@ -101,8 +101,8 @@ import kotlin.math.roundToInt
 // (the whole height in DAB+, under a spectrum strip in DRM), zapping on the right.
 // DAB+ zaps multiplexes and stations; DRM is shortwave, so it zaps HF bands and frequencies.
 
-private fun mhz(hz: Double) = String.format(Locale.FRANCE, "%.3f MHz", hz / 1e6)
-private fun khz(hz: Double) = String.format(Locale.FRANCE, "%,.0f kHz", hz / 1e3)
+internal fun mhz(hz: Double) = String.format(Locale.FRANCE, "%.3f MHz", hz / 1e6)
+internal fun khz(hz: Double) = String.format(Locale.FRANCE, "%,.0f kHz", hz / 1e3)
 
 // ================================================================================ left: player
 
@@ -412,7 +412,7 @@ fun DabTuner(
 
 /** Decoder status, small, at the foot of the right panel */
 @Composable
-private fun StatusLine(status: String) {
+internal fun StatusLine(status: String) {
     if (status.isBlank()) return
     Text(
         status,
@@ -645,7 +645,7 @@ private fun stepBand(frequency: Double, dir: Int): HfBand =
 
 /** `◀  25 m · 11,600 – 12,100 MHz  ▶` on one line; the middle opens all bands */
 @Composable
-private fun BandSelector(frequency: Double, onTune: (Double) -> Unit, onOpenGrid: () -> Unit) {
+internal fun BandSelector(frequency: Double, onTune: (Double) -> Unit, onOpenGrid: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val band = hfBandAt(frequency)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -733,7 +733,7 @@ private fun DrmPresetList(frequency: Double, onTune: (Double) -> Unit, modifier:
 /** All broadcast bands, GO to 11 m, with the DRM frequencies known in each */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun BandGridSheet(frequency: Double, onPick: (Double) -> Unit, onDismiss: () -> Unit) {
+internal fun BandGridSheet(frequency: Double, onPick: (Double) -> Unit, onDismiss: () -> Unit) {
     val here = hfBandAt(frequency)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(

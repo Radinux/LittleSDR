@@ -139,6 +139,11 @@ impl DrmReceiver {
         self.ofdm.info.frame_found && self.last_fac.is_some()
     }
 
+    /// Reception quality 0..1 (recent FAC blocks decoded), 0 when not synced
+    pub fn quality(&self) -> f32 {
+        if self.synced() { self.fac.quality } else { 0.0 }
+    }
+
     /// Station label alone (SDC), once known
     pub fn label(&self) -> String {
         self.sdc_info.as_ref().and_then(|s| s.labels.first()).map(|l| l.1.trim().to_string()).unwrap_or_default()
