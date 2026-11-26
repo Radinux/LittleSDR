@@ -5,6 +5,7 @@
 //! - header: the frame borders, 12 bits each (one fewer than frames), byte aligned;
 //! - higher protected part: per frame, its first bytes then an 8-bit CRC over them;
 //! - lower protected part: per frame, the rest of its bytes.
+//!
 //! The higher part's size per frame comes from the stream's length in part A (UEP); with
 //! equal protection it is 0 and only the CRCs are there.
 //!
@@ -105,13 +106,15 @@ impl Decoder {
             if h.is_null() {
                 return None;
             }
-            let c = (f.get_conf)(h);
-            (*c).output_format = 4; // float
-            (f.set_conf)(h, c);
             if (f.init_drm)(&mut h, core_rate as c_ulong, layout) < 0 {
                 (f.close)(h);
                 return None;
             }
+            // After the DRM init: it closes and reopens the decoder, the configuration back
+            // to its defaults (16-bit output, read as floats: noise)
+            let c = (f.get_conf)(h);
+            (*c).output_format = 4; // float
+            (f.set_conf)(h, c);
             Some(Decoder { h, key: (core_rate, layout) })
         }
     }
