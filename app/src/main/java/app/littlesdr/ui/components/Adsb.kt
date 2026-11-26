@@ -1,5 +1,14 @@
 package app.littlesdr.ui.components
 
+import app.littlesdr.data.FlightRoute
+import app.littlesdr.data.Airport
+import app.littlesdr.data.AircraftDetails
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.draw.rotate
+import androidx.compose.material.icons.filled.Flight
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -58,7 +67,16 @@ private fun ordered(list: List<Aircraft>): List<Aircraft> = list.sortedWith(
  * every aircraft heard (tap one to pick it on the map).
  */
 @Composable
-fun AdsbPanel(state: AdsbState, selected: String?, onSelect: (String?) -> Unit, onClear: () -> Unit) {
+fun AdsbPanel(
+    state: AdsbState,
+    selected: String?,
+    routes: Map<String, FlightRoute?>,
+    airframe: AircraftDetails?,
+    photo: ImageBitmap?,
+    onSelect: (String?) -> Unit,
+    onClear: () -> Unit,
+) {
+    val routeOf = { a: Aircraft -> routes[a.callsign.trim()] }
     val cs = MaterialTheme.colorScheme
     val onMap = state.aircraft.count { it.position != null }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -75,8 +93,8 @@ fun AdsbPanel(state: AdsbState, selected: String?, onSelect: (String?) -> Unit, 
                 color = cs.onSurfaceVariant,
             )
         }
-        state.aircraft.firstOrNull { it.icao == selected }?.let { a -> AircraftCard(a, onClose = { onSelect(null) }) }
-        ordered(state.aircraft).forEach { a -> AircraftRow(a, a.icao == selected) { onSelect(a.icao) } }
+        state.aircraft.firstOrNull { it.icao == selected }?.let { a -> AircraftCard(a, routeOf(a), airframe, photo, onClose = { onSelect(null) }) }
+        ordered(state.aircraft).forEach { a -> AircraftRow(a, routeOf(a), a.icao == selected) { onSelect(a.icao) } }
         if (state.aircraft.isNotEmpty()) {
             FilledTonalButton(onClick = onClear, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.DeleteSweep, null, Modifier.size(18.dp))
@@ -88,7 +106,7 @@ fun AdsbPanel(state: AdsbState, selected: String?, onSelect: (String?) -> Unit, 
 }
 
 @Composable
-private fun AircraftRow(a: Aircraft, selected: Boolean, onClick: () -> Unit) {
+private fun AircraftRow(a: Aircraft, route: FlightRoute?, selected: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val dot = if (a.distress != null) cs.error else altitudeColor(a.altitude, a.onGround, cs.outline)
     Row(
@@ -113,6 +131,8 @@ private fun AircraftRow(a: Aircraft, selected: Boolean, onClick: () -> Unit) {
             }
             Text(
                 listOfNotNull(
+                    // Departure -> arrival; "?" when the aircraft is far off that way
+                    route?.let { r -> "${r.origin.code} → ${r.destination.code}" + if (r.plausible(a.lat, a.lon) == false) " ?" else "" },
                     altitudeText(a),
                     a.speed?.let { "${it.roundToInt()} kt" },
                     a.vrate?.takeIf { abs(it) >= 300 }?.let { if (it > 0) "↗" else "↘" },
@@ -132,7 +152,7 @@ private fun AircraftRow(a: Aircraft, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun AircraftCard(a: Aircraft, onClose: () -> Unit) {
+private fun AircraftCard(a: Aircraft, route: FlightRoute?, airframe: AircraftDetails?, photo: ImageBitmap?, onClose: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Surface(color = cs.secondaryContainer, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 12.dp)) {
@@ -159,7 +179,35 @@ private fun AircraftCard(a: Aircraft, onClose: () -> Unit) {
                     }
                 }
             }
+            photo?.let {
+                Image(
+                    it, "Photo de l'avion", contentScale = ContentScale.Crop,
+                    modifier = Modifier.padding(end = 10.dp, top = 6.dp, bottom = 4.dp).fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(10.dp)),
+                )
+            }
+            route?.let { r ->
+                val doubtful = r.plausible(a.lat, a.lon) == false
+                Column(Modifier.padding(end = 10.dp, top = 6.dp, bottom = 4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        AirportCell(r.origin, Modifier.weight(1f))
+                        Icon(Icons.Default.Flight, null, Modifier.padding(horizontal = 6.dp).size(20.dp).rotate(90f), tint = cs.onSecondaryContainer)
+                        AirportCell(r.destination, Modifier.weight(1f), end = true)
+                    }
+                    if (r.airline.isNotBlank()) Text(r.airline, style = MaterialTheme.typography.bodySmall, color = cs.onSecondaryContainer.copy(alpha = 0.8f))
+                    if (doubtful) Text(
+                        "Route de l'annuaire en ligne, mais l'avion n'est pas sur ce trajet : elle est sans doute périmée.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = cs.error,
+                    )
+                }
+            }
             Column(Modifier.padding(end = 10.dp, top = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                airframe?.let { f ->
+                    val model = listOf(f.manufacturer, f.type).filter { it.isNotBlank() }.joinToString(" ")
+                    if (model.isNotBlank()) Detail("Appareil", model)
+                    if (f.registration.isNotBlank()) Detail("Immatriculation", f.registration)
+                    if (f.owner.isNotBlank() && route?.airline != f.owner) Detail("Exploitant", f.owner)
+                }
                 if (a.categoryLabel.isNotEmpty()) Detail("Type", a.categoryLabel)
                 Detail(
                     "Altitude",
@@ -177,7 +225,7 @@ private fun AircraftCard(a: Aircraft, onClose: () -> Unit) {
                     Detail(if (a.airspeed) "Vitesse air" else "Vitesse sol", "${s.roundToInt()} kt · ${(s * 1.852).roundToInt()} km/h")
                 }
                 a.direction?.let { d ->
-                    Detail(if (a.track != null) "Route" else "Cap", "${d.roundToInt()}° (${compass(d)})")
+                    Detail(if (a.track != null) "Direction" else "Cap", "${d.roundToInt()}° (${compass(d)})")
                 }
                 a.squawk?.let { Detail("Transpondeur", it) }
                 val d = a.nearDist
@@ -193,7 +241,16 @@ private fun AircraftCard(a: Aircraft, onClose: () -> Unit) {
 @Composable
 private fun Detail(name: String, value: String, mono: Boolean = false) {
     Row(Modifier.fillMaxWidth()) {
-        Text(name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.75f), modifier = Modifier.width(104.dp))
+        Text(name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.75f), modifier = Modifier.width(124.dp))
         Text(value, style = MaterialTheme.typography.bodyMedium, fontFamily = if (mono) FontFamily.Monospace else null)
+    }
+}
+
+/** "MXP" big, "Milan" under it */
+@Composable
+private fun AirportCell(ap: Airport, modifier: Modifier, end: Boolean = false) {
+    Column(modifier, horizontalAlignment = if (end) Alignment.End else Alignment.Start) {
+        Text(ap.code, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Text(ap.place, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }

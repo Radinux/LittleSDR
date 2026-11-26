@@ -147,6 +147,9 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val lrptImage by vm.lrptImage.collectAsStateWithLifecycle()
     val adsb by vm.adsb.collectAsStateWithLifecycle()
     val adsbSelected by vm.adsbSelected.collectAsStateWithLifecycle()
+    val adsbRoutes by vm.adsbRoutes.collectAsStateWithLifecycle()
+    val airframe by vm.airframe.collectAsStateWithLifecycle()
+    val airframePhoto by vm.airframePhoto.collectAsStateWithLifecycle()
     val dabFound by vm.dabFound.collectAsStateWithLifecycle()
     val dabScan by vm.dabScan.collectAsStateWithLifecycle()
     val kiwiRefused by vm.kiwiRefused.collectAsStateWithLifecycle()
@@ -341,14 +344,14 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                             )
                             // The frequency where tuning happens: Radio, Bands, Record (and LRPT); the
                             // receiver, audio, memories, Morse and SSTV tabs don't need it
-                            if (space != AppSpace.SDR || tab == ControlTab.Radio || tab == ControlTab.Bands || tab == ControlTab.Record) {
+                            if (space != AppSpace.ADSB && (space != AppSpace.SDR || tab == ControlTab.Radio || tab == ControlTab.Bands || tab == ControlTab.Record)) {
                                 Header(stateHolder, onTune = vm::tune)
                             }
                             Spacer(Modifier.height(8.dp))
                             if (space != AppSpace.SDR) {
                                 when {
                                     showSource -> sourcePanel()
-                                    space == AppSpace.ADSB -> AdsbPanel(adsb, adsbSelected, onSelect = vm::selectAircraft, onClear = vm::clearAircraft)
+                                    space == AppSpace.ADSB -> AdsbPanel(adsb, adsbSelected, adsbRoutes, airframe, airframePhoto, onSelect = vm::selectAircraft, onClear = vm::clearAircraft)
                                     else -> LrptPanel(
                                         frequency = stateHolder.value.vfoFrequency, l = lrpt,
                                         onTune = vm::tune, onOqpsk = vm::setLrptOqpsk, onSave = vm::saveLrpt,

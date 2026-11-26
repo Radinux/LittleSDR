@@ -311,7 +311,40 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     private val _adsbSelected = MutableStateFlow<String?>(null)
     /** ICAO address of the aircraft shown in detail */
     val adsbSelected: StateFlow<String?> = _adsbSelected.asStateFlow()
-    fun selectAircraft(icao: String?) { _adsbSelected.value = icao.takeIf { it != _adsbSelected.value } }
+    fun selectAircraft(icao: String?) {
+        _adsbSelected.value = icao.takeIf { it != _adsbSelected.value }
+        _airframe.value = null
+        _airframePhoto.value = null
+        val hex = _adsbSelected.value ?: return
+        viewModelScope.launch {
+            val a = app.littlesdr.data.FlightInfo.aircraft(hex)
+            if (_adsbSelected.value != hex) return@launch
+            _airframe.value = a
+            _airframePhoto.value = a?.photoUrl?.let { app.littlesdr.data.FlightInfo.photo(it) }
+        }
+    }
+
+    // Departure / arrival per flight number (online), the picked aircraft's airframe and photo
+    private val _adsbRoutes = MutableStateFlow<Map<String, app.littlesdr.data.FlightRoute?>>(emptyMap())
+    val adsbRoutes: StateFlow<Map<String, app.littlesdr.data.FlightRoute?>> = _adsbRoutes.asStateFlow()
+    private val _airframe = MutableStateFlow<app.littlesdr.data.AircraftDetails?>(null)
+    val airframe: StateFlow<app.littlesdr.data.AircraftDetails?> = _airframe.asStateFlow()
+    private val _airframePhoto = MutableStateFlow<androidx.compose.ui.graphics.ImageBitmap?>(null)
+    val airframePhoto: StateFlow<androidx.compose.ui.graphics.ImageBitmap?> = _airframePhoto.asStateFlow()
+    private var routeJob: Job? = null
+
+    /** Looks up the routes of the flights not asked yet, one after the other */
+    private fun lookupRoutes(a: AdsbState) {
+        if (routeJob?.isActive == true) return
+        val pending = a.aircraft.map { it.callsign.trim() }.filter { it.length >= 3 && !app.littlesdr.data.FlightInfo.askedRoute(it.uppercase()) }.distinct()
+        if (pending.isEmpty()) return
+        routeJob = viewModelScope.launch {
+            for (cs in pending) {
+                val r = app.littlesdr.data.FlightInfo.route(cs)
+                if (app.littlesdr.data.FlightInfo.askedRoute(cs.uppercase())) _adsbRoutes.value = _adsbRoutes.value + (cs to r)
+            }
+        }
+    }
     fun clearAircraft() {
         Engine.adsbSet("clear", 0.0)
         _adsbSelected.value = null
@@ -725,6 +758,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                     AppSpace.ADSB -> {
                         val a = Engine.adsb()
                         _adsb.value = a
+                        lookupRoutes(a)
                         // The picked aircraft went out of range: back to the list
                         if (_adsbSelected.value != null && a.aircraft.none { it.icao == _adsbSelected.value }) _adsbSelected.value = null
                     }
