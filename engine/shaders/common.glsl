@@ -41,8 +41,8 @@ layout(push_constant) uniform PC {
         }                                                                        \
     }
 
-// Waterfall version: zoomed out, the average POWER of the covered bins instead of the
-// highest. The highest of ~30 noise bins is a random bright speckle: the zoomed-out waterfall
+// Waterfall version: zoomed out, the average POWER of the bins over two pixels instead of
+// the highest bin of one. The highest of ~30 noise bins is a random bright speckle: the zoomed-out waterfall
 // turns to sand. The power average is smooth on noise and still shows a carrier (one bin 30 dB
 // up among 32 lifts the average by ~15 dB).
 #define SAMPLE_LINE_AVG(BUF, BASE, X, PIXELS, OUT)                               \
@@ -55,9 +55,10 @@ layout(push_constant) uniform PC {
             int i1_ = min(i0_ + 1, pc.bins - 1);                                 \
             OUT = mix(BUF[(BASE) + i0_], BUF[(BASE) + i1_], fract(bf_));         \
         } else {                                                                 \
-            int i0_ = int(b0_);                                                  \
-            int n_ = int(ceil(span_));                                           \
-            int st_ = max(1, n_ / 32);                                           \
+            /* two pixels wide, centred: half the resolution, much less grain */ \
+            int i0_ = int(b0_ - 0.5 * span_);                                    \
+            int n_ = int(ceil(2.0 * span_));                                     \
+            int st_ = max(1, n_ / 16);                                           \
             float p_ = 0.0;                                                      \
             float c_ = 0.0;                                                      \
             for (int k_ = 0; k_ < n_; k_ += st_) {                               \
