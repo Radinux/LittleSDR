@@ -128,6 +128,7 @@ fun DigitalNowPlaying(
     // Enough inset that nothing touches the rounded corners
     val inset = max(16.dp, cornerRadius * 0.35f)
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(cornerRadius), modifier = modifier) {
+        SlideBackdrop(slide.takeIf { playing })
         Column(Modifier.fillMaxSize().padding(horizontal = inset, vertical = 12.dp)) {
             RfStatusBar(d, isDab, frequency, playing, Modifier.fillMaxWidth().padding(horizontal = 4.dp))
             Crossfade(playing, label = "nowPlaying", modifier = Modifier.weight(1f).fillMaxWidth().padding(vertical = 12.dp)) { p ->
@@ -248,9 +249,9 @@ private fun Artwork(slide: ImageBitmap?, station: String?, modifier: Modifier = 
     ) {
         Crossfade(slide ?: logo, label = "slide") { s ->
             if (s != null) {
-                // Slides are 4:3: fit, so text on them is never cropped
-                Image(s, if (s === slide) "Diaporama de la station" else "Logo de la station", contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize().padding(if (s === slide) 0.dp else 12.dp))
+                // The slideshow fills the square (zoomed, no margin); a logo keeps a margin
+                if (s === slide) Image(s, "Diaporama de la station", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                else Image(s, "Logo de la station", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(12.dp))
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Icon(Icons.Rounded.Radio, null, Modifier.fillMaxSize(0.42f), tint = cs.primary.copy(alpha = 0.7f))

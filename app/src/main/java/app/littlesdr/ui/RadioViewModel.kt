@@ -381,6 +381,8 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     /** ▶ pressed in DAB+ with no station chosen: once the multiplex lists its stations, play
      *  the last one listened to if it is there, else the first (a car radio's ▶) */
     private var dabAutoPick = false
+    /** When the multiplex started listing stations (the list fills in over a few seconds) */
+    private var autoPickListed = 0L
 
     /** FM fallback in progress: where on FM, and the DAB channel it came from */
     data class FmBackup(val fmHz: Double, val dabHz: Double, val sid: String, val station: String?)
@@ -439,10 +441,15 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         if (dabAutoPick && d.synced && d.playing == null) {
             val list = d.services.filter { it.dabPlus }
             if (list.isNotEmpty()) {
-                dabAutoPick = false
+                if (autoPickListed == 0L) autoPickListed = now
                 val last = spacePrefs.getString("dab_last_sid", null)
-                dabSelect(list.firstOrNull { it.sid == last } ?: list.minBy { it.label.lowercase() })
-                return
+                val mine = list.firstOrNull { it.sid == last }
+                // The last station may not be listed yet: wait for it up to 8 s, then the first
+                if (mine != null || last == null || now - autoPickListed > 8_000) {
+                    dabAutoPick = false
+                    dabSelect(mine ?: list.minBy { it.label.lowercase() })
+                    return
+                }
             }
         }
         if (d.synced && d.playing != null) {
@@ -747,7 +754,10 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                 Engine.stop()
             } else {
                 if (Engine.start()) {
-                    if (_space.value == AppSpace.DAB && _fmBackup.value == null) dabAutoPick = true
+                    if (_space.value == AppSpace.DAB && _fmBackup.value == null) {
+                        dabAutoPick = true
+                        autoPickListed = 0L
+                    }
                     RadioService.start(getApplication())
                 } else {
                     _error.value = "Impossible de démarrer « ${selectedSource.value} ». Vérifie les réglages de la source."

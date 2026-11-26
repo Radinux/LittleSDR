@@ -61,6 +61,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -179,6 +180,7 @@ private fun CarDisplay(
     val cs = MaterialTheme.colorScheme
     var status by rememberSaveable { mutableStateOf(false) }
     Surface(color = cs.surfaceContainerLow, shape = RoundedCornerShape(cornerRadius), modifier = modifier) {
+        SlideBackdrop(slide.takeIf { playing })
         Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // Top bar: receiver, AF, signal, settings, space
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -302,7 +304,9 @@ private fun CarArtwork(slide: ImageBitmap?, station: String?, modifier: Modifier
     Box(modifier.clip(RoundedCornerShape(18.dp)).background(cs.surfaceContainerHighest), contentAlignment = Alignment.Center) {
         Crossfade(slide ?: logo, label = "art") { img ->
             if (img != null) {
-                Image(img, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(if (img === slide) 0.dp else 14.dp))
+                // The slideshow fills the square (zoomed, no margin); a logo keeps a margin
+                if (img === slide) Image(img, "Diaporama de la station", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                else Image(img, "Logo de la station", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(14.dp))
             } else {
                 Icon(Icons.Rounded.Radio, null, Modifier.fillMaxSize(0.45f), tint = cs.primary.copy(alpha = 0.7f))
             }
@@ -486,6 +490,23 @@ private fun PresetTile(s: DabService, current: Boolean, where: String? = null, o
                 if (!s.dabPlus) Text("MP2 : non pris en charge", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                 where?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = cs.primary, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
+        }
+    }
+}
+
+/**
+ * The slideshow picture, blurred, behind a whole card: some of its colour around the player.
+ * A veil of the card's colour keeps the text readable (thicker before Android 12, which
+ * cannot blur).
+ */
+@Composable
+fun SlideBackdrop(slide: ImageBitmap?) {
+    val cs = MaterialTheme.colorScheme
+    Crossfade(slide, label = "backdrop", modifier = Modifier.fillMaxSize()) { img ->
+        if (img != null) Box(Modifier.fillMaxSize()) {
+            Image(img, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(48.dp))
+            val veil = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) 0.62f else 0.85f
+            Box(Modifier.fillMaxSize().background(cs.surfaceContainerLow.copy(alpha = veil)))
         }
     }
 }
