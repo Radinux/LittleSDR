@@ -7,7 +7,12 @@
 use crate::source::{self, Source};
 use serde_json::{json, Value};
 
-pub const SOURCES: [&str; 9] = ["RTL-SDR", "Airspy", "Airspy HF+", "HackRF", "SDRplay", "RTL-TCP", "SpyServer", "KiwiSDR", "Fichier IQ"];
+pub const SOURCES: [&str; 11] = ["RTL-SDR", "Airspy", "Airspy HF+", "HackRF", "SDRplay", "SoapySDR", "RTL-TCP", "SpyServer", "SDR++", "KiwiSDR", "Fichier IQ"];
+
+/// Sources this platform can use: no SoapySDR on Android (no build of it for the phone)
+pub fn available() -> impl Iterator<Item = &'static str> {
+    SOURCES.into_iter().filter(|&s| !(cfg!(target_os = "android") && s == "SoapySDR"))
+}
 
 /// Airspy R2 / Mini rates (the device keeps the closest it has: 2.5 / 10 MS/s on the R2,
 /// 3 / 6 MS/s on the Mini)
@@ -58,6 +63,14 @@ pub struct SourceSettings {
     pub hackrf_rate: f64,
     pub hackrf_gain: f32,
     pub hackrf_amp: bool,
+    /// SoapySDR device arguments ("driver=lime"); empty = the first device found
+    pub soapy_args: String,
+    pub soapy_rate: f64,
+    pub soapy_gain: f32,
+    pub soapy_agc: bool,
+    /// SDR++ server (host:port) and the sample type asked of it (0 int8, 1 int16, 2 float)
+    pub sdrpp_host: String,
+    pub sdrpp_type: u8,
 }
 
 impl Default for SourceSettings {
@@ -90,6 +103,12 @@ impl Default for SourceSettings {
             hackrf_rate: 8e6,
             hackrf_gain: 36.0,
             hackrf_amp: false,
+            soapy_args: String::new(),
+            soapy_rate: 2.4e6,
+            soapy_gain: 30.0,
+            soapy_agc: true,
+            sdrpp_host: String::new(),
+            sdrpp_type: 0,
         }
     }
 }
@@ -106,6 +125,8 @@ impl SourceSettings {
             "hf_rate": self.hf_rate, "hf_gain": self.hf_gain, "hf_agc": self.hf_agc,
             "sdrplay_rate": self.sdrplay_rate, "sdrplay_gain": self.sdrplay_gain, "sdrplay_agc": self.sdrplay_agc,
             "hackrf_rate": self.hackrf_rate, "hackrf_gain": self.hackrf_gain, "hackrf_amp": self.hackrf_amp,
+            "soapy_args": self.soapy_args, "soapy_rate": self.soapy_rate, "soapy_gain": self.soapy_gain, "soapy_agc": self.soapy_agc,
+            "sdrpp_host": self.sdrpp_host, "sdrpp_type": self.sdrpp_type,
         })
     }
 
@@ -142,6 +163,12 @@ impl SourceSettings {
             hackrf_rate: f("hackrf_rate", d.hackrf_rate),
             hackrf_gain: f("hackrf_gain", d.hackrf_gain as f64) as f32,
             hackrf_amp: b("hackrf_amp", d.hackrf_amp),
+            soapy_args: s("soapy_args", ""),
+            soapy_rate: f("soapy_rate", d.soapy_rate),
+            soapy_gain: f("soapy_gain", d.soapy_gain as f64) as f32,
+            soapy_agc: b("soapy_agc", d.soapy_agc),
+            sdrpp_host: s("sdrpp_host", ""),
+            sdrpp_type: (f("sdrpp_type", 0.0) as u8).min(2),
         }
     }
 
@@ -156,6 +183,8 @@ impl SourceSettings {
             "Airspy HF+" => self.hf_rate,
             "SDRplay" => self.sdrplay_rate,
             "HackRF" => self.hackrf_rate,
+            "SoapySDR" => self.soapy_rate,
+            // SDR++: the server's own rate
             _ => 0.0,
         }
     }
@@ -170,6 +199,7 @@ impl SourceSettings {
             "Airspy HF+" if !self.hf_agc => Some(self.hf_gain),
             "SDRplay" if !self.sdrplay_agc => Some(self.sdrplay_gain),
             "HackRF" => Some(self.hackrf_gain),
+            "SoapySDR" if !self.soapy_agc => Some(self.soapy_gain),
             _ => None,
         }
     }
@@ -185,6 +215,8 @@ pub struct SourceInfo {
     /// File: position and length (s)
     pub file_pos: f64,
     pub file_len: f64,
+    /// SoapySDR: the open device's gain range
+    pub soapy_gain: Option<(f64, f64)>,
 }
 
 fn combo(id: &str, label: &str, role: &str, value: usize, items: Vec<String>) -> Value {
@@ -264,6 +296,30 @@ pub fn menu(kind: &str, s: &SourceSettings, i: &SourceInfo, usb_present: bool) -
             w.push(slider("sdrplay_gain", "Gain", "gain", s.sdrplay_gain, 0.0, 39.0, 1.0, "%.0f dB", s.sdrplay_agc));
             w.push(check("bias_tee", "Bias-tee (RSP1A/1B, RSP2, RSPduo, RSPdx)", "bias_tee", s.bias_tee));
             w.push(info("Pilote : API SDRplay 3 et son service (sudo systemctl start sdrplay)."));
+        }
+        "SoapySDR" => {
+            let (found, err) = source::soapy::devices();
+            if let Some(e) = err {
+                w.push(info(&format!("SoapySDR indisponible : {e}. Installez SoapySDR et le module de votre récepteur.")));
+            }
+            let mut items: Vec<String> = found.iter().map(|d| d.label.clone()).collect();
+            items.push("Autre (arguments ci-dessous)".into());
+            let sel = found.iter().position(|d| d.args == s.soapy_args).unwrap_or(if s.soapy_args.is_empty() && !found.is_empty() { 0 } else { found.len() });
+            w.push(combo("soapy_dev", "Appareil", "device", sel, items));
+            w.push(text("soapy_args", "Arguments SoapySDR (ex. driver=lime)", "args", &s.soapy_args));
+            w.push(combo("soapy_rate", "Débit", "rate", nearest(&source::soapy::RATES, s.soapy_rate), source::soapy::RATES.iter().map(|&r| rate_label(r)).collect()));
+            w.push(check("soapy_agc", "AGC", "agc", s.soapy_agc));
+            let (lo, hi) = i.soapy_gain.unwrap_or((0.0, 70.0));
+            w.push(slider("soapy_gain", "Gain", "gain", s.soapy_gain.clamp(lo as f32, hi as f32), lo as f32, hi.max(lo + 1.0) as f32, 1.0, "%.0f dB", s.soapy_agc));
+            w.push(check("bias_tee", "Bias-tee (si le module le permet)", "bias_tee", s.bias_tee));
+            if found.is_empty() {
+                w.push(info("Aucun appareil trouvé pour l'instant (la recherche se refait toutes les 10 s)."));
+            }
+        }
+        "SDR++" => {
+            w.push(text("sdrpp_host", "Serveur SDR++ (hôte:port, 5259 par défaut)", "host", &s.sdrpp_host));
+            w.push(combo("sdrpp_type", "Format des échantillons", "format", s.sdrpp_type as usize, source::sdrpp::SAMPLE_TYPES.iter().map(|t| t.to_string()).collect()));
+            w.push(info("Le récepteur, son débit et son gain se règlent sur le serveur (sdrpp --server)."));
         }
         "RTL-TCP" => {
             w.push(text("tcp_host", "Serveur (hôte:port)", "host", &s.tcp_host));
@@ -373,6 +429,40 @@ pub fn apply(kind: &str, s: &mut SourceSettings, i: &SourceInfo, id: &str, b: bo
             s.hackrf_amp = b;
             Change::Amp(b)
         }
+        "soapy_dev" => {
+            let (found, _) = source::soapy::devices();
+            match found.get(idx.max(0) as usize) {
+                Some(d) if d.args != s.soapy_args => {
+                    s.soapy_args = d.args.clone();
+                    Change::Restart
+                }
+                _ => Change::None,
+            }
+        }
+        "soapy_args" => {
+            s.soapy_args = text_v.trim().to_string();
+            Change::Restart
+        }
+        "soapy_rate" => {
+            s.soapy_rate = source::soapy::RATES[(idx.max(0) as usize).min(source::soapy::RATES.len() - 1)];
+            Change::Rate(s.soapy_rate)
+        }
+        "soapy_agc" => {
+            s.soapy_agc = b;
+            Change::Gain(s.gain(kind))
+        }
+        "soapy_gain" => {
+            s.soapy_gain = f.round();
+            Change::Gain(s.gain(kind))
+        }
+        "sdrpp_host" => {
+            s.sdrpp_host = text_v.trim().to_string();
+            Change::Restart
+        }
+        "sdrpp_type" => {
+            s.sdrpp_type = idx.clamp(0, 2) as u8;
+            Change::Restart
+        }
         "sdrplay_agc" => {
             s.sdrplay_agc = b;
             Change::Gain(s.gain(kind))
@@ -460,6 +550,19 @@ pub fn open(kind: &str, s: &SourceSettings, usb_fd: Option<i32>) -> Result<(Box<
             Box::new(source::hackrf::HackRf { fd: usb_fd, amp: s.hackrf_amp })
         }
         "SDRplay" => Box::new(source::sdrplay::SdrPlay),
+        "SoapySDR" => {
+            let sp = source::soapy::Soapy { args: s.soapy_args.clone(), status: Default::default() };
+            h.soapy = Some(sp.status.clone());
+            Box::new(sp)
+        }
+        "SDR++" => {
+            if s.sdrpp_host.is_empty() {
+                return Err("indiquez le serveur SDR++".into());
+            }
+            let sp = source::sdrpp::SdrppServer::new(&s.sdrpp_host, s.sdrpp_type);
+            h.sdrpp = Some(sp.status.clone());
+            Box::new(sp)
+        }
         "RTL-TCP" => {
             if s.tcp_host.is_empty() {
                 return Err("indiquez le serveur rtl_tcp".into());
@@ -502,6 +605,8 @@ pub struct Handles {
     pub spy: Option<std::sync::Arc<std::sync::Mutex<source::spyserver::SpyStatus>>>,
     pub kiwi: Option<std::sync::Arc<std::sync::Mutex<source::kiwisdr::KiwiStatus>>>,
     pub file: Option<(std::sync::Arc<source::wavfile::WavState>, source::wavfile::WavInfo)>,
+    pub soapy: Option<std::sync::Arc<std::sync::Mutex<source::soapy::SoapyStatus>>>,
+    pub sdrpp: Option<std::sync::Arc<std::sync::Mutex<source::sdrpp::SdrppStatus>>>,
 }
 
 impl Handles {
@@ -517,6 +622,14 @@ impl Handles {
         }
         if let Some(k) = &self.kiwi {
             i.status = k.lock().unwrap().message.clone();
+        }
+        if let Some(sp) = &self.soapy {
+            let st = sp.lock().unwrap();
+            i.status = st.message.clone();
+            i.soapy_gain = st.gain;
+        }
+        if let Some(sp) = &self.sdrpp {
+            i.status = sp.lock().unwrap().message.clone();
         }
         if let Some((st, inf)) = &self.file {
             i.file_pos = st.pos.load(std::sync::atomic::Ordering::Relaxed) as f64 / inf.rate;

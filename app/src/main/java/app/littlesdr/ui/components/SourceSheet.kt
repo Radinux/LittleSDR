@@ -159,7 +159,7 @@ fun SourcePanel(
     }
 }
 
-private val NETWORK_SOURCES = setOf("RTL-TCP", "SpyServer", "KiwiSDR", "SDR++ Server")
+private val NETWORK_SOURCES = setOf("RTL-TCP", "SpyServer", "SDR++", "KiwiSDR")
 
 /** Material 3 rendering of an SDR++ SmGui menu. Consecutive "same line" widgets share a row. */
 @Composable

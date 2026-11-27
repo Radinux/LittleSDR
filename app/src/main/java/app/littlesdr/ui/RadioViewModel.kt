@@ -155,13 +155,6 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     val error: StateFlow<String?> = _error.asStateFlow()
 
     init {
-        // The SSTV decoder outlives the ViewModel (engine kept by the service): pick it up again
-        viewModelScope.launch {
-            Engine.ready.first { it }
-            val s = Engine.sstv()
-            _sstv.value = s
-            if (s.enabled && sstvPoller == null) sstvPoller = viewModelScope.launch { pollSstv() }
-        }
         // Keep the VFO inside the visible span when it is tuned elsewhere
         viewModelScope.launch {
             Engine.state.map { it.vfoOffset }.distinctUntilChanged().collect { followVfo() }
@@ -1209,6 +1202,18 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     val sstvGallery: StateFlow<List<File>> = _sstvGallery.asStateFlow()
     private var sstvPoller: Job? = null
     private val sstvDir: File get() = Storage.dir(getApplication(), Storage.SSTV) // Documents/LittleSDR/SSTV
+
+    // After the SSTV state above (the engine may be ready already: no suspension, so this runs
+    // during construction). The SSTV decoder outlives the ViewModel (engine kept by the
+    // service): pick it up again
+    init {
+        viewModelScope.launch {
+            Engine.ready.first { it }
+            val s = Engine.sstv()
+            _sstv.value = s
+            if (s.enabled && sstvPoller == null) sstvPoller = viewModelScope.launch { pollSstv() }
+        }
+    }
 
     fun setSstvEnabled(on: Boolean) = viewModelScope.launch {
         if (!Engine.ready.value) return@launch

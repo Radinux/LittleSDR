@@ -7,6 +7,8 @@ use std::thread::JoinHandle;
 
 pub mod airspy;
 pub mod hackrf;
+pub mod sdrpp;
+pub mod soapy;
 pub mod kiwisdr;
 pub mod sdrplay;
 pub mod rtltcp;

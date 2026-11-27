@@ -168,7 +168,7 @@ impl Service {
             let svc = Service {
                 inner: Mutex::new(Inner {
                     root: root.to_string(),
-                    kind: cfg.get("source").and_then(Value::as_str).filter(|k| sources::SOURCES.contains(k)).unwrap_or("RTL-SDR").to_string(),
+                    kind: cfg.get("source").and_then(Value::as_str).filter(|k| sources::available().any(|s| s == *k)).unwrap_or("RTL-SDR").to_string(),
                     settings: cfg.get("sources").map(SourceSettings::from_json).unwrap_or_default(),
                     usb_fd: None,
                     mode_idx,
@@ -204,7 +204,7 @@ impl Service {
     // ------------------------------------------------------------------ sources
 
     pub fn source_names(&self) -> Vec<String> {
-        sources::SOURCES.iter().map(|s| s.to_string()).collect()
+        sources::available().map(|s| s.to_string()).collect()
     }
 
     pub fn selected_source(&self) -> String {
@@ -212,7 +212,7 @@ impl Service {
     }
 
     pub fn select_source(&self, name: &str) {
-        if !sources::SOURCES.contains(&name) {
+        if !sources::available().any(|s| s == name) {
             return;
         }
         let was = self.stop();
@@ -330,7 +330,7 @@ impl Service {
             center: i.center as u64,
             gain: i.settings.gain(&kind),
             direct_sampling: if kind == "RTL-SDR" { i.settings.direct_sampling } else { 0 },
-            bias_tee: i.settings.bias_tee && matches!(kind.as_str(), "RTL-SDR" | "RTL-TCP" | "Airspy" | "HackRF" | "SDRplay"),
+            bias_tee: i.settings.bias_tee && matches!(kind.as_str(), "RTL-SDR" | "RTL-TCP" | "Airspy" | "HackRF" | "SDRplay" | "SoapySDR"),
         };
         let (tx, rx) = sync_channel::<IqBlock>(64);
         let src = source::spawn(src, cfg, tx);
@@ -833,7 +833,7 @@ fn whole(v: Value) -> Value {
 
 /// Receivers that can take the exact rate DAB / ADS-B want (others are resampled)
 fn own_rate_source(kind: &str) -> bool {
-    matches!(kind, "RTL-SDR" | "RTL-TCP" | "HackRF" | "SDRplay")
+    matches!(kind, "RTL-SDR" | "RTL-TCP" | "HackRF" | "SDRplay" | "SoapySDR")
 }
 
 /// Hardware centre for a frequency: off the DC spike of wide receivers

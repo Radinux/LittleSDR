@@ -106,7 +106,8 @@ Un bouton, toujours en haut à droite, change d'interface et de récepteur.
 |---|---|
 | USB (OTG) | RTL-SDR (dont Blog V4, bias-tee), Airspy R2 / Mini, Airspy HF+, HackRF One (préampli, alimentation d'antenne) |
 | USB, Linux | SDRplay RSP1, RSP1A / 1B, RSP2, RSPduo, RSPdx (avec l'API SDRplay 3 installée et son service lancé) |
-| Réseau | rtl_tcp, SpyServer, KiwiSDR (annuaire public, serveurs qui refusent les applications signalés) |
+| Réseau | rtl_tcp, SpyServer, serveur SDR++ (`sdrpp --server` : le récepteur d'un autre ordinateur, quel qu'il soit), KiwiSDR (annuaire public, serveurs qui refusent les applications signalés) |
+| SoapySDR, Linux | LimeSDR, bladeRF, USRP, PlutoSDR, RX888, Red Pitaya… : tout appareil qui a son module SoapySDR (SoapySDR installé, chargé à l'ouverture) |
 | Fichier | enregistrements IQ en WAV |
 
 ## 📥 Installation
