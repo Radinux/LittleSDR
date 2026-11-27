@@ -121,13 +121,18 @@ fun DrmRadioScreen(
         ?: eibi.firstOrNull()?.let { e ->
             listOfNotNull(e.station, listOfNotNull(e.languageText.ifBlank { null }, e.target.ifBlank { null }).joinToString(" → ").ifBlank { null }, e.country.ifBlank { null }).joinToString(" · ")
         }
+    var status by rememberSaveable { mutableStateOf(false) }
     BoxWithConstraints(modifier) {
         val portrait = maxHeight > maxWidth
         val display = @Composable { m: Modifier ->
-            DrmDisplay(d, slide, frequency, playing, playEnabled, source, usb, cornerRadius, scheduled, here?.name, onPlay, onStep, onSource, onSettings, m)
+            DrmDisplay(d, slide, frequency, playing, playEnabled, cornerRadius, scheduled, here?.name, spectrum, portrait, onPlay, onStep, m)
+        }
+        // Receiver, signal and settings: the top bar of the tuning panel, beside the space switcher
+        val bar = @Composable { m: Modifier ->
+            DrmBar(d, playing, source, usb, onSource, onSettings, onStatus = { status = true }, m)
         }
         val tuning = @Composable { m: Modifier ->
-            DrmTuning(frequency, space, onSpace, cornerRadius, heard, schedule, now, controls, spectrum, onTune, onForget, onControl, portrait, m)
+            DrmTuning(frequency, space, onSpace, cornerRadius, heard, schedule, now, controls, bar, onTune, onForget, onControl, portrait, m)
         }
         if (portrait) {
             // Same split as the SDR screen: the space switcher falls at the same place
@@ -142,6 +147,42 @@ fun DrmRadioScreen(
             }
         }
     }
+    if (status) {
+        AlertDialog(
+            onDismissRequest = { status = false },
+            confirmButton = { TextButton(onClick = { status = false }) { Text("OK") } },
+            title = { Text("Réception DRM") },
+            text = { Text(d.status.ifBlank { "Pas de réception en cours" }) },
+        )
+    }
+}
+
+/** Receiver (tap: its settings), signal (tap: reception details), settings */
+@Composable
+private fun DrmBar(
+    d: DigitalState,
+    playing: Boolean,
+    source: String,
+    usb: Boolean,
+    onSource: () -> Unit,
+    onSettings: () -> Unit,
+    onStatus: () -> Unit,
+    modifier: Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    // The receiver's name gives way first
+    Row(modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Surface(onClick = onSource, shape = RoundedCornerShape(50), color = cs.surfaceContainerHigh, modifier = Modifier.weight(1f, fill = false)) {
+            Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(if (usb) Icons.Default.Usb else Icons.Default.Router, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(source, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Spacer(Modifier.weight(0.001f))
+        SignalBars(playing, d, Modifier.clip(RoundedCornerShape(8.dp)).padding(4.dp), onClick = onStatus)
+        IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Réglages") }
+    }
 }
 
 @Composable
@@ -151,35 +192,22 @@ private fun DrmDisplay(
     frequency: Double,
     playing: Boolean,
     playEnabled: Boolean,
-    source: String,
-    usb: Boolean,
     cornerRadius: Dp,
     scheduled: String?,
     scheduledName: String?,
+    spectrum: @Composable (Modifier) -> Unit,
+    portrait: Boolean,
     onPlay: () -> Unit,
     onStep: (Int) -> Unit,
-    onSource: () -> Unit,
-    onSettings: () -> Unit,
     modifier: Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    var status by rememberSaveable { mutableStateOf(false) }
     Surface(color = cs.surfaceContainerLow, shape = RoundedCornerShape(cornerRadius), border = pillBorder(), modifier = modifier) {
         SlideBackdrop(slide.takeIf { playing })
         Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Top bar: receiver, signal, settings (the space switcher is on the tuning panel; the receiver's name gives way first)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Surface(onClick = onSource, shape = RoundedCornerShape(50), color = cs.surfaceContainerHigh, modifier = Modifier.weight(1f, fill = false)) {
-                    Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (usb) Icons.Default.Usb else Icons.Default.Router, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(source, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                Spacer(Modifier.weight(0.001f))
-                SignalBars(playing, d, Modifier.clip(RoundedCornerShape(8.dp)).padding(4.dp), onClick = { status = true })
-                IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Réglages") }
-            }
+            // The band around the frequency, spectrum and waterfall (a DRM block is a flat 10 kHz
+            // rectangle; tap one to tune it)
+            spectrum(Modifier.fillMaxWidth().height(if (portrait) 92.dp else 84.dp))
             // The display
             Row(Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 DrmArtwork(slide, d.station.takeIf { playing && it.isNotBlank() } ?: scheduledName, Modifier.fillMaxHeight().aspectRatio(1f, matchHeightConstraintsFirst = true))
@@ -243,14 +271,6 @@ private fun DrmDisplay(
             }
         }
     }
-    if (status) {
-        AlertDialog(
-            onDismissRequest = { status = false },
-            confirmButton = { TextButton(onClick = { status = false }) { Text("OK") } },
-            title = { Text("Réception DRM") },
-            text = { Text(d.status.ifBlank { "Pas de réception en cours" }) },
-        )
-    }
 }
 
 /** Slideshow, else the station's logo, else a globe */
@@ -280,7 +300,7 @@ private fun DrmTuning(
     schedule: List<DrmBroadcast>,
     now: ZonedDateTime,
     controls: List<SmWidget>,
-    spectrum: @Composable (Modifier) -> Unit,
+    bar: @Composable (Modifier) -> Unit,
     onTune: (Double) -> Unit,
     onForget: (DrmHeard) -> Unit,
     onControl: (SmAction) -> Unit,
@@ -289,9 +309,9 @@ private fun DrmTuning(
 ) {
     val cs = MaterialTheme.colorScheme
     var bands by rememberSaveable { mutableStateOf(false) }
-    // The band around the frequency (a DRM block is a flat 10 kHz rectangle) as a slim strip
-    // on top, the space switcher beside it at the place of the SDR one
-    SpaceCappedPanel(space, onSpace, cornerRadius, modifier, head = { hm -> spectrum(hm) }) {
+    // Receiver, signal and settings on top, the space switcher beside them at the place of the
+    // SDR one
+    SpaceCappedPanel(space, onSpace, cornerRadius, modifier, head = bar) {
         Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(if (portrait) 10.dp else 6.dp)) {
             BandSelector(frequency, onTune, onOpenGrid = { bands = true })
             // Fine tuning, 5 kHz steps (the broadcast raster)
