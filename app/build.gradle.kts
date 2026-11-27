@@ -16,8 +16,8 @@ android {
         applicationId = "app.littlesdr"
         minSdk = 28
         targetSdk = 37
-        versionCode = 27
-        versionName = "1.5.4"
+        versionCode = 28
+        versionName = "1.5.5"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
