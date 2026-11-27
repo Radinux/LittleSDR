@@ -31,8 +31,8 @@ import androidx.compose.material.icons.filled.SatelliteAlt
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
+import app.littlesdr.ui.theme.FilledTonalButton
+import app.littlesdr.ui.theme.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults

@@ -50,9 +50,9 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.FilterChip
+import app.littlesdr.ui.theme.FilledIconButton
+import app.littlesdr.ui.theme.FilledTonalIconButton
+import app.littlesdr.ui.theme.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
