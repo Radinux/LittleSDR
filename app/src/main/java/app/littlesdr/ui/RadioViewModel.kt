@@ -1,5 +1,6 @@
 package app.littlesdr.ui
 
+import app.littlesdr.engine.hfBandAt
 import androidx.compose.ui.graphics.asImageBitmap
 import app.littlesdr.engine.DAB_CHANNELS
 import app.littlesdr.engine.DabService
@@ -57,6 +58,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -160,12 +162,6 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
             _sstv.value = s
             if (s.enabled && sstvPoller == null) sstvPoller = viewModelScope.launch { pollSstv() }
         }
-        // New sample rate (source change / samplerate change): show the full span again
-        viewModelScope.launch {
-            Engine.state.map { it.sampleRate }.distinctUntilChanged().collect { sr ->
-                if (sr > 0) setView(sr, 0.0)
-            }
-        }
         // Keep the VFO inside the visible span when it is tuned elsewhere
         viewModelScope.launch {
             Engine.state.map { it.vfoOffset }.distinctUntilChanged().collect { followVfo() }
@@ -248,6 +244,18 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     private val spacePrefs = app.getSharedPreferences("spaces", android.content.Context.MODE_PRIVATE)
     private val _space = MutableStateFlow(AppSpace.entries.getOrNull(spacePrefs.getInt("space", 0)) ?: AppSpace.SDR)
     val space: StateFlow<AppSpace> = _space.asStateFlow()
+
+    // After _space (initialised above): the default view again on a new sample rate (source or
+    // rate change), a new space, and in DRM / LRPT a new band or centre: the full span, or just
+    // the band that matters
+    init {
+        viewModelScope.launch {
+            combine(Engine.state, _space) { st, sp ->
+                val band = focusBand(sp, st.vfoFrequency)
+                if (band == null) listOf(sp, st.sampleRate) else listOf(sp, st.sampleRate, st.centerFrequency, band)
+            }.distinctUntilChanged().collect { if (state.value.sampleRate > 0) defaultView() }
+        }
+    }
 
     private fun lastFreq(m: Mode, default: Double): Double =
         Double.fromBits(spacePrefs.getLong("freq_${m.name}", default.toRawBits()))
@@ -883,7 +891,35 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun resetZoom() = setView(state.value.sampleRate, 0.0)
+    /** "Whole band": the full span, or in DRM / LRPT the band that matters */
+    fun resetZoom() = defaultView()
+
+    /**
+     * The band worth showing: in DRM the broadcast band of the frequency, in LRPT the weather
+     * satellites' 137 - 138 MHz; elsewhere (or outside a band) none: the full span
+     */
+    private fun focusBand(sp: AppSpace, hz: Double): Pair<Double, Double>? = when (sp) {
+        AppSpace.DRM -> hfBandAt(hz)?.let { it.lo to it.hi }
+        AppSpace.LRPT -> 137.0e6 to 138.0e6
+        else -> null
+    }
+
+    private fun defaultView() {
+        val s = state.value
+        // Only a band the receiver sees (tuned elsewhere, or a band wider than the span: all of it)
+        val band = focusBand(_space.value, s.vfoFrequency)?.takeIf { (lo, hi) ->
+            val half = s.sampleRate / 2
+            lo < s.centerFrequency + half && hi > s.centerFrequency - half
+        }
+        if (band == null) {
+            setView(s.sampleRate, 0.0)
+        } else {
+            // The band with a little room on both sides (setView keeps it within the span)
+            val (lo, hi) = band
+            val margin = (hi - lo) * 0.08
+            setView(hi - lo + 2 * margin, (lo + hi) / 2 - s.centerFrequency)
+        }
+    }
 
     private fun followVfo() {
         val v = _view.value
