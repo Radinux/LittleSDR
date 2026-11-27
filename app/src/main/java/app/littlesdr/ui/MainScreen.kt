@@ -379,9 +379,10 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                                 ft8Active = ft8Active,
                                 showFt8 = space == AppSpace.SDR,
                             )
-                            // The frequency where tuning happens: Radio, Bands, Record (and LRPT); the
-                            // receiver, audio, memories, Morse and SSTV tabs don't need it
-                            if (space != AppSpace.ADSB && (space != AppSpace.SDR || tab == ControlTab.Radio || tab == ControlTab.Bands || tab == ControlTab.Record)) {
+                            // The frequency where tuning happens: Radio, Bands, Record; the receiver,
+                            // audio, memories, Morse and SSTV tabs don't need it, nor LRPT (the
+                            // satellite chips tune) and ADS-B (one frequency)
+                            if (space == AppSpace.SDR && (tab == ControlTab.Radio || tab == ControlTab.Bands || tab == ControlTab.Record)) {
                                 Header(stateHolder, onTune = vm::tune)
                             }
                             Spacer(Modifier.height(8.dp))
