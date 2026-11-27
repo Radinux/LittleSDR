@@ -4,6 +4,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -51,6 +53,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.littlesdr.engine.LRPT_SATELLITES
 import app.littlesdr.engine.LrptState
@@ -115,6 +118,44 @@ fun SpaceSwitcher(space: AppSpace, onSpace: (AppSpace) -> Unit, shape: Shape, mo
                 )
             }
         }
+    }
+}
+
+/**
+ * A control panel cut like the SDR one: a 64 dp top bar split in two ([head] | the space
+ * switcher, 72 dp, at the top right corner), the panel's body below. Every space keeps the
+ * switcher at the same place.
+ */
+@Composable
+fun SpaceCappedPanel(
+    space: AppSpace,
+    onSpace: (AppSpace) -> Unit,
+    cornerRadius: Dp,
+    modifier: Modifier = Modifier,
+    head: @Composable (Modifier) -> Unit = { SpaceTitle(space, it) },
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val r = cornerRadius
+    val cs = MaterialTheme.colorScheme
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.fillMaxWidth().height(64.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Surface(
+                color = cs.surfaceContainerLow,
+                shape = RoundedCornerShape(topStart = r, topEnd = 6.dp, bottomStart = 6.dp, bottomEnd = 6.dp),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            ) { head(Modifier.fillMaxSize()) }
+            SpaceSwitcher(
+                space = space,
+                onSpace = onSpace,
+                shape = RoundedCornerShape(topStart = 6.dp, topEnd = r, bottomStart = 6.dp, bottomEnd = 6.dp),
+                modifier = Modifier.width(72.dp).fillMaxHeight(),
+            )
+        }
+        Surface(
+            color = cs.surfaceContainerLow,
+            shape = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp, bottomStart = r, bottomEnd = r),
+            modifier = Modifier.fillMaxWidth().weight(1f),
+        ) { Column(Modifier.fillMaxSize(), content = content) }
     }
 }
 

@@ -123,15 +123,16 @@ fun DrmRadioScreen(
     BoxWithConstraints(modifier) {
         val portrait = maxHeight > maxWidth
         val display = @Composable { m: Modifier ->
-            DrmDisplay(d, slide, frequency, playing, playEnabled, source, usb, space, cornerRadius, scheduled, here?.name, onPlay, onStep, onSource, onSettings, onSpace, m)
+            DrmDisplay(d, slide, frequency, playing, playEnabled, source, usb, cornerRadius, scheduled, here?.name, onPlay, onStep, onSource, onSettings, m)
         }
         val tuning = @Composable { m: Modifier ->
-            DrmTuning(frequency, cornerRadius, heard, schedule, now, controls, spectrum, onTune, onForget, onControl, portrait, m)
+            DrmTuning(frequency, space, onSpace, cornerRadius, heard, schedule, now, controls, spectrum, onTune, onForget, onControl, portrait, m)
         }
         if (portrait) {
-            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                display(Modifier.fillMaxWidth().weight(0.44f))
-                tuning(Modifier.fillMaxWidth().weight(0.56f))
+            // Same split as the SDR screen: the space switcher falls at the same place
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                display(Modifier.fillMaxWidth().weight(0.42f))
+                tuning(Modifier.fillMaxWidth().weight(0.58f))
             }
         } else {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -151,7 +152,6 @@ private fun DrmDisplay(
     playEnabled: Boolean,
     source: String,
     usb: Boolean,
-    space: AppSpace,
     cornerRadius: Dp,
     scheduled: String?,
     scheduledName: String?,
@@ -159,7 +159,6 @@ private fun DrmDisplay(
     onStep: (Int) -> Unit,
     onSource: () -> Unit,
     onSettings: () -> Unit,
-    onSpace: (AppSpace) -> Unit,
     modifier: Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -167,7 +166,7 @@ private fun DrmDisplay(
     Surface(color = cs.surfaceContainerLow, shape = RoundedCornerShape(cornerRadius), modifier = modifier) {
         SlideBackdrop(slide.takeIf { playing })
         Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Top bar: receiver, signal, settings, space (the receiver's name gives way first)
+            // Top bar: receiver, signal, settings (the space switcher is on the tuning panel; the receiver's name gives way first)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Surface(onClick = onSource, shape = RoundedCornerShape(50), color = cs.surfaceContainerHigh, modifier = Modifier.weight(1f, fill = false)) {
                     Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -179,7 +178,6 @@ private fun DrmDisplay(
                 Spacer(Modifier.weight(0.001f))
                 SignalBars(playing, d, Modifier.clip(RoundedCornerShape(8.dp)).padding(4.dp), onClick = { status = true })
                 IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Réglages") }
-                SpaceSwitcher(space = space, onSpace = onSpace, shape = CircleShape, modifier = Modifier.size(48.dp))
             }
             // The display
             Row(Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -274,6 +272,8 @@ private fun DrmArtwork(slide: ImageBitmap?, station: String?, modifier: Modifier
 @Composable
 private fun DrmTuning(
     frequency: Double,
+    space: AppSpace,
+    onSpace: (AppSpace) -> Unit,
     cornerRadius: Dp,
     heard: List<DrmHeard>,
     schedule: List<DrmBroadcast>,
@@ -288,11 +288,10 @@ private fun DrmTuning(
 ) {
     val cs = MaterialTheme.colorScheme
     var bands by rememberSaveable { mutableStateOf(false) }
-    Surface(color = cs.surfaceContainerLow, shape = RoundedCornerShape(cornerRadius), modifier = modifier) {
+    // The band around the frequency (a DRM block is a flat 10 kHz rectangle) as a slim strip
+    // on top, the space switcher beside it at the place of the SDR one
+    SpaceCappedPanel(space, onSpace, cornerRadius, modifier, head = { hm -> spectrum(hm) }) {
         Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(if (portrait) 10.dp else 6.dp)) {
-            // The band around the frequency: a DRM block is a flat 10 kHz rectangle
-            // Landscape is short: a slim strip, so the stations keep most of the height
-            spectrum(Modifier.fillMaxWidth().height(if (portrait) 96.dp else 64.dp))
             BandSelector(frequency, onTune, onOpenGrid = { bands = true })
             // Fine tuning, 5 kHz steps (the broadcast raster)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

@@ -114,14 +114,17 @@ fun CarRadioScreen(
         val portrait = maxHeight > maxWidth
         val display = @Composable { m: Modifier ->
             CarDisplay(
-                d, slide, frequency, playing, playEnabled, af, afSearching, source, usb, space, cornerRadius,
-                onPlay, onStep, onAf, onSource, onSettings, onSpace, m,
+                d, slide, frequency, playing, playEnabled, af, afSearching, source, usb, cornerRadius,
+                onPlay, onStep, onAf, onSource, onSettings, m,
             )
         }
         val stations = @Composable { m: Modifier ->
-            Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(cornerRadius), modifier = m) {
+            // Multiplex bar | space switcher on top, at the place of the SDR one
+            SpaceCappedPanel(
+                space, onSpace, cornerRadius, m,
+                head = { hm -> Box(hm.padding(horizontal = 8.dp), contentAlignment = Alignment.Center) { MultiplexBar(frequency, d, found, scan, onTune, onScan, onOpenGrid = { grid = true }) } },
+            ) {
                 Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    MultiplexBar(frequency, d, found, scan, onTune, onScan, onOpenGrid = { grid = true })
                     scan?.let { (i, n) ->
                         Text("Recherche : canal ${DAB_CHANNELS[i].name} (${i + 1}/$n)", style = MaterialTheme.typography.bodyMedium)
                         LinearProgressIndicator(progress = { (i + 1f) / n }, modifier = Modifier.fillMaxWidth())
@@ -139,9 +142,10 @@ fun CarRadioScreen(
             }
         }
         if (portrait) {
-            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                display(Modifier.fillMaxWidth().weight(0.46f))
-                stations(Modifier.fillMaxWidth().weight(0.54f))
+            // Same split as the SDR screen: the space switcher falls at the same place
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                display(Modifier.fillMaxWidth().weight(0.42f))
+                stations(Modifier.fillMaxWidth().weight(0.58f))
             }
         } else {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -167,14 +171,12 @@ private fun CarDisplay(
     afSearching: Boolean,
     source: String,
     usb: Boolean,
-    space: AppSpace,
     cornerRadius: Dp,
     onPlay: () -> Unit,
     onStep: (Int) -> Unit,
     onAf: (Boolean) -> Unit,
     onSource: () -> Unit,
     onSettings: () -> Unit,
-    onSpace: (AppSpace) -> Unit,
     modifier: Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -182,7 +184,7 @@ private fun CarDisplay(
     Surface(color = cs.surfaceContainerLow, shape = RoundedCornerShape(cornerRadius), modifier = modifier) {
         SlideBackdrop(slide.takeIf { playing })
         Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Top bar: receiver, AF, signal, settings, space
+            // Top bar: receiver, AF, signal, settings (the space switcher is on the stations panel)
             // The buttons on the right keep their size; on a narrow screen or with large text,
             // the receiver's name gives way (ellipsis) instead of crushing the space switcher
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -204,7 +206,6 @@ private fun CarDisplay(
                 Spacer(Modifier.weight(0.001f))
                 SignalBars(playing, d, Modifier.clip(RoundedCornerShape(8.dp)).padding(4.dp), onClick = { status = true })
                 IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, "Réglages") }
-                SpaceSwitcher(space = space, onSpace = onSpace, shape = CircleShape, modifier = Modifier.size(48.dp))
             }
             // The display
             Row(Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
