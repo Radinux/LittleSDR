@@ -1,5 +1,6 @@
 package app.littlesdr.ui.components
 
+import app.littlesdr.ui.theme.pillBorder
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -181,7 +182,7 @@ private fun CarDisplay(
 ) {
     val cs = MaterialTheme.colorScheme
     var status by rememberSaveable { mutableStateOf(false) }
-    Surface(color = cs.surfaceContainerLow, shape = RoundedCornerShape(cornerRadius), modifier = modifier) {
+    Surface(color = cs.surfaceContainerLow, shape = RoundedCornerShape(cornerRadius), border = pillBorder(), modifier = modifier) {
         SlideBackdrop(slide.takeIf { playing })
         Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // Top bar: receiver, AF, signal, settings (the space switcher is on the stations panel)

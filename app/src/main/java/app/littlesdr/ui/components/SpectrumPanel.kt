@@ -1,5 +1,6 @@
 package app.littlesdr.ui.components
 
+import app.littlesdr.ui.theme.pillOutline
 import app.littlesdr.engine.BandPlan
 import app.littlesdr.engine.BandKind
 import androidx.compose.foundation.AndroidExternalSurface
@@ -299,6 +300,7 @@ fun SpectrumPanel(
         // Rounded corners: the Vulkan SurfaceView can't be clipped by Compose,
         // so paint the outside of a rounded rect in the background color on top of it.
         if (cornerRadius > 0.dp) {
+            val outline = pillOutline()
             Canvas(Modifier.fillMaxSize().graphicsLayer()) { // static: recorded once
                 val r = cornerRadius.toPx()
                 val mask = Path().apply {
@@ -307,6 +309,15 @@ fun SpectrumPanel(
                     addRoundRect(RoundRect(0f, 0f, size.width, size.height, CornerRadius(r, r)))
                 }
                 drawPath(mask, maskColor)
+                // The panel's outline, like the other pills
+                val w = 1.dp.toPx()
+                drawRoundRect(
+                    outline,
+                    topLeft = androidx.compose.ui.geometry.Offset(w / 2, w / 2),
+                    size = androidx.compose.ui.geometry.Size(size.width - w, size.height - w),
+                    cornerRadius = CornerRadius(r - w / 2, r - w / 2),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(w),
+                )
             }
         }
     }

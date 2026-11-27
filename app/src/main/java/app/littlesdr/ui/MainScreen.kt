@@ -1,5 +1,6 @@
 package app.littlesdr.ui
 
+import app.littlesdr.ui.theme.pillBorder
 import android.content.res.Configuration
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
@@ -320,6 +321,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                     Row(Modifier.fillMaxWidth().height(64.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            border = pillBorder(),
                             shape = RoundedCornerShape(topStart = r, topEnd = 6.dp, bottomStart = 6.dp, bottomEnd = 6.dp),
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         ) {
@@ -335,6 +337,7 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                     }
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        border = pillBorder(),
                         shape = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp, bottomStart = r, bottomEnd = r),
                         modifier = Modifier.fillMaxWidth().weight(1f),
                     ) {

@@ -1,5 +1,7 @@
 package app.littlesdr.ui.components
 
+import androidx.compose.foundation.border
+import app.littlesdr.ui.theme.pillOutline
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -102,6 +104,7 @@ fun TuningJoystick(
         modifier
             .clip(RoundedCornerShape(50))
             .background(track)
+            .border(1.dp, pillOutline(), RoundedCornerShape(50))
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown()

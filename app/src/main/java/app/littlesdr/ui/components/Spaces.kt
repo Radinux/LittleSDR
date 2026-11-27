@@ -1,5 +1,6 @@
 package app.littlesdr.ui.components
 
+import app.littlesdr.ui.theme.pillBorder
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -97,6 +98,7 @@ fun SpaceSwitcher(space: AppSpace, onSpace: (AppSpace) -> Unit, shape: Shape, mo
             onClick = { open = true },
             shape = shape,
             color = if (open) cs.secondaryContainer else cs.surfaceContainerLow,
+            border = pillBorder(),
             modifier = Modifier.fillMaxSize().semantics { contentDescription = "Changer d'interface (${space.label})" },
         ) {
             Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
@@ -141,6 +143,7 @@ fun SpaceCappedPanel(
         Row(Modifier.fillMaxWidth().height(64.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Surface(
                 color = cs.surfaceContainerLow,
+                border = pillBorder(),
                 shape = RoundedCornerShape(topStart = r, topEnd = 6.dp, bottomStart = 6.dp, bottomEnd = 6.dp),
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             ) { head(Modifier.fillMaxSize()) }
@@ -153,6 +156,7 @@ fun SpaceCappedPanel(
         }
         Surface(
             color = cs.surfaceContainerLow,
+            border = pillBorder(),
             shape = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp, bottomStart = r, bottomEnd = r),
             modifier = Modifier.fillMaxWidth().weight(1f),
         ) { Column(Modifier.fillMaxSize(), content = content) }
@@ -174,7 +178,7 @@ fun SpaceTitle(space: AppSpace, modifier: Modifier = Modifier) {
 /** Left side in the LRPT space: the picture as it comes down */
 @Composable
 fun LrptImagePanel(image: ImageBitmap?, l: LrptState, playing: Boolean, modifier: Modifier = Modifier) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLowest, shape = RoundedCornerShape(20.dp), modifier = modifier) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerLowest, shape = RoundedCornerShape(20.dp), border = pillBorder(), modifier = modifier) {
         if (image != null) {
             Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState(), reverseScrolling = true), contentAlignment = Alignment.TopCenter) {
                 Image(image, "Image Meteor", contentScale = ContentScale.FillWidth, modifier = Modifier.fillMaxWidth())

@@ -1,5 +1,6 @@
 package app.littlesdr.ui.components
 
+import app.littlesdr.ui.theme.pillBorder
 import app.littlesdr.engine.SmAction
 import app.littlesdr.engine.SmWidget
 
@@ -127,7 +128,7 @@ fun DigitalNowPlaying(
 ) {
     // Enough inset that nothing touches the rounded corners
     val inset = max(16.dp, cornerRadius * 0.35f)
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(cornerRadius), modifier = modifier) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(cornerRadius), border = pillBorder(), modifier = modifier) {
         SlideBackdrop(slide.takeIf { playing })
         Column(Modifier.fillMaxSize().padding(horizontal = inset, vertical = 12.dp)) {
             RfStatusBar(d, isDab, frequency, playing, Modifier.fillMaxWidth().padding(horizontal = 4.dp))

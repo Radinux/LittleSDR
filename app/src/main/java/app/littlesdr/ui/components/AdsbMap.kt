@@ -1,5 +1,7 @@
 package app.littlesdr.ui.components
 
+import androidx.compose.foundation.border
+import app.littlesdr.ui.theme.pillOutline
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -110,7 +112,7 @@ fun AdsbMap(
     val ringStyle = TextStyle(fontSize = 10.sp, color = cs.onSurfaceVariant)
 
     val positioned = state.aircraft.filter { it.position != null }
-    Box(modifier.clip(RoundedCornerShape(20.dp))) {
+    Box(modifier.clip(RoundedCornerShape(20.dp)).border(1.dp, pillOutline(), RoundedCornerShape(20.dp))) {
         Canvas(
             Modifier
                 .fillMaxSize()
