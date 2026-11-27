@@ -14,7 +14,7 @@ layout(push_constant) uniform PC {
     float lineW;      // spectrum trace thickness in pixels
     vec4 fillColor;
     vec4 lineColor;
-    int palette;      // 0 Turbo, 1 Viridis, 2 Inferno, 3 Magma, 4 Classic, 5 Grayscale
+    int palette;      // 0 Turbo, 1 Viridis, 2 Inferno, 3 Magma, 4 Classic, 5 Grayscale, 6+ stops
     int lineOffset;   // spectrum pass: 0 = smoothed trace, bins = peak-hold line
 } pc;
 
@@ -41,8 +41,8 @@ layout(push_constant) uniform PC {
         }                                                                        \
     }
 
-// Waterfall version: zoomed out, the average POWER of the bins over two pixels instead of
-// the highest bin of one. The highest of ~30 noise bins is a random bright speckle: the zoomed-out waterfall
+// Waterfall version: zoomed out, the weighted average POWER of the bins over three pixels
+// instead of the highest bin of one. The highest of ~30 noise bins is a random bright speckle: the zoomed-out waterfall
 // turns to sand. The power average is smooth on noise and still shows a carrier (one bin 30 dB
 // up among 32 lifts the average by ~15 dB).
 #define SAMPLE_LINE_AVG(BUF, BASE, X, PIXELS, OUT)                               \
@@ -55,16 +55,18 @@ layout(push_constant) uniform PC {
             int i1_ = min(i0_ + 1, pc.bins - 1);                                 \
             OUT = mix(BUF[(BASE) + i0_], BUF[(BASE) + i1_], fract(bf_));         \
         } else {                                                                 \
-            /* two pixels wide, centred: half the resolution, much less grain */ \
-            int i0_ = int(b0_ - 0.5 * span_);                                    \
-            int n_ = int(ceil(2.0 * span_));                                     \
-            int st_ = max(1, n_ / 16);                                           \
+            /* three pixels wide, centred, triangular weights: a third of the  */ \
+            /* resolution and no grain                                         */ \
+            int n_ = int(ceil(3.0 * span_));                                     \
+            float a_ = b0_ - 1.5 * span_;                                        \
+            int st_ = max(1, n_ / 24);                                           \
             float p_ = 0.0;                                                      \
             float c_ = 0.0;                                                      \
             for (int k_ = 0; k_ < n_; k_ += st_) {                               \
-                float d_ = BUF[(BASE) + clamp(i0_ + k_, 0, pc.bins - 1)];        \
-                p_ += exp2(clamp(d_, -200.0, 50.0) * 0.33219281);                \
-                c_ += 1.0;                                                       \
+                float w_ = 1.0 - abs(float(k_) / float(n_) * 2.0 - 1.0) + 0.05;  \
+                float d_ = BUF[(BASE) + clamp(int(a_) + k_, 0, pc.bins - 1)];    \
+                p_ += w_ * exp2(clamp(d_, -200.0, 50.0) * 0.33219281);           \
+                c_ += w_;                                                        \
             }                                                                    \
             OUT = 3.0103 * log2(max(p_ / c_, 1e-30));                            \
         }                                                                        \
@@ -125,8 +127,29 @@ vec3 classic(float t) {
     int i = min(int(x), 3);
     return mix(k[i], k[i + 1], x - float(i));
 }
+// Gradient palettes from 6 evenly spaced stops each, indices 6 and up (mirrored in
+// app ui/theme/Palettes.kt)
+const int STOP_PALETTES = 9;
+const vec3 STOPS[54] = vec3[](
+    vec3(0.050, 0.030, 0.528), vec3(0.417, 0.000, 0.658), vec3(0.693, 0.165, 0.565), vec3(0.881, 0.393, 0.383), vec3(0.988, 0.652, 0.211), vec3(0.940, 0.975, 0.131),  // 6 Plasma
+    vec3(0.000, 0.020, 0.080), vec3(0.000, 0.100, 0.300), vec3(0.000, 0.330, 0.550), vec3(0.050, 0.620, 0.700), vec3(0.450, 0.880, 0.850), vec3(0.950, 1.000, 1.000),  // 7 Ocean
+    vec3(0.000, 0.000, 0.000), vec3(0.300, 0.000, 0.000), vec3(0.700, 0.100, 0.000), vec3(0.950, 0.400, 0.000), vec3(1.000, 0.780, 0.200), vec3(1.000, 1.000, 0.850),  // 8 Fire
+    vec3(0.020, 0.000, 0.060), vec3(0.200, 0.020, 0.350), vec3(0.100, 0.350, 0.550), vec3(0.050, 0.700, 0.450), vec3(0.550, 0.950, 0.400), vec3(0.950, 1.000, 0.850),  // 9 Aurora
+    vec3(0.000, 0.020, 0.000), vec3(0.000, 0.150, 0.030), vec3(0.020, 0.350, 0.080), vec3(0.100, 0.620, 0.150), vec3(0.400, 0.900, 0.350), vec3(0.850, 1.000, 0.800),  // 10 Phosphor
+    vec3(0.000, 0.000, 0.030), vec3(0.020, 0.060, 0.200), vec3(0.080, 0.220, 0.480), vec3(0.250, 0.500, 0.800), vec3(0.600, 0.820, 0.970), vec3(1.000, 1.000, 1.000),  // 11 Ice
+    vec3(0.020, 0.000, 0.050), vec3(0.250, 0.000, 0.400), vec3(0.700, 0.050, 0.650), vec3(0.950, 0.300, 0.600), vec3(0.300, 0.850, 0.950), vec3(0.900, 1.000, 1.000),  // 12 Neon
+    vec3(0.020, 0.010, 0.000), vec3(0.200, 0.080, 0.020), vec3(0.450, 0.200, 0.060), vec3(0.720, 0.400, 0.150), vec3(0.920, 0.660, 0.350), vec3(1.000, 0.920, 0.750),  // 13 Copper
+    vec3(0.000, 0.000, 0.250), vec3(0.000, 0.000, 1.000), vec3(0.000, 1.000, 1.000), vec3(0.000, 1.000, 0.000), vec3(1.000, 1.000, 0.000), vec3(1.000, 0.000, 0.000)  // 14 Rainbow
+);
+vec3 stops6(int pal, float t) {
+    float x = clamp(t, 0.0, 1.0) * 5.0;
+    int i = min(int(x), 4);
+    int b = (pal - 6) * 6;
+    return mix(STOPS[b + i], STOPS[b + i + 1], x - float(i));
+}
 vec3 colormap(float t) {
     t = clamp(t, 0.0, 1.0);
+    if (pc.palette >= 6 && pc.palette < 6 + STOP_PALETTES) return stops6(pc.palette, t);
     if (pc.palette == 1) return clamp(viridis(t), 0.0, 1.0);
     if (pc.palette == 2) return clamp(inferno(t), 0.0, 1.0);
     if (pc.palette == 3) return clamp(magma(t), 0.0, 1.0);

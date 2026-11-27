@@ -7,7 +7,8 @@ import androidx.compose.ui.graphics.Color
  * Order must match the shader's palette index.
  */
 enum class Palette(val label: String) {
-    Turbo("Turbo"), Viridis("Viridis"), Inferno("Inferno"), Magma("Magma"), Classic("Classique"), Gray("Niveaux de gris");
+    Turbo("Turbo"), Viridis("Viridis"), Inferno("Inferno"), Magma("Magma"), Classic("Classique"), Gray("Niveaux de gris"),
+    Plasma("Plasma"), Ocean("Océan"), Fire("Feu"), Aurora("Aurore"), Phosphor("Phosphore"), Ice("Glace"), Neon("Néon"), Copper("Cuivre"), Rainbow("Arc-en-ciel");
 
     fun color(t: Float): Color {
         val x = t.coerceIn(0f, 1f).toDouble()
@@ -18,6 +19,7 @@ enum class Palette(val label: String) {
             Magma -> poly6(x, MAGMA)
             Classic -> classic(x)
             Gray -> doubleArrayOf(x, x, x)
+            else -> stops6(STOPS[ordinal - Plasma.ordinal], x)
         }
         return Color(rgb[0].toFloat().coerceIn(0f, 1f), rgb[1].toFloat().coerceIn(0f, 1f), rgb[2].toFloat().coerceIn(0f, 1f))
     }
@@ -53,6 +55,26 @@ enum class Palette(val label: String) {
             val f = x - i
             return DoubleArray(3) { k[i][it] + (k[i + 1][it] - k[i][it]) * f }
         }
+
+        /** 6 evenly spaced stops per palette, same as STOPS in common.glsl */
+        private fun stops6(k: Array<DoubleArray>, t: Double): DoubleArray {
+            val x = t * 5.0
+            val i = minOf(x.toInt(), 4)
+            val f = x - i
+            return DoubleArray(3) { k[i][it] + (k[i + 1][it] - k[i][it]) * f }
+        }
+
+        private val STOPS = arrayOf(
+            arrayOf(doubleArrayOf(0.050, 0.030, 0.528), doubleArrayOf(0.417, 0.000, 0.658), doubleArrayOf(0.693, 0.165, 0.565), doubleArrayOf(0.881, 0.393, 0.383), doubleArrayOf(0.988, 0.652, 0.211), doubleArrayOf(0.940, 0.975, 0.131)), // Plasma,
+            arrayOf(doubleArrayOf(0.000, 0.020, 0.080), doubleArrayOf(0.000, 0.100, 0.300), doubleArrayOf(0.000, 0.330, 0.550), doubleArrayOf(0.050, 0.620, 0.700), doubleArrayOf(0.450, 0.880, 0.850), doubleArrayOf(0.950, 1.000, 1.000)), // Océan,
+            arrayOf(doubleArrayOf(0.000, 0.000, 0.000), doubleArrayOf(0.300, 0.000, 0.000), doubleArrayOf(0.700, 0.100, 0.000), doubleArrayOf(0.950, 0.400, 0.000), doubleArrayOf(1.000, 0.780, 0.200), doubleArrayOf(1.000, 1.000, 0.850)), // Feu,
+            arrayOf(doubleArrayOf(0.020, 0.000, 0.060), doubleArrayOf(0.200, 0.020, 0.350), doubleArrayOf(0.100, 0.350, 0.550), doubleArrayOf(0.050, 0.700, 0.450), doubleArrayOf(0.550, 0.950, 0.400), doubleArrayOf(0.950, 1.000, 0.850)), // Aurore,
+            arrayOf(doubleArrayOf(0.000, 0.020, 0.000), doubleArrayOf(0.000, 0.150, 0.030), doubleArrayOf(0.020, 0.350, 0.080), doubleArrayOf(0.100, 0.620, 0.150), doubleArrayOf(0.400, 0.900, 0.350), doubleArrayOf(0.850, 1.000, 0.800)), // Phosphore,
+            arrayOf(doubleArrayOf(0.000, 0.000, 0.030), doubleArrayOf(0.020, 0.060, 0.200), doubleArrayOf(0.080, 0.220, 0.480), doubleArrayOf(0.250, 0.500, 0.800), doubleArrayOf(0.600, 0.820, 0.970), doubleArrayOf(1.000, 1.000, 1.000)), // Glace,
+            arrayOf(doubleArrayOf(0.020, 0.000, 0.050), doubleArrayOf(0.250, 0.000, 0.400), doubleArrayOf(0.700, 0.050, 0.650), doubleArrayOf(0.950, 0.300, 0.600), doubleArrayOf(0.300, 0.850, 0.950), doubleArrayOf(0.900, 1.000, 1.000)), // Néon,
+            arrayOf(doubleArrayOf(0.020, 0.010, 0.000), doubleArrayOf(0.200, 0.080, 0.020), doubleArrayOf(0.450, 0.200, 0.060), doubleArrayOf(0.720, 0.400, 0.150), doubleArrayOf(0.920, 0.660, 0.350), doubleArrayOf(1.000, 0.920, 0.750)), // Cuivre,
+            arrayOf(doubleArrayOf(0.000, 0.000, 0.250), doubleArrayOf(0.000, 0.000, 1.000), doubleArrayOf(0.000, 1.000, 1.000), doubleArrayOf(0.000, 1.000, 0.000), doubleArrayOf(1.000, 1.000, 0.000), doubleArrayOf(1.000, 0.000, 0.000)), // Arc-en-ciel,
+        )
 
         private val VIRIDIS = arrayOf(
             doubleArrayOf(0.2777273272234177, 0.005407344544966578, 0.3340998053353061),
