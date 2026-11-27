@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1152 110" width="1152" height="110" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+<circle cx="48.0" cy="36" r="30" fill="#B8C4FF"/>
+<text x="48.0" y="100" font-size="16" fill="#8b949e" text-anchor="middle">Indigo</text>
+<circle cx="144.0" cy="36" r="30" fill="#FFB86E"/>
+<text x="144.0" y="100" font-size="16" fill="#8b949e" text-anchor="middle">Ambre</text>
+<circle cx="240.0" cy="36" r="30" fill="#7DD8C6"/>
+<text x="240.0" y="100" font-size="16" fill="#8b949e" text-anchor="middle">Menthe</text>
+<circle cx="336.0" cy="36" r="30" fill="#FFB0CB"/>
+<text x="336.0" y="100" font-size="16" fill="#8b949e" text-anchor="middle">Rose</text>
+<circle cx="432.0" cy="36" r="30" fill="#9ECAFF"/>
+<text x="432.0" y="100" font-size="16" fill="#8b949e" text-anchor="middle">Ciel</text>
+<circle cx="528.0" cy="36" r="30" fill="#BFD66F"/>
+<text x="528.0" y="100" font-size="16" fill="#8b949e" text-anchor="middle">Lime</text>
+<circle cx="624.0" cy="36" r="30" fill="#D0BCFF"/>
+<text x="624.0" y="100" font-size="16" fill="#8b949e" text-anchor="middle">Violet</text>
+<circle cx="720.0" cy="36" r="30" fill="#FFB5A0"/>
+<text x="720.0" y="100" font-size="16" fill="#8b949e" text-anchor="middle">Corail</text>
+<circle cx="816.0" cy="36" r="30" fill="#4FD8EB"/>
+<text x="816.0" y="100" font-size="16" fill="#8b949e" text-anchor="middle">Turquoise</text>
+<circle cx="912.0" cy="36" r="30" fill="#E9C349"/>
+<text x="912.0" y="100" font-size="16" fill="#8b949e" text-anchor="middle">Or</text>
+<circle cx="1008.0" cy="36" r="30" fill="#78DC77"/>
+<text x="1008.0" y="100" font-size="16" fill="#8b949e" text-anchor="middle">Vert</text>
+<circle cx="1104.0" cy="36" r="30" fill="#C6C6D0"/>
+<text x="1104.0" y="100" font-size="16" fill="#8b949e" text-anchor="middle">Graphite</text>
+</svg>

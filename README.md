@@ -1,17 +1,22 @@
 <div align="center">
 
-# 📻 LittleSDR
+<img src="docs/logo.svg" alt="Logo LittleSDR" width="128">
 
-**Un récepteur SDR pour Android, pensé pour le tactile, avec son propre moteur radio en Rust.**
-SDR, radio numérique DAB+ et DRM, images satellite Meteor, avions en ADS-B : une seule app, une interface par usage.
+# LittleSDR
+
+**Un récepteur SDR pour Android, pensé pour le tactile, avec son propre moteur radio en Rust.**<br>
+SDR, radio numérique DAB+ et DRM, avions en ADS-B, images satellite Meteor : une seule app, une interface par usage.
+
+[![Dernière version](https://img.shields.io/github/v/release/Radinux/LittleSDR?label=version&color=FFB86E&style=for-the-badge)](../../releases/latest)
+[![Téléchargements](https://img.shields.io/github/downloads/Radinux/LittleSDR/total?label=t%C3%A9l%C3%A9chargements&color=7DD8C6&style=for-the-badge)](../../releases)
 
 ![Android 9+](https://img.shields.io/badge/Android-9%2B-3DDC84?logo=android&logoColor=white)
 ![Kotlin](https://img.shields.io/badge/Kotlin-Compose-7F52FF?logo=kotlin&logoColor=white)
 ![Rust](https://img.shields.io/badge/Moteur-Rust-B7410E?logo=rust&logoColor=white)
 ![Vulkan](https://img.shields.io/badge/Rendu-Vulkan-AC162C?logo=vulkan&logoColor=white)
-![Licence GPL-3.0](https://img.shields.io/badge/Licence-GPL--3.0--or--later-blue)
+![Licence GPL-3.0](https://img.shields.io/badge/Licence-GPL--3.0--or--later-4FD8EB)
 
-<img src="docs/screenshot-main.jpg" alt="LittleSDR en paysage : spectre et waterfall à gauche, panneau de contrôle à onglets à droite" width="860">
+<img src="docs/screens/sdr.jpg" alt="LittleSDR en paysage : spectre et waterfall de la bande 20 m à gauche, panneau de contrôle à droite" width="880">
 
 </div>
 
@@ -19,31 +24,81 @@ SDR, radio numérique DAB+ et DRM, images satellite Meteor, avions en ADS-B : un
 
 LittleSDR est une app Android de réception radio logicielle. Tout le traitement du signal, les décodeurs, la sortie son et l'affichage du spectre viennent d'un **moteur écrit en Rust** (`engine/`), sans C++ ; l'interface est en Kotlin / Jetpack Compose Material 3.
 
-## ✨ Fonctionnalités
+## ✨ Une interface par usage
 
-Un bouton change d'interface selon l'usage :
+Un bouton, toujours en haut à droite, change d'interface et de récepteur.
 
-**SDR** : l'écran complet
-- Démodulation NFM, WFM (stéréo, RDS), AM, DSB, USB, LSB, CW, IQ brut
-- Spectre et waterfall en **Vulkan**, lissés, six palettes ; zoom, joystick d'accord
+### 📈 SDR : l'écran complet
+
+- Démodulation NFM, WFM (stéréo, RDS), AM, DSB, USB, LSB, CW, IQ brut ; NB, réduction de bruit (NR) et notch automatique
+- Spectre et waterfall en **Vulkan**, lissés quand on dézoome, **15 palettes** ; zoom au doigt, joystick d'accord
 - Plan de bandes coloré selon la région UIT, préréglages (FM, LW, MW, HF, CB, VHF, UHF, PMR446), mémoires
 - Horaires ondes courtes **EiBi**, RDS en FM
 - **FT8 / FT4** (liste et carte des liaisons), **morse** (tous les signaux CW d'une bande), **SSTV** (ISS…)
-- **Enregistrement** du son ou de l'IQ (bande entière, autour de la fréquence, ou largeur au choix)
+- **Enregistrement** du son ou de l'IQ (bande entière, autour de la fréquence, ou largeur au choix), relecture des fichiers IQ
 
-**DAB+** : un autoradio
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 📻 DAB+ : un autoradio
+
+<img src="docs/screens/dab.jpg" alt="Autoradio DAB+ : logo de la station, nom, texte défilant et stations du multiplex en tuiles">
+
 - Grand afficheur : logo ou diaporama de la station, nom, texte défilant, barres de signal
 - Boutons ⏮ ▶ ⏭, stations en tuiles, **recherche par nom** dans tous les multiplex entendus
 - Recherche automatique des multiplex (bande III, 5A à 13F)
-- **Suivi de station (AF)** quand on se déplace, puis **repli FM** si la station n'est plus en DAB
+- **Suivi de station (AF)** en déplacement, puis **repli FM** si la station quitte le DAB
 - Logos des stations (annuaire radio-browser.info, Wi-Fi seulement par défaut)
-- Portrait ou paysage (support de voiture)
 
-**DRM** : radio numérique en ondes courtes (xHE-AAC), bandes de radiodiffusion, gain et bias-tee à portée de main
+</td>
+<td width="50%" valign="top">
 
-**LRPT** : images des satellites météo Meteor-M (137 MHz), affichées pendant le passage
+### 🌍 DRM : la radio numérique en ondes courtes
 
-**ADS-B** : les avions autour de toi (1090 MHz) sur une carte, avec leur trace colorée selon l'altitude, cercles de distance depuis ton locator ; vol, départ et arrivée, compagnie, appareil et sa photo, altitude, vitesse, cap, vario, transpondeur et urgences
+<img src="docs/screens/drm.jpg" alt="Récepteur DRM : China National Radio 1 décodée, spectre de la bande, émissions à l'antenne">
+
+- Son **AAC, HE-AAC et xHE-AAC** : RRI, CNR et la plupart des radios DRM
+- Pertes masquées comme en DAB+ (dernière trame rejouée en fondu)
+- La **grille officielle des émissions** (drm.org), mise à jour chaque semaine : « À l'antenne maintenant », « Plus tard »
+- Stations reçues retenues, spectre de la bande, accord au pas de 5 kHz
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### ✈️ ADS-B : les avions autour de toi
+
+<img src="docs/screens/adsb.jpg" alt="Carte ADS-B : deux avions avec leur indicatif et niveau de vol, liste avec départ et arrivée">
+
+- Les avions (1090 MHz) sur une carte, trace colorée selon l'altitude, cercles de distance depuis ton locator
+- Vol, départ et arrivée, compagnie, appareil et sa photo
+- Altitude, vitesse, cap, vario, transpondeur et urgences
+
+</td>
+<td width="50%" valign="top">
+
+### 🛰️ LRPT : les satellites météo
+
+- Images des satellites **Meteor-M** (137 MHz), affichées ligne par ligne pendant le passage
+- QPSK et OQPSK, image enregistrée en PNG
+
+### 🎨 À tes couleurs
+
+- **12 couleurs d'accent**, ou celles de ton fond d'écran (Material You)
+- Thème sombre, clair ou celui du système
+- Portrait et paysage partout (support de voiture)
+
+<img src="docs/accents.svg" alt="Les 12 couleurs d'accent" width="100%">
+
+</td>
+</tr>
+</table>
+
+### 🌈 Palettes du waterfall
+
+<img src="docs/palettes.svg" alt="Les 15 palettes du waterfall : Turbo, Viridis, Inferno, Magma, Classique, Niveaux de gris, Plasma, Océan, Feu, Aurore, Phosphore, Glace, Néon, Cuivre, Arc-en-ciel" width="760">
 
 ## 📡 Récepteurs
 
@@ -131,7 +186,8 @@ Rust                                     engine/   (desktop/ : prototype Linux, 
 - [KiwiSDR](http://kiwisdr.com/public/) : annuaire public des récepteurs (via rx.linkfanel.net)
 - [EiBi](http://www.eibispace.de/) : horaires des stations ondes courtes (usage non commercial)
 - [Natural Earth](https://www.naturalearthdata.com/) : fond de carte (domaine public)
-- Palettes Viridis, Inferno, Magma : approximations polynomiales de Matt Zucker ; Turbo : Google
+- Palettes Viridis, Inferno, Magma : approximations polynomiales de Matt Zucker ; Turbo : Google ; Plasma : d'après matplotlib
+- [drm.org](https://www.drm.org/) : grille des émissions DRM
 
 ## 📄 Licence
 
