@@ -7,13 +7,15 @@
 use crate::source::{self, Source};
 use serde_json::{json, Value};
 
-pub const SOURCES: [&str; 8] = ["RTL-SDR", "Airspy", "Airspy HF+", "SDRplay", "RTL-TCP", "SpyServer", "KiwiSDR", "Fichier IQ"];
+pub const SOURCES: [&str; 9] = ["RTL-SDR", "Airspy", "Airspy HF+", "HackRF", "SDRplay", "RTL-TCP", "SpyServer", "KiwiSDR", "Fichier IQ"];
 
 /// Airspy R2 / Mini rates (the device keeps the closest it has: 2.5 / 10 MS/s on the R2,
 /// 3 / 6 MS/s on the Mini)
 pub const AIRSPY_RATES: [f64; 4] = [2.5e6, 3e6, 6e6, 10e6];
 /// Airspy HF+ rates (the closest the device has is used)
 pub const AIRSPYHF_RATES: [f64; 5] = [192e3, 256e3, 384e3, 768e3, 912e3];
+/// HackRF rates: 2 - 20 MS/s (8 and up avoid the ADC's weak spots; a phone copes up to ~10)
+pub const HACKRF_RATES: [f64; 7] = [2e6, 2.4e6, 4e6, 8e6, 10e6, 16e6, 20e6];
 /// SDRplay rates: 2 - 10 MS/s from the ADC, below with the API's decimation
 pub const SDRPLAY_RATES: [f64; 9] = [250e3, 500e3, 1e6, 2e6, 3e6, 4e6, 6e6, 8e6, 10e6];
 
@@ -53,6 +55,9 @@ pub struct SourceSettings {
     pub sdrplay_rate: f64,
     pub sdrplay_gain: f32,
     pub sdrplay_agc: bool,
+    pub hackrf_rate: f64,
+    pub hackrf_gain: f32,
+    pub hackrf_amp: bool,
 }
 
 impl Default for SourceSettings {
@@ -82,6 +87,9 @@ impl Default for SourceSettings {
             sdrplay_rate: 2e6,
             sdrplay_gain: 20.0,
             sdrplay_agc: true,
+            hackrf_rate: 8e6,
+            hackrf_gain: 36.0,
+            hackrf_amp: false,
         }
     }
 }
@@ -97,6 +105,7 @@ impl SourceSettings {
             "airspy_rate": self.airspy_rate, "airspy_gain": self.airspy_gain, "airspy_agc": self.airspy_agc,
             "hf_rate": self.hf_rate, "hf_gain": self.hf_gain, "hf_agc": self.hf_agc,
             "sdrplay_rate": self.sdrplay_rate, "sdrplay_gain": self.sdrplay_gain, "sdrplay_agc": self.sdrplay_agc,
+            "hackrf_rate": self.hackrf_rate, "hackrf_gain": self.hackrf_gain, "hackrf_amp": self.hackrf_amp,
         })
     }
 
@@ -130,6 +139,9 @@ impl SourceSettings {
             sdrplay_rate: f("sdrplay_rate", d.sdrplay_rate),
             sdrplay_gain: f("sdrplay_gain", d.sdrplay_gain as f64) as f32,
             sdrplay_agc: b("sdrplay_agc", d.sdrplay_agc),
+            hackrf_rate: f("hackrf_rate", d.hackrf_rate),
+            hackrf_gain: f("hackrf_gain", d.hackrf_gain as f64) as f32,
+            hackrf_amp: b("hackrf_amp", d.hackrf_amp),
         }
     }
 
@@ -143,6 +155,7 @@ impl SourceSettings {
             "Airspy" => self.airspy_rate,
             "Airspy HF+" => self.hf_rate,
             "SDRplay" => self.sdrplay_rate,
+            "HackRF" => self.hackrf_rate,
             _ => 0.0,
         }
     }
@@ -156,6 +169,7 @@ impl SourceSettings {
             "Airspy" if !self.airspy_agc => Some(self.airspy_gain),
             "Airspy HF+" if !self.hf_agc => Some(self.hf_gain),
             "SDRplay" if !self.sdrplay_agc => Some(self.sdrplay_gain),
+            "HackRF" => Some(self.hackrf_gain),
             _ => None,
         }
     }
@@ -232,6 +246,15 @@ pub fn menu(kind: &str, s: &SourceSettings, i: &SourceInfo, usb_present: bool) -
             w.push(check("hf_agc", "AGC du récepteur", "agc", s.hf_agc));
             w.push(slider("hf_gain", "Gain (atténuateur, pas de 6 dB)", "gain", s.hf_gain, 0.0, 48.0, 6.0, "%.0f dB", s.hf_agc));
         }
+        "HackRF" => {
+            if !usb_present && cfg!(target_os = "android") {
+                w.push(info("Branchez le HackRF (USB OTG) et autorisez l'accès."));
+            }
+            w.push(combo("hackrf_rate", "Débit", "rate", nearest(&HACKRF_RATES, s.hackrf_rate), HACKRF_RATES.iter().map(|&r| rate_label(r)).collect()));
+            w.push(slider("hackrf_gain", "Gain (LNA et VGA)", "gain", s.hackrf_gain, 0.0, source::hackrf::MAX_GAIN, 2.0, "%.0f dB", false));
+            w.push(check("hackrf_amp", "Préampli RF (+14 dB)", "amp", s.hackrf_amp));
+            w.push(check("bias_tee", "Alimentation d'antenne (3,3 V)", "bias_tee", s.bias_tee));
+        }
         "SDRplay" => {
             if cfg!(target_os = "android") {
                 w.push(info("SDRplay ne fournit pas son pilote pour Android : disponible sur Linux seulement."));
@@ -283,6 +306,7 @@ pub enum Change {
     Rate(f64),
     Gain(Option<f32>),
     BiasTee(bool),
+    Amp(bool),
     DirectSampling(u8),
     /// Needs the source to be opened again (address, file)
     Restart,
@@ -336,6 +360,18 @@ pub fn apply(kind: &str, s: &mut SourceSettings, i: &SourceInfo, id: &str, b: bo
         "hf_gain" => {
             s.hf_gain = ((f / 6.0).round() * 6.0).clamp(0.0, 48.0);
             Change::Gain(s.gain(kind))
+        }
+        "hackrf_rate" => {
+            s.hackrf_rate = HACKRF_RATES[(idx.max(0) as usize).min(HACKRF_RATES.len() - 1)];
+            Change::Rate(s.hackrf_rate)
+        }
+        "hackrf_gain" => {
+            s.hackrf_gain = ((f / 2.0).round() * 2.0).clamp(0.0, source::hackrf::MAX_GAIN);
+            Change::Gain(s.gain(kind))
+        }
+        "hackrf_amp" => {
+            s.hackrf_amp = b;
+            Change::Amp(b)
         }
         "sdrplay_agc" => {
             s.sdrplay_agc = b;
@@ -416,6 +452,12 @@ pub fn open(kind: &str, s: &SourceSettings, usb_fd: Option<i32>) -> Result<(Box<
                 return Err("aucun Airspy HF+ (USB)".into());
             }
             Box::new(source::airspy::AirspyHf { fd: usb_fd })
+        }
+        "HackRF" => {
+            if cfg!(target_os = "android") && usb_fd.is_none() {
+                return Err("aucun HackRF (USB)".into());
+            }
+            Box::new(source::hackrf::HackRf { fd: usb_fd, amp: s.hackrf_amp })
         }
         "SDRplay" => Box::new(source::sdrplay::SdrPlay),
         "RTL-TCP" => {

@@ -247,6 +247,7 @@ impl Service {
                     Change::Rate(r) => ctl(SourceCtl::Rate(r as u32)),
                     Change::Gain(g) => ctl(SourceCtl::Gain(g)),
                     Change::BiasTee(on) => ctl(SourceCtl::BiasTee(on)),
+                    Change::Amp(on) => ctl(SourceCtl::Amp(on)),
                     Change::DirectSampling(m) => ctl(SourceCtl::DirectSampling(m)),
                     Change::Restart => restart = i.running.is_some(),
                     Change::None => {}
@@ -329,7 +330,7 @@ impl Service {
             center: i.center as u64,
             gain: i.settings.gain(&kind),
             direct_sampling: if kind == "RTL-SDR" { i.settings.direct_sampling } else { 0 },
-            bias_tee: i.settings.bias_tee && matches!(kind.as_str(), "RTL-SDR" | "RTL-TCP" | "Airspy" | "SDRplay"),
+            bias_tee: i.settings.bias_tee && matches!(kind.as_str(), "RTL-SDR" | "RTL-TCP" | "Airspy" | "HackRF" | "SDRplay"),
         };
         let (tx, rx) = sync_channel::<IqBlock>(64);
         let src = source::spawn(src, cfg, tx);
@@ -832,7 +833,7 @@ fn whole(v: Value) -> Value {
 
 /// Receivers that can take the exact rate DAB / ADS-B want (others are resampled)
 fn own_rate_source(kind: &str) -> bool {
-    matches!(kind, "RTL-SDR" | "RTL-TCP" | "SDRplay")
+    matches!(kind, "RTL-SDR" | "RTL-TCP" | "HackRF" | "SDRplay")
 }
 
 /// Hardware centre for a frequency: off the DC spike of wide receivers

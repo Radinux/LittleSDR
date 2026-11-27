@@ -79,7 +79,7 @@ impl Source for RtlTcp {
                         cmd(&mut s, 0x09, m as u32).map_err(io)?;
                         cmd(&mut s, 0x01, center as u32).map_err(io)?;
                     }
-                    Ok(SourceCtl::Seek(_) | SourceCtl::Pause(_) | SourceCtl::Loop(_)) => {}
+                    Ok(SourceCtl::Seek(_) | SourceCtl::Pause(_) | SourceCtl::Loop(_) | SourceCtl::Amp(_)) => {}
                     Ok(SourceCtl::Stop) | Err(TryRecvError::Disconnected) => return Ok(()),
                     Err(TryRecvError::Empty) => break,
                 }

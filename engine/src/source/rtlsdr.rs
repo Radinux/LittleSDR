@@ -192,7 +192,7 @@ impl Source for RtlSdr {
                     // The tuner is re-enabled / bypassed: the frequency must be set again
                     rtlsdr_set_center_freq(dev.0, shared.center.load(Ordering::Relaxed) as u32);
                 },
-                Ok(SourceCtl::Seek(_) | SourceCtl::Pause(_) | SourceCtl::Loop(_)) => {}
+                Ok(SourceCtl::Seek(_) | SourceCtl::Pause(_) | SourceCtl::Loop(_) | SourceCtl::Amp(_)) => {}
                 Ok(SourceCtl::Stop) | Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => {}
             }

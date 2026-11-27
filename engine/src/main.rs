@@ -1,6 +1,6 @@
 //! Command-line LittleSDR: listen with the engine, change settings live.
 //!
-//!   littlesdr [--usb [N] | --rtltcp HOST:PORT | --kiwi HOST[:PORT] | --spy HOST[:PORT] | --file IQ.wav [--loop] [--center HZ]] [--freq 96.5M] [--rate 2.4M]
+//!   littlesdr [--usb [N] | --rtltcp HOST:PORT | --kiwi HOST[:PORT] | --spy HOST[:PORT] | --hackrf [--amp] | --file IQ.wav [--loop] [--center HZ]] [--freq 96.5M] [--rate 2.4M]
 //!             [--mode wfm|nfm|am|usb|lsb|cw|lrpt|dab|drm|adsb] [--service NAME] [--gain DB|auto] [--ds 0|1|2] [--bias-tee]
 //!             [--wav out.wav] [--out DIR (pictures and recordings; default ~/Images/LittleSDR, ~/Musique/LittleSDR)] [--no-audio] [--verbose] [--script "3s rate 1.024M; 6s quit"]
 //!
@@ -115,6 +115,8 @@ fn main() {
     let mut out: Option<String> = None;
     let mut kiwi: Option<String> = None;
     let mut spy: Option<String> = None;
+    let mut hackrf = false;
+    let mut amp = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--usb" => usb = Some(args.next().and_then(|v| v.parse().ok()).unwrap_or(0)),
@@ -135,6 +137,8 @@ fn main() {
             "--out" => out = args.next(),
             "--kiwi" => kiwi = args.next(),
             "--spy" | "--spyserver" => spy = args.next(),
+            "--hackrf" => hackrf = true,
+            "--amp" => amp = true,
             "--no-audio" => audio = false,
             "--verbose" | "-v" => verbose = true,
             "--service" => service = args.next(),
@@ -179,6 +183,7 @@ fn main() {
     }
     let src: Box<dyn Source> = match (&tcp, usb) {
         _ if file_info.is_some() => Box::new(file_info.take().unwrap()),
+        _ if hackrf => Box::new(source::hackrf::HackRf { fd: None, amp }),
         _ if spy.is_some() => Box::new(source::spyserver::SpyServer::new(spy.as_deref().unwrap())),
         _ if kiwi.is_some() => {
             rate = 12_000.0;

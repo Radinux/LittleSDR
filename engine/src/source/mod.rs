@@ -6,6 +6,7 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::thread::JoinHandle;
 
 pub mod airspy;
+pub mod hackrf;
 pub mod kiwisdr;
 pub mod sdrplay;
 pub mod rtltcp;
@@ -40,6 +41,8 @@ pub enum SourceCtl {
     DirectSampling(u8),
     /// 4.5 V on the antenna input, for active antennas (loops, LNAs)
     BiasTee(bool),
+    /// HackRF: the RF preamp (+14 dB)
+    Amp(bool),
     /// Files: go to this many seconds from the start
     Seek(f64),
     /// Files: pause / resume
