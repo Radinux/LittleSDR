@@ -22,7 +22,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
@@ -38,8 +40,8 @@ import androidx.compose.ui.unit.dp
 
 /*
  * Neumorphism: the buttons look moulded in the panel. Outside, a soft shadow down-right and a
- * faint light up-left lift them; inside, the same light the other way round hollows them out
- * (shadow under the top-left edge, light along the bottom-right one).
+ * faint light up-left lift them; inside, past a flat rim, the same light the other way round
+ * hollows them out (shadow under the top-left edge of the dip, light along the bottom-right one).
  *
  * The Material buttons below are drop-in replacements (same parameters): only the import
  * changes. The touch target keeps its 48 dp (around the button, as Material does), but the
@@ -48,10 +50,11 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Neumorphic relief on a component of this [shape]: raised outside ([raised]), hollow inside.
- * Drawn around and over the component (the inner shadow lies on its edges, under nothing).
+ * The hollow starts [inset] inside the edge: a flat rim, then the dip. Drawn around and over
+ * the component (the inner shadow lies on its face, under nothing).
  */
 @Composable
-fun Modifier.neu(shape: Shape, raised: Boolean = true, depth: Dp = 2.5.dp): Modifier {
+fun Modifier.neu(shape: Shape, raised: Boolean = true, depth: Dp = 2.5.dp, inset: Dp = 3.5.dp): Modifier {
     val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val shadow = Color.Black.copy(alpha = if (dark) 0.55f else 0.20f).toArgb()
     val light = Color.White.copy(alpha = if (dark) 0.10f else 0.90f).toArgb()
@@ -60,13 +63,20 @@ fun Modifier.neu(shape: Shape, raised: Boolean = true, depth: Dp = 2.5.dp): Modi
     return drawWithCache {
         val d = depth.toPx()
         val path = Path().apply { addOutline(shape.createOutline(size, layoutDirection, this@drawWithCache)) }
-        // Everything outside the shape: shifted, its blurred edge falls inside (inner shadow)
+        // The hollow: the same shape, a rim's width smaller all round (the whole face if too small)
+        val i = inset.toPx().coerceAtMost(minOf(size.width, size.height) / 4f)
+        val hollow = Path().apply {
+            addOutline(shape.createOutline(Size(size.width - 2 * i, size.height - 2 * i), layoutDirection, this@drawWithCache))
+            translate(Offset(i, i))
+        }
+        // Everything outside the hollow: shifted, its blurred edge falls inside (inner shadow)
         val frame = Path().apply {
             fillType = PathFillType.EvenOdd
             addRect(Rect(-size.width, -size.height, size.width * 2, size.height * 2))
-            addPath(path)
+            addPath(hollow)
         }
         val p = path.asAndroidPath()
+        val h = hollow.asAndroidPath()
         val f = frame.asAndroidPath()
         fun paint(argb: Int, blur: Float) = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
             color = argb
@@ -88,7 +98,7 @@ fun Modifier.neu(shape: Shape, raised: Boolean = true, depth: Dp = 2.5.dp): Modi
             drawIntoCanvas { c ->
                 val nc = c.nativeCanvas
                 nc.save()
-                nc.clipPath(p)
+                nc.clipPath(h)
                 nc.save(); nc.translate(d, d); nc.drawPath(f, inShadow); nc.restore()
                 nc.save(); nc.translate(-d, -d); nc.drawPath(f, inLight); nc.restore()
                 nc.restore()
