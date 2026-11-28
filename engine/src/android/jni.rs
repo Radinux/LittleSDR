@@ -232,6 +232,7 @@ json_get!(Java_app_littlesdr_engine_NativeBridge_lrptJson, lrpt_json);
 json_get!(Java_app_littlesdr_engine_NativeBridge_lrptSave, lrpt_save);
 json_set!(Java_app_littlesdr_engine_NativeBridge_lrptSet, lrpt_set);
 json_get!(Java_app_littlesdr_engine_NativeBridge_adsbJson, adsb_json);
+json_get!(Java_app_littlesdr_engine_NativeBridge_vorJson, vor_json);
 json_set!(Java_app_littlesdr_engine_NativeBridge_adsbSet, adsb_set);
 
 #[no_mangle]

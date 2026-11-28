@@ -1,5 +1,8 @@
 package app.littlesdr.ui
 
+import app.littlesdr.engine.VorStations
+import app.littlesdr.ui.components.VorCompass
+import app.littlesdr.ui.components.VorPanel
 import app.littlesdr.ui.theme.pillBorder
 import android.content.res.Configuration
 import androidx.compose.foundation.layout.heightIn
@@ -152,6 +155,8 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
     val lrpt by vm.lrpt.collectAsStateWithLifecycle()
     val lrptImage by vm.lrptImage.collectAsStateWithLifecycle()
     val adsb by vm.adsb.collectAsStateWithLifecycle()
+    val vor by vm.vor.collectAsStateWithLifecycle()
+    val vorStations by vm.vorStations.collectAsStateWithLifecycle()
     val adsbSelected by vm.adsbSelected.collectAsStateWithLifecycle()
     val adsbRoutes by vm.adsbRoutes.collectAsStateWithLifecycle()
     val airframe by vm.airframe.collectAsStateWithLifecycle()
@@ -310,6 +315,10 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                         AppSpace.LRPT -> LrptImagePanel(lrptImage, lrpt, playing, Modifier.weight(0.62f).fillMaxWidth())
                         AppSpace.DRM -> player(Modifier.weight(0.66f).fillMaxWidth())
                         AppSpace.ADSB -> AdsbMap(adsb, adsbSelected, playing, vm::selectAircraft, Modifier.weight(1f).fillMaxWidth())
+                        AppSpace.VOR -> VorCompass(
+                            vor, VorStations.at(vorStations, stateHolder.value.vfoFrequency, vor.ident, vm.operatorPosition()), playing,
+                            Modifier.weight(0.62f).fillMaxWidth(),
+                        )
                         AppSpace.DAB -> Unit
                     }
                     }
@@ -389,6 +398,11 @@ fun MainScreen(vm: RadioViewModel, onOpenSettings: () -> Unit, onOpenFt8: () -> 
                             if (space != AppSpace.SDR) {
                                 when {
                                     space == AppSpace.ADSB -> AdsbPanel(adsb, adsbSelected, adsbRoutes, airframe, airframePhoto, onSelect = vm::selectAircraft, onClear = vm::clearAircraft)
+                                    space == AppSpace.VOR -> {
+                                        val me = vm.operatorPosition()
+                                        val f = stateHolder.value.vfoFrequency
+                                        VorPanel(f, vor, playing, VorStations.at(vorStations, f, vor.ident, me), vorStations, me, onTune = vm::tune)
+                                    }
                                     else -> LrptPanel(
                                         frequency = stateHolder.value.vfoFrequency, l = lrpt,
                                         onTune = vm::tune, onOqpsk = vm::setLrptOqpsk, onSave = vm::saveLrpt,

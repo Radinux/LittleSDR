@@ -79,6 +79,12 @@ Un bouton, toujours en haut à droite, change d'interface et de récepteur.
 </td>
 <td width="50%" valign="top">
 
+### 🧭 VOR : les balises de radionavigation
+
+- Le radial sur lequel tu te trouves (108 – 117,95 MHz), sur une rose des vents, et le cap vers la balise
+- L'indicatif en morse décodé, la balise reconnue parmi les 3 600 VOR du monde (OurAirports), sa distance
+- Les balises les plus proches de ton locator, à toucher pour s'y accorder
+
 ### 🛰️ LRPT : les satellites météo
 
 - Images des satellites **Meteor-M** (137 MHz), affichées ligne par ligne pendant le passage
@@ -187,6 +193,7 @@ Rust                                     engine/   (desktop/ : prototype Linux, 
 - [KiwiSDR](http://kiwisdr.com/public/) : annuaire public des récepteurs (via rx.linkfanel.net)
 - [EiBi](http://www.eibispace.de/) : horaires des stations ondes courtes (usage non commercial)
 - [Natural Earth](https://www.naturalearthdata.com/) : fond de carte (domaine public)
+- [OurAirports](https://ourairports.com/data/) : liste des balises VOR (domaine public)
 - Palettes Viridis, Inferno, Magma : approximations polynomiales de Matt Zucker ; Turbo : Google ; Plasma : d'après matplotlib
 - [drm.org](https://www.drm.org/) : grille des émissions DRM
 

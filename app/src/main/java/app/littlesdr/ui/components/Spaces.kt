@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Flight
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Public
@@ -70,7 +71,8 @@ enum class AppSpace(val label: String, val icon: ImageVector) {
     DAB("DAB+", Icons.Default.Radio),
     LRPT("LRPT", Icons.Default.SatelliteAlt),
     DRM("DRM", Icons.Default.Public),
-    ADSB("ADS-B", Icons.Default.Flight);
+    ADSB("ADS-B", Icons.Default.Flight),
+    VOR("VOR", Icons.Default.Explore);
 
     fun accepts(m: Mode): Boolean = when (this) {
         SDR -> !m.isDigital
@@ -78,10 +80,11 @@ enum class AppSpace(val label: String, val icon: ImageVector) {
         DRM -> m == Mode.DRM
         LRPT -> m == Mode.LRPT
         ADSB -> m == Mode.ADSB
+        VOR -> m == Mode.VOR
     }
 
     companion object {
-        val menuOrder = listOf(SDR, DAB, DRM, LRPT, ADSB)
+        val menuOrder = listOf(SDR, DAB, DRM, LRPT, ADSB, VOR)
     }
 }
 
@@ -237,7 +240,7 @@ fun LrptPanel(frequency: Double, l: LrptState, onTune: (Double) -> Unit, onOqpsk
 }
 
 @Composable
-private fun Stat(name: String, value: String) {
+internal fun Stat(name: String, value: String) {
     Row(Modifier.fillMaxWidth()) {
         Text(name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
         Text(value, style = MaterialTheme.typography.bodyMedium)

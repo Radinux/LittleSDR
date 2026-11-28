@@ -18,3 +18,4 @@ build.log
 *.keystore
 *.p12
 keystore.properties
+.kotlin/

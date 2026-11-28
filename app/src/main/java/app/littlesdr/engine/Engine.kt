@@ -19,10 +19,10 @@ import java.util.concurrent.Executors
 /** Demodulator modes; the ordinal is the engine's mode id (0-7 as SDR++, then ours). */
 enum class Mode(val label: String) {
     NFM("NFM"), WFM("WFM"), AM("AM"), DSB("DSB"), USB("USB"), CW("CW"), LSB("LSB"), RAW("RAW"),
-    DAB("DAB+"), DRM("DRM"), LRPT("LRPT"), ADSB("ADS-B");
+    DAB("DAB+"), DRM("DRM"), LRPT("LRPT"), ADSB("ADS-B"), VOR("VOR");
 
     /** Digital receivers: fixed channel, no bandwidth or squelch to set */
-    val isDigital: Boolean get() = this == DAB || this == DRM || this == LRPT || this == ADSB
+    val isDigital: Boolean get() = this == DAB || this == DRM || this == LRPT || this == ADSB || this == VOR
 
     /** Sensible bandwidth slider range (Hz) per mode. */
     val bandwidthRange: ClosedFloatingPointRange<Float>
@@ -38,6 +38,7 @@ enum class Mode(val label: String) {
             DRM -> 10_000f..10_000f
             LRPT -> 120_000f..120_000f
             ADSB -> 2_000_000f..2_000_000f
+            VOR -> 24_000f..24_000f
         }
 
     val isFm: Boolean get() = this == NFM || this == WFM
@@ -63,6 +64,7 @@ enum class Mode(val label: String) {
             DRM -> 5_000.0
             LRPT -> 100_000.0
             ADSB -> 1_000_000.0
+            VOR -> VOR_STEP
         }
 
     companion object {
@@ -278,6 +280,7 @@ object Engine {
     suspend fun lrptImage(): IntArray = call { NativeBridge.lrptImage() }
     suspend fun lrptSave(): List<String> = call { NativeBridge.lrptSave().lines().filter { it.isNotBlank() } }
     suspend fun adsb(): AdsbState = call { AdsbState.parse(NativeBridge.adsbJson()) }
+    suspend fun vor(): VorState = call { VorState.parse(NativeBridge.vorJson()) }
     fun adsbSet(key: String, value: Double) = post { NativeBridge.adsbSet(key, value) }
 
     suspend fun kiwiSetSite(hostPort: String, location: String) = call { NativeBridge.kiwiSetSite(hostPort, location) }

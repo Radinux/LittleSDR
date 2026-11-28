@@ -21,7 +21,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// The app's demodulator numbering (SDR++'s, kept): NFM, WFM, AM, DSB, USB, CW, LSB, RAW, then
-/// ours: DAB, DRM, LRPT, ADS-B
+/// ours: DAB, DRM, LRPT, ADS-B, VOR
 pub fn mode_of(i: i32) -> Mode {
     match i {
         0 => Mode::Nfm,
@@ -33,6 +33,7 @@ pub fn mode_of(i: i32) -> Mode {
         9 => Mode::Drm,
         10 => Mode::Lrpt,
         11 => Mode::Adsb,
+        12 => Mode::Vor,
         _ => Mode::Am,
     }
 }
@@ -554,7 +555,7 @@ impl Service {
         o["demod"]["stereoAllowed"] = json!(e.mode() == Mode::Wfm);
         o["demod"]["nbAllowed"] = json!(true);
         // Noise reduction and automatic notch work on the sound: analogue modes only
-        o["demod"]["nrAllowed"] = json!(!matches!(e.mode(), Mode::Lrpt | Mode::Dab | Mode::Drm | Mode::Adsb));
+        o["demod"]["nrAllowed"] = json!(!matches!(e.mode(), Mode::Lrpt | Mode::Dab | Mode::Drm | Mode::Adsb | Mode::Vor));
         o["demod"]["deempAllowed"] = json!(false);
         o["demod"]["ifnrAllowed"] = json!(false);
         o["fft"]["peakHold"] = json!(self.shared.hist.lock().unwrap().peak_hold);
@@ -796,6 +797,10 @@ impl Service {
     }
 
     /// ADS-B: aircraft in view, with their recent tracks (for the map)
+    pub fn vor_json(&self) -> String {
+        self.with_engine(|e| e.vor_json())
+    }
+
     pub fn adsb_json(&self) -> String {
         self.with_engine(|e| e.adsb_json(true))
     }

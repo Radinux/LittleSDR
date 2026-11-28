@@ -49,10 +49,12 @@ pub enum Mode {
     Drm,
     /// ADS-B / Mode S aircraft on 1090 MHz (no sound)
     Adsb,
+    /// VOR beacons (108 - 117.95 MHz): the radial, the Morse ident; AM sound
+    Vor,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 10] = [Mode::Wfm, Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Cw, Mode::Lrpt, Mode::Dab, Mode::Drm, Mode::Adsb];
+    pub const ALL: [Mode; 11] = [Mode::Wfm, Mode::Nfm, Mode::Am, Mode::Usb, Mode::Lsb, Mode::Cw, Mode::Lrpt, Mode::Dab, Mode::Drm, Mode::Adsb, Mode::Vor];
 
     pub fn parse(s: &str) -> Option<Mode> {
         match s.to_ascii_lowercase().as_str() {
@@ -66,6 +68,7 @@ impl Mode {
             "dab" | "dab+" => Some(Mode::Dab),
             "drm" => Some(Mode::Drm),
             "adsb" | "ads-b" | "1090" => Some(Mode::Adsb),
+            "vor" => Some(Mode::Vor),
             _ => None,
         }
     }
@@ -96,6 +99,8 @@ impl Mode {
             // up to 20 kHz channels (spectrum occupancy 5)
             Mode::Drm => 15_000.0,
             Mode::Adsb => 1_000_000.0,
+            // the 9960 Hz subcarrier +-480 Hz, with room
+            Mode::Vor => 14_000.0,
         }
     }
     /// The signal fills the captured band: tuned exactly (no offset from the DC spike)
@@ -119,7 +124,7 @@ impl Mode {
     /// Default channel bandwidth (Hz), None when it is fixed (digital modes)
     pub fn default_bandwidth(self) -> Option<f64> {
         match self {
-            Mode::Lrpt | Mode::Dab | Mode::Drm | Mode::Adsb => None,
+            Mode::Lrpt | Mode::Dab | Mode::Drm | Mode::Adsb | Mode::Vor => None,
             Mode::Wfm => Some(180_000.0),
             Mode::Nfm => Some(12_500.0),
             Mode::Am => Some(9_000.0),
@@ -242,6 +247,8 @@ enum Back {
     Drm(Box<crate::drm::DrmReceiver>),
     /// Silent: `rem` counts IF samples not yet turned into audio frames (x 48 kHz)
     Adsb { dec: Box<crate::adsb::AdsbDecoder>, rem: u64 },
+    /// `chan`: the VOR channel (+-12 kHz); `audio`: the ident and voice (300 - 3000 Hz) heard
+    Vor { chan: DecimFir<C32>, dec: Box<crate::vor::VorDecoder>, audio: DecimFir<f32>, carrier: f32 },
 }
 
 impl Back {
@@ -270,6 +277,12 @@ impl Back {
             Mode::Dab => Back::Dab(Box::new(DabReceiver::new())),
             Mode::Drm => Back::Drm(Box::new(crate::drm::DrmReceiver::new(ifr))),
             Mode::Adsb => Back::Adsb { dec: Box::new(crate::adsb::AdsbDecoder::new(ifr)), rem: 0 },
+            Mode::Vor => Back::Vor {
+                chan: DecimFir::new(lowpass(12_000.0 / ifr, 2_000.0 / ifr), 1),
+                dec: Box::new(crate::vor::VorDecoder::new()),
+                audio: DecimFir::new(lowpass(3_000.0 / ifr, 800.0 / ifr), 1),
+                carrier: 0.0,
+            },
         }
     }
 
@@ -319,6 +332,24 @@ impl Back {
                 out.extend(std::iter::repeat(Frame::default()).take((*rem / ifr) as usize));
                 *rem %= ifr;
             }
+            Back::Vor { chan, dec, audio, carrier } => {
+                let mut c = Vec::with_capacity(iq.len());
+                chan.process(iq, &mut c);
+                let env: Vec<f32> = c.iter().map(|z| z.norm_sqr().sqrt()).collect();
+                dec.process(&env);
+                // The sound: the modulation over the carrier, the 30 Hz and 9960 Hz left out
+                let mut m = Vec::with_capacity(env.len());
+                for &e in &env {
+                    if *carrier <= 0.0 {
+                        *carrier = e;
+                    }
+                    *carrier += (e - *carrier) * 2e-4;
+                    m.push((e - *carrier) / carrier.max(1e-6));
+                }
+                let mut a = Vec::with_capacity(m.len());
+                audio.process(&m, &mut a);
+                out.extend(a.into_iter().map(|v| Frame::mono((v * 1.5).clamp(-1.0, 1.0))));
+            }
         }
     }
 }
@@ -342,7 +373,7 @@ pub struct Engine {
     mode: Mode,
     freq: f64,
     offset: f64,
-    bandwidth: [f64; 10], // per mode, remembered across mode changes
+    bandwidth: [f64; 11], // per mode, remembered across mode changes
     pitch: f64,
     volume: f32,
     stereo: bool,
@@ -773,6 +804,7 @@ impl Engine {
             Mode::Dab => (-768_000.0, 768_000.0),
             Mode::Drm => (-5_000.0, 5_000.0),
             Mode::Adsb => (-1_000_000.0, 1_000_000.0),
+            Mode::Vor => (-12_000.0, 12_000.0),
         }
     }
 
@@ -887,7 +919,34 @@ impl Engine {
             Back::Dab(rx) => Some(rx.describe()),
             Back::Drm(rx) => Some(format!("{} | {}", rx.station(), rx.status())),
             Back::Adsb { dec, .. } => Some(dec.table(now_s())),
+            Back::Vor { dec, .. } => {
+                let st = &dec.status;
+                Some(format!(
+                    "radial {} | ident {} | 30 Hz AM {:.0} %, référence ±{:.0} Hz, stabilité {:.2} | morse « {} »",
+                    st.radial.map_or("—".into(), |r| format!("{r:05.1}°")),
+                    if st.ident.is_empty() { "—" } else { &st.ident },
+                    st.depth * 100.0,
+                    st.deviation,
+                    st.steadiness,
+                    st.morse
+                ))
+            }
             _ => None,
+        }
+    }
+
+    /// The VOR receiver's reading, in the app's vorJson format
+    pub fn vor_json(&self) -> String {
+        match &self.back {
+            Back::Vor { dec, .. } => {
+                let st = &dec.status;
+                serde_json::json!({
+                    "active": true, "radial": st.radial, "depth": st.depth, "deviation": st.deviation,
+                    "steadiness": st.steadiness, "ident": st.ident, "morse": st.morse,
+                })
+                .to_string()
+            }
+            _ => serde_json::json!({"active": false}).to_string(),
         }
     }
 
@@ -1136,6 +1195,7 @@ pub fn run(blocks: Receiver<IqBlock>, ctl: Receiver<EngineCtl>, mut sink: Box<dy
                     Mode::Dab => "dab",
                     Mode::Drm => "drm",
                     Mode::Adsb => "adsb",
+                    Mode::Vor => "vor",
                     _ => "lrpt",
                 };
                 eprintln!("[{tag}] {st}");

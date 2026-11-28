@@ -1,5 +1,8 @@
 package app.littlesdr.ui
 
+import app.littlesdr.engine.VorState
+import app.littlesdr.engine.VorStation
+import app.littlesdr.engine.VorStations
 import app.littlesdr.engine.hfBandAt
 import androidx.compose.ui.graphics.asImageBitmap
 import app.littlesdr.engine.DAB_CHANNELS
@@ -264,6 +267,8 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
         Mode.DRM -> 13_790_000.0
         Mode.LRPT -> LRPT_SATELLITES.first().hz
         Mode.ADSB -> ADSB_FREQUENCY
+        // The nearest beacon, else the middle of the band
+        Mode.VOR -> operatorPosition()?.let { p -> VorStations.nearest(_vorStations.value, p, 1).firstOrNull()?.hz } ?: 113_000_000.0
         else -> 100_000_000.0
     }
 
@@ -284,6 +289,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
             AppSpace.DRM -> Mode.DRM
             AppSpace.LRPT -> Mode.LRPT
             AppSpace.ADSB -> Mode.ADSB
+            AppSpace.VOR -> Mode.VOR
         }
         val saved = Mode.of(spacePrefs.getInt("mode_${target.name}", -1))
         val mode = saved?.takeIf { target.accepts(it) } ?: fallback
@@ -350,6 +356,16 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     val lrptImage: StateFlow<androidx.compose.ui.graphics.ImageBitmap?> = _lrptImage.asStateFlow()
 
     // ---- ADS-B: aircraft on the map, the one picked for details
+    // ---- VOR: the receiver's reading, the beacons of the world (bundled list)
+    private val _vor = MutableStateFlow(VorState())
+    val vor: StateFlow<VorState> = _vor.asStateFlow()
+    private val _vorStations = MutableStateFlow<List<VorStation>>(emptyList())
+    val vorStations: StateFlow<List<VorStation>> = _vorStations.asStateFlow()
+
+    init {
+        viewModelScope.launch { _vorStations.value = VorStations.load(getApplication()) }
+    }
+
     private val _adsb = MutableStateFlow(AdsbState())
     val adsb: StateFlow<AdsbState> = _adsb.asStateFlow()
     private val _adsbSelected = MutableStateFlow<String?>(null)
@@ -801,6 +817,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
                             }
                         }
                     }
+                    AppSpace.VOR -> _vor.value = Engine.vor()
                     AppSpace.ADSB -> {
                         val a = Engine.adsb()
                         _adsb.value = a
@@ -894,6 +911,7 @@ class RadioViewModel(app: Application) : AndroidViewModel(app) {
     private fun focusBand(sp: AppSpace, hz: Double): Pair<Double, Double>? = when (sp) {
         AppSpace.DRM -> hfBandAt(hz)?.let { it.lo to it.hi }
         AppSpace.LRPT -> 137.0e6 to 138.0e6
+        AppSpace.VOR -> 108.0e6 to 118.0e6
         else -> null
     }
 

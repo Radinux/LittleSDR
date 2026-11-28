@@ -26,4 +26,5 @@ pub mod android;
 pub mod source;
 pub mod sstv;
 pub mod stereo;
+pub mod vor;
 pub mod xaac;
