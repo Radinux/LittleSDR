@@ -218,9 +218,17 @@ impl FacDecoder {
             self.quality *= 0.9;
             return None;
         }
+        let g = |a: usize, n: usize| bits_to_u32(&bits[a..a + n]);
+        // An 8-bit CRC lets about one noise block in 256 through: such blocks are told apart by
+        // values the standard does not allow. Spectrum occupancy 0 - 5 (its first bit is the
+        // robustness mode E flag, DRM+, not handled), service counts 1011 and 1110 reserved.
+        if g(3, 4) > 5 || matches!(g(11, 4), 0b1011 | 0b1110) {
+            self.bad += 1;
+            self.quality *= 0.9;
+            return None;
+        }
         self.ok += 1;
         self.quality = 0.9 * self.quality + 0.1;
-        let g = |a: usize, n: usize| bits_to_u32(&bits[a..a + n]);
         Some(FacInfo {
             frame_id: match g(1, 2) {
                 1 => 1,

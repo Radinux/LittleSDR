@@ -34,6 +34,8 @@ pub struct DrmReceiver {
     /// FACs failed in a row since the lock (or the last good one); any good one this lock
     fac_misses: u32,
     fac_seen: bool,
+    /// Spectrum occupancy the last FAC announced, and how many FACs in a row agreed on it
+    so_vote: (u8, u32),
     pub text: TextDecoder,
     /// New text message, not yet taken
     pub text_news: Option<String>,
@@ -52,7 +54,7 @@ pub struct DrmReceiver {
 impl DrmReceiver {
     /// `rate`: 12, 24 or 48 kHz of complex baseband centred on the DRM channel
     pub fn new(rate: f64) -> DrmReceiver {
-        DrmReceiver { ofdm: Ofdm::new(rate), fac: FacDecoder::new(), sdc: SdcDecoder::new(), msc: MscDecoder::new(), msc_frames: Vec::new(), audio: XheAudio::new(), aac: AacAudio::default(), aac_on: false, fac_misses: 0, fac_seen: false, text: TextDecoder::default(), text_news: None, pcm: Vec::new(), last_fac: None, sdc_info: None, frames: 0, rs: None, reserve: VecDeque::new(), playing: false }
+        DrmReceiver { ofdm: Ofdm::new(rate), fac: FacDecoder::new(), sdc: SdcDecoder::new(), msc: MscDecoder::new(), msc_frames: Vec::new(), audio: XheAudio::new(), aac: AacAudio::default(), aac_on: false, fac_misses: 0, fac_seen: false, so_vote: (0, 0), text: TextDecoder::default(), text_news: None, pcm: Vec::new(), last_fac: None, sdc_info: None, frames: 0, rs: None, reserve: VecDeque::new(), playing: false }
     }
 
     pub fn process(&mut self, iq: &[C32]) {
@@ -66,6 +68,13 @@ impl DrmReceiver {
                     Some(info) => {
                         self.fac_misses = 0;
                         self.fac_seen = true;
+                        // Two FACs agreeing on another occupancy than the one guessed: theirs
+                        self.so_vote = if self.so_vote.0 == info.so { (info.so, self.so_vote.1 + 1) } else { (info.so, 1) };
+                        if self.so_vote.1 >= 2 && map.so != info.so as usize {
+                            self.ofdm.set_so(info.so as usize);
+                            self.last_fac = Some(info);
+                            continue;
+                        }
                         Some(info)
                     }
                     None => {

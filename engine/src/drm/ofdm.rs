@@ -110,6 +110,24 @@ impl Ofdm {
         *self = Ofdm::new(self.rate);
     }
 
+    /// The spectrum occupancy the FAC announces, when it differs from the one guessed from
+    /// the band edges (a weak signal's edges hardly stand out: the guess falls back to the
+    /// narrowest). The frame being gathered is dropped: its cells were cut to the old width.
+    pub fn set_so(&mut self, so: usize) {
+        let Some(l) = self.lock.as_mut() else { return };
+        if l.map.as_ref().is_none_or(|m| m.so == so) {
+            return;
+        }
+        let p = params(l.mode);
+        let (kmin, kmax) = (p.kmin[so.min(5)], p.kmax[so.min(5)]);
+        if kmin == 0 && kmax == 0 || kmax >= l.tu as i32 / 2 || -kmin >= l.tu as i32 / 2 {
+            return; // wider than what the receiver passes
+        }
+        l.map = CellMap::new(l.mode, so);
+        l.pending.clear();
+        self.info.so = so;
+    }
+
     /// The lock gave nothing decodable (wrong robustness mode: on a weak signal the guard
     /// correlation of another mode can win): search again without that mode
     pub fn relock_without_mode(&mut self) {
